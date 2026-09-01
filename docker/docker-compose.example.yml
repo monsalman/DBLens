@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  dblens:
+    image: dblens/dblens:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DBLENS_CONNECTIONS=postgres://app:pass@pg-primary:5432/main_db,postgres://app:pass@pg-replica:5432/analytics_db,mysql://root:pass@mysql-auth:3306/auth_db
+    depends_on:
+      - pg-primary
+      - pg-replica
+      - mysql-auth
+
+  pg-primary:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: main_db
+    volumes:
+      - pg_primary_data:/var/lib/postgresql/data
+
+  pg-replica:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: analytics_db
+    volumes:
+      - pg_replica_data:/var/lib/postgresql/data
+
+  mysql-auth:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: pass
+      MYSQL_DATABASE: auth_db
+    volumes:
+      - mysql_auth_data:/var/lib/mysql
+
+volumes:
+  pg_primary_data:
+  pg_replica_data:
+  mysql_auth_data:

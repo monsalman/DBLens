@@ -1,0 +1,252 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/driver"
+	"github.com/go-chi/chi/v5"
+)
+
+type Response struct {
+	Data  interface{} `json:"data"`
+	Error *string     `json:"error"`
+}
+
+func sendJSON(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(Response{
+		Data:  data,
+		Error: nil,
+	})
+}
+
+func sendError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(Response{
+		Data:  nil,
+		Error: &msg,
+	})
+}
+
+type Handler struct {
+	mgr *connection.Manager
+}
+
+func NewHandler(mgr *connection.Manager) *Handler {
+	return &Handler{mgr: mgr}
+}
+
+type AddConnectionRequest struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	DSN      string `json:"dsn"`
+	Color    string `json:"color"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+func (h *Handler) ListConnections(w http.ResponseWriter, r *http.Request) {
+	list := h.mgr.List()
+	sendJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) AddConnection(w http.ResponseWriter, r *http.Request) {
+	var req AddConnectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.DSN == "" {
+		sendError(w, http.StatusBadRequest, "dsn is required")
+		return
+	}
+
+	entry, err := h.mgr.AddWithID(req.ID, req.Label, req.DSN, req.Color, req.ReadOnly)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":       entry.ID,
+		"label":    entry.Label,
+		"color":    entry.Color,
+		"readOnly": entry.ReadOnly,
+		"dialect":  entry.Driver.Dialect(),
+	})
+}
+
+func (h *Handler) RemoveConnection(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	if err := h.mgr.Remove(connID); err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, map[string]string{"message": "connection removed"})
+}
+
+func (h *Handler) PingConnection(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	if err := h.mgr.Ping(connID); err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) GetSchemas(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	schemas, err := entry.Driver.InspectSchemas(r.Context())
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, schemas)
+}
+
+func (h *Handler) GetTables(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	schema := r.URL.Query().Get("schema")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	tables, err := entry.Driver.InspectTables(r.Context(), schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, tables)
+}
+
+func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	tableName := chi.URLParam(r, "table")
+	schema := r.URL.Query().Get("schema")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	details, err := entry.Driver.InspectTableDetails(r.Context(), schema, tableName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, details)
+}
+
+func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	tableName := chi.URLParam(r, "table")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var opts driver.QueryOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		opts = driver.QueryOptions{}
+	}
+	opts.Table = tableName
+
+	res, err := entry.Driver.QueryTableData(r.Context(), opts)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, res)
+}
+
+type ExecuteQueryRequest struct {
+	SQL string `json:"sql"`
+}
+
+func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var req ExecuteQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.SQL == "" {
+		sendError(w, http.StatusBadRequest, "sql field is required")
+		return
+	}
+
+	res, err := entry.Driver.ExecuteQuery(r.Context(), req.SQL)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, res)
+}
+
+func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if entry.ReadOnly {
+		sendError(w, http.StatusForbidden, "Connection is read-only")
+		return
+	}
+
+	var mut driver.Mutation
+	if err := json.NewDecoder(r.Body).Decode(&mut); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	res, err := entry.Driver.MutateRow(r.Context(), mut)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, res)
+}
+
+func (h *Handler) GetERDData(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	erd, err := entry.Driver.GetERDData(r.Context())
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, erd)
+}
