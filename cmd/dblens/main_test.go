@@ -64,6 +64,23 @@ func TestBackendFlow(t *testing.T) {
 	handler := api.NewHandler(mgr)
 	router := api.SetupRouter(handler, api.RouterConfig{})
 
+	// Test profile creation & listing
+	profReqBody := `{"id":"test_prof","label":"Test Profile","dsn":"sqlite:///tmp/dblens_prof_test.db","color":"#ff0000","readOnly":false}`
+	profReq := httptest.NewRequest("POST", "/api/profiles", strings.NewReader(profReqBody))
+	profReq.Header.Set("Content-Type", "application/json")
+	profRec := httptest.NewRecorder()
+	router.ServeHTTP(profRec, profReq)
+	if profRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 created for profile, got %d: %s", profRec.Code, profRec.Body.String())
+	}
+
+	listProfReq := httptest.NewRequest("GET", "/api/profiles", nil)
+	listProfRec := httptest.NewRecorder()
+	router.ServeHTTP(listProfRec, listProfReq)
+	if listProfRec.Code != http.StatusOK || !strings.Contains(listProfRec.Body.String(), "test_prof") {
+		t.Fatalf("expected 200 containing test_prof, got %d: %s", listProfRec.Code, listProfRec.Body.String())
+	}
+
 	req := httptest.NewRequest("GET", "/api/connections", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

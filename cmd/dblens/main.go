@@ -17,6 +17,8 @@ import (
 	"github.com/dblens/dblens/internal/connection"
 )
 
+var Version = "0.1.0"
+
 //go:embed all:dist
 var embeddedFS embed.FS
 
@@ -24,17 +26,22 @@ func main() {
 	port := flag.Int("port", 8080, "Port for DBLens server to listen on")
 	dataDir := flag.String("data", "", "Directory to store configuration or data")
 	staticDir := flag.String("static", "", "Custom path to static frontend dist files")
+	showVersion := flag.Bool("version", false, "Show DBLens version and exit")
 	flag.Parse()
 
-	_ = dataDir
+	if *showVersion {
+		fmt.Printf("DBLens v%s\n", Version)
+		return
+	}
 
+	log.Printf("DBLens v%s", Version)
+
+	authPass := os.Getenv("DBLENS_AUTH_PASSWORD")
 	var distFS fs.FS
 	if sub, err := fs.Sub(embeddedFS, "dist"); err == nil {
 		distFS = sub
 	}
-
-	authPass := os.Getenv("DBLENS_AUTH_PASSWORD")
-	mgr := connection.NewManager()
+	mgr := connection.NewManager(*dataDir)
 	handler := api.NewHandler(mgr)
 	router := api.SetupRouter(handler, api.RouterConfig{
 		AuthPassword: authPass,

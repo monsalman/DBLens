@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/driver"
@@ -12,6 +13,22 @@ import (
 type Response struct {
 	Data  interface{} `json:"data"`
 	Error *string     `json:"error"`
+}
+
+func MaskDSN(dsn string) string {
+	if strings.Contains(dsn, "://") {
+		parts := strings.SplitN(dsn, "://", 2)
+		cred := parts[0]
+		rest := parts[1]
+		// Simple mask: if contains ://user:pass@host, hide the pass
+		if idx := strings.Index(rest, "@"); idx > 0 {
+			if passIdx := strings.Index(rest[:idx], ":"); passIdx > 0 {
+				rest = rest[:passIdx+1] + "***" + rest[idx:]
+			}
+		}
+		return cred + "://" + rest
+	}
+	return dsn
 }
 
 func sendJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -46,6 +63,73 @@ type AddConnectionRequest struct {
 	DSN      string `json:"dsn"`
 	Color    string `json:"color"`
 	ReadOnly bool   `json:"readOnly"`
+}
+
+type CreateProfileRequest struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	DSN      string `json:"dsn"`
+	Color    string `json:"color"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+func (h *Handler) ListProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles, err := h.mgr.ListProfiles()
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	masked := make([]connection.Profile, len(profiles))
+	for i, p := range profiles {
+		masked[i] = connection.Profile{
+			ID:       p.ID,
+			Label:    p.Label,
+			DSN:      MaskDSN(p.DSN),
+			Color:    p.Color,
+			ReadOnly: p.ReadOnly,
+		}
+	}
+
+	sendJSON(w, http.StatusOK, masked)
+}
+
+func (h *Handler) CreateProfile(w http.ResponseWriter, r *http.Request) {
+	var req CreateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.DSN == "" {
+		sendError(w, http.StatusBadRequest, "dsn is required")
+		return
+	}
+
+	entry, err := h.mgr.ConnectProfile(req.ID, req.Label, req.DSN, req.Color, req.ReadOnly)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":       entry.ID,
+		"label":    entry.Label,
+		"color":    entry.Color,
+		"readOnly": entry.ReadOnly,
+		"dialect":  entry.Driver.Dialect(),
+	})
+}
+
+func (h *Handler) DeleteProfile(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		id = chi.URLParam(r, "connId")
+	}
+	if err := h.mgr.RemoveProfile(id); err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, map[string]string{"message": "profile removed"})
 }
 
 func (h *Handler) ListConnections(w http.ResponseWriter, r *http.Request) {

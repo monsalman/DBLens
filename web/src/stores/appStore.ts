@@ -79,7 +79,7 @@ export const useAppStore = create<AppState>()(
       setActiveTab: (activeTab) => set({ activeTab }),
       selectedSchema: 'public',
       setSelectedSchema: (selectedSchema) => set({ selectedSchema, selectedTable: null }),
-      selectedTable: 'users',
+      selectedTable: null,
       setSelectedTable: (selectedTable) => set({ selectedTable }),
 
       queryHistory: [

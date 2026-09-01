@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, ShieldAlert } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useAppStore } from '../../stores/appStore'
 
 export const Header: React.FC = () => {
@@ -11,83 +11,68 @@ export const Header: React.FC = () => {
   } = useAppStore()
 
   const activeConn = connections.find((c) => c.id === activeConnectionId)
-
+  
+  if (!activeConn) return null
+  
   return (
-    <header className="h-14 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md px-4 flex items-center justify-between z-20 shrink-0 select-none">
-      {/* Brand & Logo */}
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 font-mono font-bold text-white text-base tracking-tighter">
-            DL
-          </div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="font-semibold text-zinc-100 tracking-tight text-base font-sans">
-              DBLens
-            </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono border border-zinc-700/50">
-              v0.1.0-beta
-            </span>
-          </div>
-        </div>
-
-        {/* Quick Connection Switcher Pills */}
-        <div className="hidden md:flex items-center gap-1.5 bg-zinc-900/90 border border-zinc-800/80 p-1 rounded-lg">
+    <header className="h-10 border-b border-white/[0.06] bg-[#0b0c0e] px-3 flex items-center justify-between shrink-0 select-none">
+      {/* Left: Logo + Connections */}
+      <div className="flex items-center gap-4">
+        <span className="font-mono font-medium text-sm text-zinc-200 tracking-tight">
+          dbls v0.1.0
+        </span>
+        
+        <div className="flex items-center gap-1">
           {connections.map((c) => {
             const isActive = c.id === activeConnectionId
+            const dialectClass = getDialectBadge(c.dialect || c.driver || '')
             return (
               <button
                 key={c.id}
                 onClick={() => setActiveConnectionId(c.id)}
-                className={`flex items-center gap-2 px-2.5 py-1 rounded text-xs font-medium transition-all ${
+                className={`flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded transition-colors ${
                   isActive
-                    ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/60'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
+                    ? 'text-zinc-100 bg-white/[0.06]'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03]'
                 }`}
               >
-                <span
-                  className="w-2 h-2 rounded-full ring-2 ring-zinc-900"
-                  style={{ backgroundColor: c.color || '#6366f1' }}
-                />
-                <span>{c.name}</span>
-                <span className="uppercase text-[9px] px-1 rounded bg-zinc-950/60 text-zinc-400 font-mono">
-                  {c.driver}
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.color || '#818cf8' }} />
+                <span className="max-w-[120px] truncate">{c.label || c.name || c.id}</span>
+                <span className={`${dialectClass} px-1 rounded-[3px] text-[9px] font-mono uppercase`}>
+                  {c.dialect || c.driver}
                 </span>
               </button>
             )
           })}
-
           <button
             onClick={() => setIsAddConnOpen(true)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 rounded transition-colors"
+            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.03] rounded transition-colors"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add</span>
+            <Plus className="w-3 h-3" />
           </button>
         </div>
       </div>
 
-      {/* Right Actions & Status */}
+      {/* Right: Status */}
       <div className="flex items-center gap-3">
-        {/* Read-only toggle status */}
-        {activeConn?.readOnly ? (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-medium">
-            <ShieldAlert className="w-3.5 h-3.5" />
-            <span>Read-Only Locked</span>
-          </div>
+        {activeConn.readOnly ? (
+          <span className="text-xs text-amber-400/90 font-mono">Read-only</span>
         ) : (
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Connected</span>
-          </div>
+          <span className="text-xs text-emerald-400/90 font-mono">Connected</span>
         )}
-
-        {/* Keyboard shortcut hint */}
-        <div className="hidden lg:flex items-center gap-1 text-[11px] text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-1 rounded">
-          <kbd className="font-mono text-zinc-300">Ctrl</kbd>+
-          <kbd className="font-mono text-zinc-300">Enter</kbd>
-          <span className="ml-1 text-zinc-400">Run SQL</span>
-        </div>
+        <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] text-zinc-500 font-mono">
+          <span className="text-zinc-400">Ctrl</span>+Enter
+        </kbd>
       </div>
     </header>
   )
+}
+
+function getDialectBadge(dialect: string): string {
+  switch (dialect.toLowerCase()) {
+    case 'postgres': return 'badge-pg'
+    case 'mysql': return 'badge-mysql'
+    case 'sqlite': return 'badge-sqlite'
+    default: return 'bg-white/[0.08] text-zinc-300'
+  }
 }

@@ -1,211 +1,186 @@
-import React, { useState } from 'react'
-import {
-  Table2,
-  Terminal,
-  Network,
-  Layers,
-  Search,
-  Eye,
-  RefreshCw,
-} from 'lucide-react'
-import { useAppStore, type ActiveTab } from '../../stores/appStore'
-import { useQuery } from '@tanstack/react-query'
+import React, { useEffect, useState } from 'react'
+import { Database, Table2, ChevronRight, ChevronDown } from 'lucide-react'
 import { api } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
+
+type TreeNode = { name: string; type: 'schema' | 'table'; count?: number }
 
 export const Sidebar: React.FC = () => {
-  const {
-    activeConnectionId,
-    activeTab,
-    setActiveTab,
-    selectedSchema,
-    setSelectedSchema,
-    selectedTable,
-    setSelectedTable,
+  const { 
+    activeConnectionId, selectedSchema, setSelectedSchema, 
+    selectedTable, setSelectedTable, setActiveTab, activeTab 
   } = useAppStore()
+  
+  const [nodes, setNodes] = useState<TreeNode[]>([])
+  const [loading, setLoading] = useState(false)
+  const [schemas, setSchemas] = useState<string[]>(['public'])
+  
+  // Expand state for schemas
+  const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set(['public']))
+  
+  useEffect(() => {
+    async function loadSchemas() {
+      if (!activeConnectionId) return
+      try {
+        const sList = await api.getSchemas(activeConnectionId)
+        if (sList && sList.length > 0) {
+          setSchemas(sList)
+          if (!sList.includes(selectedSchema)) {
+            setSelectedSchema(sList[0])
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load schemas:', err)
+      }
+    }
+    loadSchemas()
+  }, [activeConnectionId])
 
-  const [filterText, setFilterText] = useState('')
+  useEffect(() => {
+    async function load() {
+      if (!activeConnectionId) return
+      setLoading(true)
+      try {
+        const tables = await api.getTables(activeConnectionId, selectedSchema)
+        // Group by schema
+        const grouped: Record<string, number> = {}
+        tables.forEach(t => {
+          const s = t.schema || selectedSchema || 'public'
+          grouped[s] = (grouped[s] || 0) + 1
+        })
+        
+        const newNodes: TreeNode[] = []
+        if (Object.keys(grouped).length === 0) {
+          newNodes.push({ name: selectedSchema || 'public', type: 'schema', count: 0 })
+        } else {
+          Object.entries(grouped).forEach(([schema]) => {
+            newNodes.push({ name: schema, type: 'schema', count: grouped[schema] })
+          })
+        }
 
-  const {
-    data: schemaMeta,
-    isLoading,
-    refetch,
-  } = useQuery({
-    queryKey: ['schema', activeConnectionId, selectedSchema],
-    queryFn: () => (activeConnectionId ? api.getSchema(activeConnectionId, selectedSchema) : null),
-    enabled: !!activeConnectionId,
-  })
-
-  const tables = schemaMeta?.tables?.filter((t) => t.type === 'table') || []
-  const views = schemaMeta?.tables?.filter((t) => t.type === 'view') || []
-
-  const filteredTables = tables.filter((t) =>
-    t.name.toLowerCase().includes(filterText.toLowerCase())
-  )
-  const filteredViews = views.filter((v) =>
-    v.name.toLowerCase().includes(filterText.toLowerCase())
-  )
-
-  const navTabs: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'table', label: 'Table Data', icon: <Table2 className="w-4 h-4" /> },
-    { id: 'sql', label: 'SQL Console', icon: <Terminal className="w-4 h-4" /> },
-    { id: 'erd', label: 'Schema ERD', icon: <Network className="w-4 h-4" /> },
-  ]
-
+        // Add tables and views
+        tables.forEach(t => {
+          newNodes.push({
+            name: t.type === 'view' ? `${t.name} (view)` : t.name,
+            type: 'table',
+            count: t.rowCount,
+          })
+        })
+        
+        setNodes(newNodes)
+        
+        // Auto-select first table if none selected or selected table not in list
+        if (tables.length > 0 && (!selectedTable || !tables.some(t => t.name === selectedTable))) {
+          setSelectedTable(tables[0].name)
+        }
+      } catch (err) {
+        console.error('Failed to load schema:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [activeConnectionId, selectedSchema])
+  
+  if (!activeConnectionId) return null
+  
   return (
-    <aside className="w-64 border-r border-zinc-800 bg-zinc-950 flex flex-col shrink-0 select-none">
-      {/* View Mode Tabs */}
-      <div className="p-3 border-b border-zinc-800/80">
-        <div className="grid grid-cols-3 gap-1 bg-zinc-900/90 p-1 rounded-lg border border-zinc-800/80">
-          {navTabs.map((tab) => {
-            const isActive = activeTab === tab.id
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-[11px] font-medium transition-all ${
-                  isActive
-                    ? 'bg-zinc-800 text-zinc-100 shadow-xs border border-zinc-700/50'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30'
-                }`}
-                title={tab.label}
-              >
-                {tab.icon}
-                <span className="mt-1 text-[10px] truncate max-w-full">{tab.label}</span>
-              </button>
-            )
-          })}
-        </div>
+    <aside className="w-56 border-r border-white/[0.06] bg-[#0b0c0e] flex flex-col shrink-0">
+      {/* Tabs */}
+      <div className="flex border-b border-white/[0.06] px-1">
+        {[
+          { id: 'table' as const, label: 'Data' },
+          { id: 'sql' as const, label: 'SQL' },
+          { id: 'erd' as const, label: 'ERD' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-1.5 text-[11px] font-medium capitalize transition-colors relative ${
+              activeTab === tab.id
+                ? 'text-zinc-100'
+                : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+          >
+            {tab.label}
+            {activeTab === tab.id && (
+              <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-zinc-100" />
+            )}
+          </button>
+        ))}
       </div>
-
-      {/* Schema Selector Dropdown */}
-      <div className="px-3 py-2 border-b border-zinc-800/60 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs text-zinc-400">
-          <Layers className="w-3.5 h-3.5 text-zinc-400" />
-          <span>Schema:</span>
-        </div>
+      
+      {/* Schema selector */}
+      <div className="px-2 pt-2 pb-1">
+        <label className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">Database</label>
         <select
           value={selectedSchema}
-          onChange={(e) => setSelectedSchema(e.target.value)}
-          className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200 font-mono focus:outline-hidden focus:border-zinc-700"
+          onChange={e => setSelectedSchema(e.target.value)}
+          className="mt-1 w-full bg-[#0b0c0e] text-xs text-zinc-200 border border-white/[0.06] rounded px-2 py-1 focus:border-white/[0.15] outline-none cursor-pointer font-mono"
         >
-          {schemaMeta?.schemas?.map((s) => (
-            <option key={s} value={s}>
+          {schemas.map(s => (
+            <option key={s} value={s} className="bg-[#16181d] text-zinc-200">
               {s}
             </option>
-          )) || <option value="public">public</option>}
+          ))}
         </select>
       </div>
-
-      {/* Search Filter for Tables */}
-      <div className="p-2.5 border-b border-zinc-800/60">
-        <div className="relative">
-          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
-            placeholder="Filter tables..."
-            className="w-full bg-zinc-900 border border-zinc-800/80 rounded-md pl-8 pr-2.5 py-1 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-hidden focus:border-zinc-700"
-          />
+      
+      {/* Tree */}
+      <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex items-center justify-between px-1 mb-1">
+          <label className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">Tables</label>
+          {loading && <span className="text-[10px] text-zinc-500 font-mono">Loading...</span>}
         </div>
-      </div>
-
-      {/* Tables & Views Tree List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-4">
-        {/* Tables Section */}
-        <div>
-          <div className="flex items-center justify-between px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-            <span>Tables ({filteredTables.length})</span>
-            <button
-              onClick={() => refetch()}
-              className="hover:text-zinc-300 p-0.5 rounded"
-              title="Refresh Schema"
-            >
-              <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
-
-          <div className="mt-1 space-y-0.5">
-            {filteredTables.map((table) => {
-              const isSelected = selectedTable === table.name
-              return (
+        {!loading && nodes.filter(n => n.type === 'table').length === 0 && (
+          <span className="text-xs text-zinc-600 px-1">No tables found</span>
+        )}
+        {nodes.map((node, i) => (
+          <div key={`${node.type}-${node.name}-${i}`} className="mb-0.5">
+            {node.type === 'schema' ? (
+              <div className="flex items-center gap-1 mt-1 px-1 text-zinc-400">
                 <button
-                  key={table.name}
                   onClick={() => {
-                    setSelectedTable(table.name)
-                    if (activeTab !== 'table') {
-                      setActiveTab('table')
-                    }
+                    const next = new Set(expandedSchemas)
+                    if (next.has(node.name)) next.delete(node.name)
+                    else next.add(node.name)
+                    setExpandedSchemas(next)
                   }}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-mono transition-colors group ${
-                    isSelected
-                      ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/30'
-                      : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                  }`}
+                  className="p-0.5 text-zinc-500 hover:text-zinc-300"
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <Table2
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        isSelected ? 'text-indigo-400' : 'text-zinc-400 group-hover:text-zinc-400'
-                      }`}
-                    />
-                    <span className="truncate">{table.name}</span>
-                  </div>
-                  {table.rowCount !== undefined && (
-                    <span className="text-[10px] font-sans px-1.5 py-0.2 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
-                      {table.rowCount >= 1000 ? `${(table.rowCount / 1000).toFixed(1)}k` : table.rowCount}
-                    </span>
+                  {expandedSchemas.has(node.name) ? (
+                    <ChevronDown className="w-3 h-3" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3" />
                   )}
                 </button>
-              )
-            })}
-
-            {filteredTables.length === 0 && (
-              <div className="px-2 py-3 text-center text-xs text-zinc-400">No tables found</div>
+                <Database className="w-3 h-3 text-zinc-500" />
+                <span className="text-xs text-zinc-300 font-mono">{node.name}</span>
+                {node.count !== undefined && (
+                  <span className="text-[10px] text-zinc-600 font-mono">({node.count})</span>
+                )}
+              </div>
+            ) : (
+              <div
+                className={`sidebar-item ${
+                  selectedTable === node.name.replace(' (view)', '') ? 'sidebar-item-active' : ''
+                }`}
+                onClick={() => {
+                  setSelectedTable(node.name.replace(' (view)', ''))
+                  if (activeTab !== 'table') setActiveTab('table')
+                }}
+              >
+                <Table2 className="w-3 h-3 text-zinc-500 shrink-0" />
+                <span className="truncate text-xs font-mono text-zinc-300">
+                  {node.name.replace(' (view)', '')}
+                </span>
+                {node.name.includes('(view)') && (
+                  <span className="text-[9px] text-zinc-600 font-mono ml-auto">view</span>
+                )}
+              </div>
             )}
           </div>
-        </div>
-
-        {/* Views Section */}
-        {filteredViews.length > 0 && (
-          <div>
-            <div className="px-2 py-1 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-              Views ({filteredViews.length})
-            </div>
-            <div className="mt-1 space-y-0.5">
-              {filteredViews.map((view) => {
-                const isSelected = selectedTable === view.name
-                return (
-                  <button
-                    key={view.name}
-                    onClick={() => {
-                      setSelectedTable(view.name)
-                      if (activeTab !== 'table') {
-                        setActiveTab('table')
-                      }
-                    }}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-mono transition-colors group ${
-                      isSelected
-                        ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/30'
-                        : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 truncate">
-                      <Eye className="w-3.5 h-3.5 shrink-0 text-zinc-400 group-hover:text-zinc-400" />
-                      <span className="truncate">{view.name}</span>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Footer Info */}
-      <div className="p-3 border-t border-zinc-800/80 text-[11px] text-zinc-400 flex items-center justify-between">
-        <span>SQLite / Postgres / MySQL</span>
-        <span className="font-mono text-[10px] text-zinc-400">Auto-IDLE</span>
+        ))}
       </div>
     </aside>
   )

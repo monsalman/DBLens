@@ -33,13 +33,27 @@ type ConnectionSummary struct {
 }
 
 type Manager struct {
-	mu    sync.RWMutex
-	conns map[string]*ConnectionEntry
+	mu           sync.RWMutex
+	conns        map[string]*ConnectionEntry
+	profileStore *ProfileStore
 }
 
-func NewManager() *Manager {
+func NewManager(dataDir ...string) *Manager {
+	var dir string
+	if len(dataDir) > 0 {
+		dir = dataDir[0]
+	}
+
 	m := &Manager{
-		conns: make(map[string]*ConnectionEntry),
+		conns:        make(map[string]*ConnectionEntry),
+		profileStore: NewProfileStore(dir),
+	}
+
+	// Load persistent profiles
+	if profiles, err := m.profileStore.Load(); err == nil {
+		for _, p := range profiles {
+			_ = m.Add(p.ID, p.Label, p.DSN, p.Color, p.ReadOnly)
+		}
 	}
 
 	envConns := os.Getenv("DBLENS_CONNECTIONS")
@@ -143,6 +157,45 @@ func (m *Manager) Add(id, label, dsn, color string, readOnly bool) error {
 	return err
 }
 
+func (m *Manager) ConnectProfile(id, label, dsn, color string, readOnly bool) (*ConnectionEntry, error) {
+	entry, err := m.AddWithID(id, label, dsn, color, readOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	if m.profileStore != nil {
+		profile := Profile{
+			ID:       entry.ID,
+			Label:    entry.Label,
+			DSN:      entry.DSN,
+			Color:    entry.Color,
+			ReadOnly: entry.ReadOnly,
+		}
+		// Update or Add profile
+		if _, err := m.profileStore.Update(entry.ID, profile); err != nil {
+			return nil, fmt.Errorf("failed to save profile: %w", err)
+		}
+	}
+
+	return entry, nil
+}
+
+func (m *Manager) ListProfiles() ([]Profile, error) {
+	if m.profileStore == nil {
+		return []Profile{}, nil
+	}
+	return m.profileStore.GetAll()
+}
+
+func (m *Manager) RemoveProfile(id string) error {
+	_ = m.Remove(id)
+	if m.profileStore != nil {
+		_, err := m.profileStore.Remove(id)
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) Remove(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -153,6 +206,9 @@ func (m *Manager) Remove(id string) error {
 	}
 	_ = entry.Driver.Close()
 	delete(m.conns, id)
+	if m.profileStore != nil {
+		_, _ = m.profileStore.Remove(id)
+	}
 	return nil
 }
 

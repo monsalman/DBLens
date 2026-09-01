@@ -1,3 +1,5 @@
+ARG VERSION=0.1.0
+
 # Stage 1: Build Frontend
 FROM node:22-alpine AS frontend
 WORKDIR /app/web
@@ -13,11 +15,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /app/web/dist ./cmd/dblens/dist
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /dblens ./cmd/dblens/...
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o /dblens ./cmd/dblens/...
 
-# Stage 3: Final Scratch / Minimal Image
+# Stage 3: Final Alpine Image
 FROM alpine:3.20
 RUN apk --no-cache add ca-certificates tzdata
+ARG VERSION=0.1.0
+LABEL org.opencontainers.image.version=${VERSION}
+ENV DBLENS_VERSION=${VERSION}
 WORKDIR /
 COPY --from=backend /dblens /dblens
 

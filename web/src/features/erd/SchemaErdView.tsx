@@ -11,63 +11,56 @@ import {
   type Edge,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Table2, Key, Link2 } from 'lucide-react'
+import { Table2, Key } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAppStore } from '../../stores/appStore'
-import { api, type TableMeta } from '../../lib/api'
+import type { TableMeta } from '../../lib/api'
 
-// Custom Table Node Component
 const TableNode = ({ data }: { data: { table: TableMeta } }) => {
   const { table } = data
+  const colList = table.columns || []
 
   return (
-    <div className="bg-zinc-900 border border-zinc-700/80 rounded-lg shadow-xl min-w-[220px] overflow-hidden text-xs">
-      <Handle type="target" position={Position.Left} className="w-2 h-2 bg-indigo-500!" />
+    <div className="bg-[#16181d] border border-white/[0.08] rounded min-w-[200px] overflow-hidden text-xs">
+      <Handle type="target" position={Position.Left} className="w-1.5 h-1.5 bg-indigo-400! border-none!" />
 
       {/* Header */}
-      <div className="bg-zinc-800/90 px-3 py-2 border-b border-zinc-700/80 flex items-center justify-between font-mono font-semibold text-zinc-100">
+      <div className="bg-white/[0.03] px-2.5 py-1.5 border-b border-white/[0.06] flex items-center justify-between font-mono font-medium text-zinc-200">
         <div className="flex items-center gap-1.5 truncate">
-          <Table2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <Table2 className="w-3 h-3 text-zinc-400 shrink-0" />
           <span className="truncate">{table.name}</span>
         </div>
-        <span className="text-[10px] text-zinc-400 font-sans font-normal">
-          {table.columns.length} cols
+        <span className="text-[10px] text-zinc-500 font-normal">
+          {colList.length}
         </span>
       </div>
 
-      {/* Column List */}
-      <div className="divide-y divide-zinc-800/60 font-mono">
-        {table.columns.map((col) => (
+      {/* Columns */}
+      <div className="divide-y divide-white/[0.03] font-mono text-[11px]">
+        {colList.map((col) => (
           <div
             key={col.name}
-            className="px-3 py-1.5 flex items-center justify-between gap-2 hover:bg-zinc-800/40 text-[11px]"
+            className="px-2.5 py-1 flex items-center justify-between gap-2 text-zinc-300"
           >
             <div className="flex items-center gap-1.5 truncate">
-              {col.isPrimaryKey ? (
-                <Key className="w-3 h-3 text-amber-400 shrink-0" />
-              ) : col.isForeignKey ? (
-                <Link2 className="w-3 h-3 text-indigo-400 shrink-0" />
+              {col.isPrimaryKey || col.isPrimary ? (
+                <Key className="w-2.5 h-2.5 text-amber-400 shrink-0" />
               ) : (
-                <div className="w-3 h-3" />
+                <div className="w-2.5 h-2.5" />
               )}
-              <span
-                className={`truncate ${
-                  col.isPrimaryKey ? 'text-amber-200 font-medium' : 'text-zinc-300'
-                }`}
-              >
+              <span className={`truncate ${col.isPrimaryKey || col.isPrimary ? 'text-amber-200' : ''}`}>
                 {col.name}
               </span>
             </div>
 
-            <div className="flex items-center gap-1 text-[10px] text-zinc-500 shrink-0">
-              <span>{col.type}</span>
-              {col.nullable && <span className="text-zinc-600">?</span>}
-            </div>
+            <span className="text-[10px] text-zinc-500 shrink-0">
+              {col.dataType || col.type || 'text'}
+            </span>
           </div>
         ))}
       </div>
 
-      <Handle type="source" position={Position.Right} className="w-2 h-2 bg-indigo-500!" />
+      <Handle type="source" position={Position.Right} className="w-1.5 h-1.5 bg-indigo-400! border-none!" />
     </div>
   )
 }
@@ -79,62 +72,79 @@ const nodeTypes = {
 export const SchemaErdView: React.FC = () => {
   const { activeConnectionId, selectedSchema } = useAppStore()
 
-  const { data: schemaMeta } = useQuery({
-    queryKey: ['schema', activeConnectionId, selectedSchema],
-    queryFn: () => (activeConnectionId ? api.getSchema(activeConnectionId, selectedSchema) : null),
+  const { data: erdData } = useQuery({
+    queryKey: ['erd', activeConnectionId, selectedSchema],
+    queryFn: async () => {
+      if (!activeConnectionId) return null
+      const res = await fetch(`/api/connections/${activeConnectionId}/erd`)
+      if (!res.ok) throw new Error('Failed to load ERD')
+      const json = await res.json()
+      return (json.data ?? json) as Array<{
+        name: string
+        schema: string
+        columns: Array<any>
+        fks: Array<{ column: string; refTable: string; refColumn: string }>
+      }>
+    },
     enabled: !!activeConnectionId,
   })
 
   const { nodes, edges } = useMemo(() => {
-    if (!schemaMeta?.tables) return { nodes: [], edges: [] }
+    if (!erdData) return { nodes: [], edges: [] }
 
-    const tables = schemaMeta.tables.filter((t) => t.type === 'table')
     const calculatedNodes: Node[] = []
     const calculatedEdges: Edge[] = []
 
     const colsPerRow = 3
-    const spacingX = 320
-    const spacingY = 280
+    const spacingX = 280
+    const spacingY = 240
 
-    tables.forEach((tbl, idx) => {
-      const x = (idx % colsPerRow) * spacingX + 50
-      const y = Math.floor(idx / colsPerRow) * spacingY + 50
+    erdData.forEach((tbl, idx) => {
+      const x = (idx % colsPerRow) * spacingX + 40
+      const y = Math.floor(idx / colsPerRow) * spacingY + 40
 
       calculatedNodes.push({
         id: tbl.name,
         type: 'tableNode',
         position: { x, y },
-        data: { table: tbl },
+        data: {
+          table: {
+            name: tbl.name,
+            schema: tbl.schema,
+            type: 'table',
+            columns: tbl.columns?.map((c) => ({
+              name: c.name,
+              type: c.dataType || c.type || 'text',
+              dataType: c.dataType,
+              nullable: c.isNullable ?? c.nullable,
+              isNullable: c.isNullable ?? c.nullable,
+              isPrimaryKey: c.isPrimary ?? c.isPrimaryKey,
+              isPrimary: c.isPrimary ?? c.isPrimaryKey,
+              isForeignKey: !!tbl.fks?.some((fk) => fk.column === c.name),
+            })) || [],
+          },
+        },
       })
 
-      // Generate Foreign Key Edges
-      tbl.columns.forEach((col) => {
-        if (col.isForeignKey && col.foreignKeyTarget) {
+      tbl.fks?.forEach((fk) => {
+        if (fk.refTable && fk.refColumn) {
           calculatedEdges.push({
-            id: `edge_${tbl.name}_${col.name}_to_${col.foreignKeyTarget.table}`,
+            id: `edge_${tbl.name}_${fk.column}_to_${fk.refTable}`,
             source: tbl.name,
-            target: col.foreignKeyTarget.table,
-            animated: true,
-            style: { stroke: '#818cf8', strokeWidth: 2 },
-            label: `${col.name} → ${col.foreignKeyTarget.column}`,
-            labelStyle: { fill: '#c7d2fe', fontSize: 10, fontFamily: 'monospace' },
-            labelBgStyle: { fill: '#1e1b4b', fillOpacity: 0.9 },
-            labelBgPadding: [4, 2] as [number, number],
-            labelBgBorderRadius: 4,
+            target: fk.refTable,
+            style: { stroke: 'rgba(255, 255, 255, 0.2)', strokeWidth: 1 },
           })
         }
       })
     })
 
     return { nodes: calculatedNodes, edges: calculatedEdges }
-  }, [schemaMeta])
+  }, [erdData])
 
   return (
-    <div className="flex-1 h-full w-full bg-zinc-950 relative">
-      <div className="absolute top-4 left-4 z-10 bg-zinc-900/90 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-300 backdrop-blur-xs flex items-center gap-2">
-        <span className="font-semibold text-zinc-100">Schema ERD:</span>
-        <span className="font-mono text-indigo-400">{selectedSchema}</span>
-        <span className="text-zinc-500">({nodes.length} tables, {edges.length} relations)</span>
+    <div className="flex-1 h-full w-full bg-[#0b0c0e] relative">
+      <div className="absolute top-2 left-2 z-10 bg-[#16181d] border border-white/[0.06] rounded px-2 py-1 text-xs text-zinc-400 font-mono">
+        {selectedSchema} • {nodes.length} tables
       </div>
 
       <ReactFlow
@@ -142,14 +152,14 @@ export const SchemaErdView: React.FC = () => {
         edges={edges}
         nodeTypes={nodeTypes}
         fitView
-        className="bg-zinc-950"
+        className="bg-[#0b0c0e]"
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#27272a" />
-        <Controls className="bg-zinc-900! border-zinc-800! fill-zinc-300!" />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="rgba(255, 255, 255, 0.05)" />
+        <Controls className="bg-[#16181d]! border-white/[0.06]! fill-zinc-400!" />
         <MiniMap
-          nodeColor="#3f3f46"
-          maskColor="rgba(9, 9, 11, 0.7)"
-          className="bg-zinc-950! border-zinc-800!"
+          nodeColor="#27272a"
+          maskColor="rgba(11, 12, 14, 0.8)"
+          className="bg-[#0b0c0e]! border-white/[0.06]!"
         />
       </ReactFlow>
     </div>

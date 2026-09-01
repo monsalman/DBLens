@@ -50,6 +50,10 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	}
 
 	r.Route("/api", func(api chi.Router) {
+		api.Get("/profiles", h.ListProfiles)
+		api.Post("/profiles", h.CreateProfile)
+		api.Delete("/profiles/{id}", h.DeleteProfile)
+
 		api.Get("/connections", h.ListConnections)
 		api.Post("/connections", h.AddConnection)
 		api.Delete("/connections/{connId}", h.RemoveConnection)

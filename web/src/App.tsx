@@ -27,17 +27,20 @@ export function App() {
     setConnections,
     activeConnectionId,
     setActiveConnectionId,
+    setIsAddConnOpen,
   } = useAppStore()
 
-  // Bootstrap connections if empty
+  // Bootstrap connections
   useEffect(() => {
     async function init() {
-      if (connections.length === 0) {
-        const conns = await api.getConnections()
-        setConnections(conns)
-        if (conns.length > 0 && !activeConnectionId) {
-          setActiveConnectionId(conns[0].id)
+      try {
+        const profiles = await api.getProfiles()
+        setConnections(profiles)
+        if (profiles.length > 0 && !activeConnectionId) {
+          setActiveConnectionId(profiles[0].id)
         }
+      } catch (err) {
+        console.error('Failed to load profiles:', err)
       }
     }
     init()
@@ -45,22 +48,36 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex flex-col h-screen w-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
-        {/* Top Header */}
-        <Header />
+      <div className="flex flex-col h-screen w-screen bg-[#0b0c0e] text-[#e4e4e7] overflow-hidden font-sans">
+        {connections.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center bg-[#0b0c0e] text-zinc-400 gap-3">
+            <span className="font-mono text-sm text-zinc-300 font-medium">Connect to your first database</span>
+            <button
+              onClick={() => setIsAddConnOpen(true)}
+              className="btn-primary"
+            >
+              Add Connection
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Top Header */}
+            <Header />
 
-        {/* Workspace Body */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar */}
-          <Sidebar />
+            {/* Workspace Body */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Sidebar */}
+              <Sidebar />
 
-          {/* Main Active Tab View */}
-          <main className="flex-1 flex flex-col overflow-hidden relative">
-            {activeTab === 'table' && <TableGridView />}
-            {activeTab === 'sql' && <SqlConsoleView />}
-            {activeTab === 'erd' && <SchemaErdView />}
-          </main>
-        </div>
+              {/* Main Active Tab View */}
+              <main className="flex-1 flex flex-col overflow-hidden relative">
+                {activeTab === 'table' && <TableGridView />}
+                {activeTab === 'sql' && <SqlConsoleView />}
+                {activeTab === 'erd' && <SchemaErdView />}
+              </main>
+            </div>
+          </>
+        )}
 
         {/* Global Modals & Drawers */}
         <AddConnectionModal />
