@@ -68,103 +68,7 @@ export interface MutateRowPayload {
   data?: Record<string, any>
 }
 
-// Fallback mock data when backend is not connected
-const MOCK_SCHEMAS: Record<string, SchemaMeta> = {
-  conn_demo: {
-    schemas: ['public', 'auth', 'analytics'],
-    currentSchema: 'public',
-    tables: [
-      {
-        name: 'users',
-        schema: 'public',
-        type: 'table',
-        rowCount: 1420,
-        columns: [
-          { name: 'id', type: 'uuid', nullable: false, isPrimaryKey: true },
-          { name: 'email', type: 'varchar(255)', nullable: false, isPrimaryKey: false },
-          { name: 'name', type: 'varchar(100)', nullable: true, isPrimaryKey: false },
-          { name: 'role', type: 'varchar(32)', nullable: false, isPrimaryKey: false, defaultValue: "'user'" },
-          { name: 'avatar_url', type: 'text', nullable: true, isPrimaryKey: false },
-          { name: 'created_at', type: 'timestamptz', nullable: false, isPrimaryKey: false, defaultValue: 'now()' },
-          { name: 'is_active', type: 'boolean', nullable: false, isPrimaryKey: false, defaultValue: 'true' },
-        ],
-      },
-      {
-        name: 'organizations',
-        schema: 'public',
-        type: 'table',
-        rowCount: 85,
-        columns: [
-          { name: 'id', type: 'uuid', nullable: false, isPrimaryKey: true },
-          { name: 'name', type: 'varchar(255)', nullable: false, isPrimaryKey: false },
-          { name: 'slug', type: 'varchar(100)', nullable: false, isPrimaryKey: false },
-          { name: 'plan', type: 'varchar(50)', nullable: false, isPrimaryKey: false, defaultValue: "'pro'" },
-          { name: 'created_at', type: 'timestamptz', nullable: false, isPrimaryKey: false },
-        ],
-      },
-      {
-        name: 'memberships',
-        schema: 'public',
-        type: 'table',
-        rowCount: 3200,
-        columns: [
-          { name: 'id', type: 'serial', nullable: false, isPrimaryKey: true },
-          {
-            name: 'user_id',
-            type: 'uuid',
-            nullable: false,
-            isPrimaryKey: false,
-            isForeignKey: true,
-            foreignKeyTarget: { table: 'users', column: 'id' },
-          },
-          {
-            name: 'org_id',
-            type: 'uuid',
-            nullable: false,
-            isPrimaryKey: false,
-            isForeignKey: true,
-            foreignKeyTarget: { table: 'organizations', column: 'id' },
-          },
-          { name: 'role', type: 'varchar(32)', nullable: false, isPrimaryKey: false },
-          { name: 'joined_at', type: 'timestamptz', nullable: false, isPrimaryKey: false },
-        ],
-      },
-      {
-        name: 'api_keys',
-        schema: 'public',
-        type: 'table',
-        rowCount: 450,
-        columns: [
-          { name: 'id', type: 'uuid', nullable: false, isPrimaryKey: true },
-          {
-            name: 'org_id',
-            type: 'uuid',
-            nullable: false,
-            isPrimaryKey: false,
-            isForeignKey: true,
-            foreignKeyTarget: { table: 'organizations', column: 'id' },
-          },
-          { name: 'name', type: 'varchar(100)', nullable: false, isPrimaryKey: false },
-          { name: 'key_hash', type: 'text', nullable: false, isPrimaryKey: false },
-          { name: 'last_used_at', type: 'timestamptz', nullable: true, isPrimaryKey: false },
-        ],
-      },
-      {
-        name: 'active_sessions_view',
-        schema: 'public',
-        type: 'view',
-        rowCount: 310,
-        columns: [
-          { name: 'user_id', type: 'uuid', nullable: false, isPrimaryKey: false },
-          { name: 'email', type: 'varchar(255)', nullable: false, isPrimaryKey: false },
-          { name: 'ip_address', type: 'inet', nullable: true, isPrimaryKey: false },
-          { name: 'last_active', type: 'timestamptz', nullable: false, isPrimaryKey: false },
-        ],
-      },
-    ],
-  },
-}
-
+// In-memory row cache for mock edits
 function generateMockRows(tableName: string, count: number = 30): Record<string, any>[] {
   const roles = ['admin', 'member', 'owner', 'viewer']
   const orgs = ['Acme Corp', 'Supastack', 'Vercelify', 'CloudNext', 'DataLens Lab']
@@ -227,38 +131,14 @@ export const api = {
   async getConnections(): Promise<ConnectionConfig[]> {
     try {
       const res = await fetch('/api/connections')
-      if (res.ok) return await res.json()
+      if (res.ok) {
+        const json = await res.json()
+        return json.data ?? json
+      }
     } catch {
       // Fallback
     }
-    return [
-      {
-        id: 'conn_demo',
-        name: 'Production PostgreSQL',
-        driver: 'postgres',
-        host: 'aws-us-east-1.rds.postgres.com',
-        database: 'main_db',
-        color: '#10b981',
-        readOnly: false,
-      },
-      {
-        id: 'conn_mysql',
-        name: 'Auth & Billing MySQL',
-        driver: 'mysql',
-        host: 'mysql-primary.internal',
-        database: 'auth_service',
-        color: '#3b82f6',
-        readOnly: false,
-      },
-      {
-        id: 'conn_sqlite',
-        name: 'Local Dev SQLite',
-        driver: 'sqlite',
-        uri: 'file:/data/app.db',
-        color: '#f59e0b',
-        readOnly: true,
-      },
-    ]
+    return []
   },
 
   async createConnection(config: Omit<ConnectionConfig, 'id'>): Promise<ConnectionConfig> {
@@ -288,17 +168,46 @@ export const api = {
   },
 
   // Schema Inspection
-  async getSchema(connId: string, schemaName?: string): Promise<SchemaMeta> {
+  async getSchemas(connId: string): Promise<string[]> {
     try {
-      const url = `/api/${connId}/schema` + (schemaName ? `?schema=${schemaName}` : '')
-      const res = await fetch(url)
-      if (res.ok) return await res.json()
+      const res = await fetch(`/api/connections/${connId}/schemas`)
+      if (res.ok) {
+        const json = await res.json()
+        return json.data ?? json
+      }
     } catch {}
+    return ['public']
+  },
 
-    const mock = MOCK_SCHEMAS[connId] || MOCK_SCHEMAS['conn_demo']
+  async getTables(connId: string, schema: string = 'public'): Promise<TableMeta[]> {
+    try {
+      const res = await fetch(`/api/connections/${connId}/tables?schema=${schema}`)
+      if (res.ok) {
+        const json = await res.json()
+        return json.data ?? json
+      }
+    } catch {}
+    return []
+  },
+
+  async getTableDetails(connId: string, table: string, schema: string = 'public'): Promise<TableMeta | null> {
+    try {
+      const res = await fetch(`/api/connections/${connId}/tables/${table}?schema=${schema}`)
+      if (res.ok) {
+        const json = await res.json()
+        return json.data ?? json
+      }
+    } catch {}
+    return null
+  },
+
+  async getSchema(connId: string, schemaName?: string): Promise<SchemaMeta> {
+    const schemas = await this.getSchemas(connId)
+    const tables = await this.getTables(connId, schemaName || schemas[0] || 'public')
     return {
-      ...mock,
-      currentSchema: schemaName || mock.currentSchema,
+      schemas,
+      currentSchema: schemaName || schemas[0] || 'public',
+      tables,
     }
   },
 
@@ -322,8 +231,23 @@ export const api = {
       if (params.sortOrder) query.set('sortOrder', params.sortOrder)
       if (params.filter) query.set('filter', params.filter)
 
-      const res = await fetch(`/api/${connId}/tables/${tableName}/data?${query.toString()}`)
-      if (res.ok) return await res.json()
+      const res = await fetch(`/api/connections/${connId}/tables/${tableName}/data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          schema: 'public',
+          limit: params.limit || 50,
+          offset: params.offset || 0,
+          orderBy: params.sortBy || '',
+          orderDir: params.sortOrder || 'asc',
+          filters: params.filter ? [{ column: '*', operator: 'LIKE', value: params.filter }] : [],
+        }),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        const data = json.data ?? json
+        return { rows: data.rows ?? [], totalCount: data.totalCount ?? 0 }
+      }
     } catch {}
 
     const key = `${connId}:${tableName}`
@@ -364,7 +288,7 @@ export const api = {
   // Row Mutation
   async mutateRow(connId: string, payload: MutateRowPayload): Promise<{ success: boolean; error?: string }> {
     try {
-      const res = await fetch(`/api/${connId}/mutate`, {
+      const res = await fetch(`/api/connections/${connId}/mutate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -396,7 +320,7 @@ export const api = {
   async executeQuery(connId: string, sql: string): Promise<QueryResult> {
     const start = performance.now()
     try {
-      const res = await fetch(`/api/${connId}/query`, {
+      const res = await fetch(`/api/connections/${connId}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sql }),
