@@ -8,6 +8,18 @@ export interface ConnectionConfig {
   color?: string
   readOnly?: boolean
   dialect?: string
+  dsn?: string
+}
+
+export interface ForeignKeyTarget {
+  table: string
+  column: string
+}
+
+export interface ERDForeignKey {
+  column: string
+  refTable: string
+  refColumn: string
 }
 
 export interface ColumnMeta {
@@ -19,12 +31,16 @@ export interface ColumnMeta {
   isPrimaryKey?: boolean
   isPrimary?: boolean
   isForeignKey?: boolean
-  foreignKeyTarget?: {
-    table: string
-    column: string
-  }
+  foreignKeyTarget?: ForeignKeyTarget
   defaultValue?: string
   default?: string | null
+}
+
+export interface ERDTable {
+  name: string
+  schema: string
+  columns: ColumnMeta[]
+  fks: ERDForeignKey[]
 }
 
 export interface TableMeta {
@@ -70,8 +86,24 @@ export interface MutateRowPayload {
   type?: 'INSERT' | 'UPDATE' | 'DELETE'
 }
 
+export interface TestConnectionResult {
+  success: boolean
+  message: string
+  dialect?: string
+}
+
 export const api = {
   // Profiles (persistent)
+  async testConnection(dsn: string, label: string = ''): Promise<TestConnectionResult> {
+    const res = await fetch('/api/connections/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dsn, label }),
+    })
+    const json = await res.json()
+    return json.data ?? json
+  },
+
   async getProfiles(): Promise<ConnectionConfig[]> {
     const res = await fetch('/api/profiles')
     if (!res.ok) throw new Error('Failed to load profiles')
@@ -88,6 +120,20 @@ export const api = {
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Failed to add connection: ${text}`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async updateProfile(id: string, dsn: string, label: string = '', color: string = '#3b82f6', readOnly: boolean = false): Promise<ConnectionConfig> {
+    const res = await fetch(`/api/profiles/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dsn, label, color, readOnly }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Failed to update profile: ${text}`)
     }
     const json = await res.json()
     return json.data ?? json
@@ -111,10 +157,36 @@ export const api = {
     return res.ok
   },
 
+  async getDatabases(connId: string): Promise<string[]> {
+    const res = await fetch(`/api/connections/${connId}/databases`)
+    if (!res.ok) throw new Error('Failed to get databases')
+    const json = await res.json()
+    return json.data ?? []
+  },
+
+  async selectDatabase(connId: string, database: string): Promise<void> {
+    const res = await fetch(`/api/connections/${connId}/databases/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ database }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Failed to select database: ${text}`)
+    }
+  },
+
   // Schema Inspection
   async getSchemas(connId: string): Promise<string[]> {
     const res = await fetch(`/api/connections/${connId}/schemas`)
     if (!res.ok) throw new Error('Failed to get schemas')
+    const json = await res.json()
+    return json.data ?? []
+  },
+
+  async getERDData(connId: string): Promise<ERDTable[]> {
+    const res = await fetch(`/api/connections/${connId}/erd`)
+    if (!res.ok) throw new Error('Failed to get ERD data')
     const json = await res.json()
     return json.data ?? []
   },

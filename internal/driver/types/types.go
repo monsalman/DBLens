@@ -3,11 +3,13 @@ package types
 import "context"
 
 type ColumnMeta struct {
-	Name       string  `json:"name"`
-	DataType   string  `json:"dataType"`
-	IsNullable bool    `json:"isNullable"`
-	IsPrimary  bool    `json:"isPrimary"`
-	Default    *string `json:"default"`
+	Name         string  `json:"name"`
+	Type         string  `json:"type"`
+	DataType     string  `json:"dataType"`
+	IsNullable   bool    `json:"isNullable"`
+	IsPrimary    bool    `json:"isPrimary"`
+	IsForeignKey bool    `json:"isForeignKey"`
+	Default      *string `json:"default"`
 }
 
 type ForeignKey struct {
@@ -83,6 +85,8 @@ type ERDTable struct {
 
 type Driver interface {
 	Dialect() string
+	InspectDatabases(ctx context.Context) ([]string, error)
+	SelectDatabase(ctx context.Context, dbName string) error
 	InspectSchemas(ctx context.Context) ([]string, error)
 	InspectTables(ctx context.Context, schema string) ([]TableMeta, error)
 	InspectTableDetails(ctx context.Context, schema, table string) (*TableDetail, error)

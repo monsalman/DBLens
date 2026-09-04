@@ -41,6 +41,36 @@ func (m *MySQLDriver) Close() error {
 	return m.db.Close()
 }
 
+func (m *MySQLDriver) InspectDatabases(ctx context.Context) ([]string, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	query := `SELECT schema_name FROM information_schema.schemata ORDER BY schema_name;`
+	rows, err := m.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dbs []string
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, dbName)
+	}
+	return dbs, nil
+}
+
+func (m *MySQLDriver) SelectDatabase(ctx context.Context, dbName string) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err := m.db.ExecContext(ctxTimeout, fmt.Sprintf("USE `%s`", dbName))
+	return err
+}
+
 func (m *MySQLDriver) InspectSchemas(ctx context.Context) ([]string, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

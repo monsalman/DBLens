@@ -1,22 +1,56 @@
 @import "tailwindcss";
 
-/* ── Base reset ── */
+/* ── Theme variables ── */
+/* Dark Mode (Dokploy Dark / Supabase style) */
+:root, .dark {
+  --bg: #000000;
+  --fg: #f5f5f5;
+  --muted: #737373;
+  --border: rgba(255, 255, 255, 0.08);
+  --surface: #0c0c0c;
+  --hover: rgba(255, 255, 255, 0.04);
+  --active: rgba(255, 255, 255, 0.06);
+  --table-row-hover: rgba(255, 255, 255, 0.03);
+  
+  /* Dokploy Primary Button (Dark mode: White bg, Black text) */
+  --btn-primary-bg: #f5f5f5;
+  --btn-primary-fg: #09090b;
+  --btn-primary-hover: #e5e5e5;
+  --accent: #3b82f6;
+}
+
+/* Light Mode (Dokploy Light theme exact palette: #ffffff bg, #09090b fg, #f4f4f5 muted/hover, #e4e4e7 border) */
+html:not(.dark) {
+  --bg: #ffffff;
+  --fg: #09090b;
+  --muted: #71717a;
+  --border: #e4e4e7;
+  --surface: #ffffff;
+  --hover: #f4f4f5;
+  --active: #e4e4e7;
+  --table-row-hover: #fafafa;
+
+  /* Dokploy Primary Button (Light mode: Dark/Black bg, White text) */
+  --btn-primary-bg: #09090b;
+  --btn-primary-fg: #ffffff;
+  --btn-primary-hover: #27272a;
+  --accent: #2563eb;
+}
+
 * {
-  border-color: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
 }
 
 body {
-  background-color: #0b0c0e;
-  color: #e4e4e7;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
   margin: 0;
   padding: 0;
   overflow: hidden;
   height: 100vh;
   width: 100vw;
   user-select: none;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -26,10 +60,9 @@ body {
   flex-direction: column;
 }
 
-/* ── Scrollbar (ultra minimal) ── */
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -37,106 +70,65 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 2px;
+  background: var(--muted);
+  border-radius: 3px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-/* ── Focus ring (subtle indigo) ── */
 *:focus-visible {
-  outline: 1px solid #818cf8;
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
-input, textarea, select {
-  font-size: inherit;
-}
-
-/* ── Monospace for all data values ── */
 .font-mono-data {
-  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.8125rem;
   letter-spacing: -0.01em;
 }
 
-/* ── Subtle divider line ── */
-.divider {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+.data-row-hover:hover {
+  background: var(--table-row-hover);
 }
 
-/* ── Table cell styles ── */
-.table-cell {
-  padding: 0.375rem 0.5rem;
-  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.table-cell-editable {
-  cursor: text;
-}
-
-.table-cell-editable:hover {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-/* ── Sidebar tree item ── */
 .sidebar-item {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8125rem;
-  border-radius: 4px;
   display: flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 0.8125rem;
+  color: var(--muted);
   cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.1s ease;
 }
 
 .sidebar-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover);
+  color: var(--fg);
 }
 
 .sidebar-item-active {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover);
+  color: var(--fg);
+  position: relative;
   font-weight: 500;
 }
 
-/* ── Badge / tag ── */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.125rem 0.375rem;
-  font-size: 0.625rem;
-  font-weight: 600;
-  border-radius: 3px;
-  line-height: 1;
+.sidebar-item-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--fg);
+  border-radius: 0 2px 2px 0;
 }
 
-.badge-pg { background: #1e3a5f; color: #93c5fd; }
-.badge-mysql { background: #3b1f1f; color: #fca5a5; }
-.badge-sqlite { background: #3f3a1f; color: #fde68a; }
-
-/* ── Status indicator dot ── */
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.status-dot.connected { background: #34d399; }
-.status-dot.disconnected { background: #ef4444; }
-
-/* ── Modal overlay (minimal) ── */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -144,111 +136,120 @@ input, textarea, select {
 }
 
 .modal-content {
-  background: #16181d;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  padding: 1.25rem;
-  min-width: 400px;
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 360px;
   max-width: 90vw;
 }
 
-/* ── Button base ── */
+.form-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 0.15s ease;
+  width: 100%;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+}
+
+.form-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 500;
+  margin-bottom: 4px;
+  display: block;
+}
+
+/* Dokploy Primary Button */
 .btn-primary {
-  background: #6366f1;
-  color: white;
-  padding: 0.375rem 0.75rem;
-  border-radius: 6px;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  padding: 6px 14px;
+  border-radius: 4px;
   font-size: 0.8125rem;
   font-weight: 500;
-  border: none;
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .btn-primary:hover {
-  background: #4f46e5;
+  background: var(--btn-primary-hover);
 }
 
 .btn-secondary {
   background: transparent;
-  color: #a1a1aa;
-  padding: 0.375rem 0.75rem;
-  border-radius: 6px;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 4px;
   font-size: 0.8125rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #e4e4e7;
+  background: var(--hover);
+  color: var(--fg);
 }
 
-/* ── Empty state ── */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: #52525b;
-  gap: 0.75rem;
+.badge-pg {
+  background: #1e3a5f;
+  color: #93c5fd;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
 }
 
-.empty-state-icon {
-  width: 48px;
-  height: 48px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
+.badge-mysql {
+  background: #3b1f1f;
+  color: #fca5a5;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
 }
 
-/* ── CodeMirror adjustments ── */
+.badge-sqlite {
+  background: #3f3a1f;
+  color: #fde68a;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
 .cm-editor {
-  background: #0b0c0e !important;
-  color: #a1a1aa !important;
-  font-size: 0.8125rem !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: var(--bg) !important;
+  border: 1px solid var(--border) !important;
 }
 
 .cm-gutters {
   background: transparent !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
-  color: #52525b !important;
+  border-right: 1px solid var(--border) !important;
+  color: var(--muted) !important;
 }
 
 .cm-cursor {
-  border-left-color: #818cf8 !important;
+  border-left-color: var(--fg) !important;
 }
 
-.cm-activeLine {
-  background: rgba(255, 255, 255, 0.02) !important;
-}
-
-/* ── React Flow overrides ── */
 .react-flow__node {
-  background: #16181d !important;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: 6px !important;
-  font-size: 0.75rem !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 4px !important;
 }
 
 .react-flow__edge-path {
-  stroke: rgba(255, 255, 255, 0.15) !important;
+  stroke: var(--border) !important;
   stroke-dasharray: 4 2 !important;
-}
-
-.react-flow__controls-button {
-  background: #16181d !important;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  color: #a1a1aa !important;
-}
-
-.react-flow__minimap {
-  background: #0b0c0e !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
 }

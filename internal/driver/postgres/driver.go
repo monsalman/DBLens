@@ -12,7 +12,8 @@ import (
 )
 
 type PostgresDriver struct {
-	db *sql.DB
+	db  *sql.DB
+	dsn string
 }
 
 func New(dsn string) (*PostgresDriver, error) {
@@ -23,7 +24,7 @@ func New(dsn string) (*PostgresDriver, error) {
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(10 * time.Minute)
-	return &PostgresDriver{db: db}, nil
+	return &PostgresDriver{db: db, dsn: dsn}, nil
 }
 
 func (p *PostgresDriver) Dialect() string {
@@ -38,6 +39,68 @@ func (p *PostgresDriver) Ping(ctx context.Context) error {
 
 func (p *PostgresDriver) Close() error {
 	return p.db.Close()
+}
+
+func (p *PostgresDriver) InspectDatabases(ctx context.Context) ([]string, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	query := `SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;`
+	rows, err := p.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dbs []string
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			return nil, err
+		}
+		dbs = append(dbs, dbName)
+	}
+	return dbs, nil
+}
+
+func (p *PostgresDriver) SelectDatabase(ctx context.Context, dbName string) error {
+	var newDSN string
+	if strings.Contains(p.dsn, "://") {
+		parts := strings.SplitN(p.dsn, "?", 2)
+		base := parts[0]
+		query := ""
+		if len(parts) > 1 {
+			query = "?" + parts[1]
+		}
+		lastSlash := strings.LastIndex(base, "/")
+		if lastSlash != -1 {
+			newDSN = base[:lastSlash+1] + dbName + query
+		} else {
+			newDSN = base + "/" + dbName + query
+		}
+	} else {
+		newDSN = p.dsn
+	}
+
+	newDB, err := sql.Open("pgx", newDSN)
+	if err != nil {
+		return err
+	}
+	newDB.SetMaxOpenConns(10)
+	newDB.SetMaxIdleConns(5)
+	newDB.SetConnMaxLifetime(10 * time.Minute)
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := newDB.PingContext(ctxTimeout); err != nil {
+		newDB.Close()
+		return err
+	}
+
+	_ = p.db.Close()
+	p.db = newDB
+	p.dsn = newDSN
+	return nil
 }
 
 func (p *PostgresDriver) InspectSchemas(ctx context.Context) ([]string, error) {
@@ -165,6 +228,7 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 
 		if !seenCols[col.Name] {
 			seenCols[col.Name] = true
+			col.Type = col.DataType
 			detail.Columns = append(detail.Columns, col)
 		} else if col.IsPrimary {
 			for i := range detail.Columns {
@@ -194,10 +258,17 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 	fkRows, err := p.db.QueryContext(ctxTimeout, fkQuery, schema, table)
 	if err == nil {
 		defer fkRows.Close()
+		fkCols := make(map[string]bool)
 		for fkRows.Next() {
 			var fk types.ForeignKey
 			if err := fkRows.Scan(&fk.Column, &fk.RefTable, &fk.RefColumn); err == nil {
 				detail.FKs = append(detail.FKs, fk)
+				fkCols[fk.Column] = true
+			}
+		}
+		for i := range detail.Columns {
+			if fkCols[detail.Columns[i].Name] {
+				detail.Columns[i].IsForeignKey = true
 			}
 		}
 	}

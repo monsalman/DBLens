@@ -1,78 +1,95 @@
 import React from 'react'
-import { Plus } from 'lucide-react'
-import { useAppStore } from '../../stores/appStore'
+import { Plus, Moon, Sun, Pencil, Trash2 } from 'lucide-react'
+import { api, type ConnectionConfig } from '../../lib/api'
 
-export const Header: React.FC = () => {
-  const {
-    connections,
-    activeConnectionId,
-    setActiveConnectionId,
-    setIsAddConnOpen,
-  } = useAppStore()
+interface Props {
+  connections: ConnectionConfig[]
+  activeConnId: string
+  onSwitch: (id: string) => void
+  onAdd: () => void
+  onEdit: (conn: ConnectionConfig) => void
+  onDeleted: (id: string) => void
+  activeTab: 'table' | 'sql' | 'erd'
+  onTabChange: (tab: 'table' | 'sql' | 'erd') => void
+  selectedSchema: string
+  onSchemaChange: (schema: string) => void
+  selectedTable: string | null
+  onSelectTable: (table: string | null) => void
+  isDark: boolean
+  onToggleTheme: () => void
+}
 
-  const activeConn = connections.find((c) => c.id === activeConnectionId)
-  
-  if (!activeConn) return null
-  
+export const Header: React.FC<Props> = ({ connections, activeConnId, onSwitch, onAdd, onEdit, onDeleted, activeTab, onTabChange, isDark, onToggleTheme }) => {
+  async function handleDelete(c: ConnectionConfig, e: React.MouseEvent) {
+    e.stopPropagation()
+    if (window.confirm('Delete connection profile?')) {
+      try {
+        await api.removeProfile(c.id)
+        onDeleted(c.id)
+      } catch (err) {
+        console.error('Failed to delete profile', err)
+      }
+    }
+  }
+
   return (
-    <header className="h-10 border-b border-white/[0.06] bg-[#0b0c0e] px-3 flex items-center justify-between shrink-0 select-none">
-      {/* Left: Logo + Connections */}
-      <div className="flex items-center gap-4">
-        <span className="font-mono font-medium text-sm text-zinc-200 tracking-tight">
-          dbls v0.1.0
-        </span>
+    <header className="h-10 flex items-center justify-between shrink-0 border-b border-[var(--border)] px-3 bg-[var(--bg)] text-[var(--fg)]">
+      <div className="flex items-center gap-3">
+        <span className="font-mono text-xs font-medium tracking-tight">dbls</span>
         
+        {/* Connection switcher */}
         <div className="flex items-center gap-1">
-          {connections.map((c) => {
-            const isActive = c.id === activeConnectionId
-            const dialectClass = getDialectBadge(c.dialect || c.driver || '')
-            return (
-              <button
-                key={c.id}
-                onClick={() => setActiveConnectionId(c.id)}
-                className={`flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded transition-colors ${
-                  isActive
-                    ? 'text-zinc-100 bg-white/[0.06]'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03]'
-                }`}
-              >
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.color || '#818cf8' }} />
-                <span className="max-w-[120px] truncate">{c.label || c.name || c.id}</span>
-                <span className={`${dialectClass} px-1 rounded-[3px] text-[9px] font-mono uppercase`}>
-                  {c.dialect || c.driver}
+          {connections.map(c => (
+            <div key={c.id} className="group relative flex items-center">
+              <button onClick={() => onSwitch(c.id)}
+                className={`px-2 py-0.5 text-[11px] rounded transition-colors flex items-center gap-1.5 ${
+                  c.id === activeConnId
+                    ? 'bg-[var(--active)] text-[var(--fg)] font-medium'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+                }`}>
+                <span>{c.label || c.name || c.id}</span>
+                <span className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 ${c.id === activeConnId ? 'opacity-100' : ''}`}>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(c); }} className="hover:text-[var(--fg)] p-0.5" title="Edit">
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  <button type="button" onClick={(e) => handleDelete(c, e)} className="hover:text-red-400 p-0.5" title="Delete">
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </span>
               </button>
-            )
-          })}
-          <button
-            onClick={() => setIsAddConnOpen(true)}
-            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-zinc-500 hover:text-zinc-200 hover:bg-white/[0.03] rounded transition-colors"
-          >
-            <Plus className="w-3 h-3" />
+            </div>
+          ))}
+          <button onClick={onAdd} className="p-1 text-[var(--muted)] hover:text-[var(--fg)] transition-colors">
+            <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Right: Status */}
-      <div className="flex items-center gap-3">
-        {activeConn.readOnly ? (
-          <span className="text-xs text-amber-400/90 font-mono">Read-only</span>
-        ) : (
-          <span className="text-xs text-emerald-400/90 font-mono">Connected</span>
-        )}
-        <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] text-zinc-500 font-mono">
-          <span className="text-zinc-400">Ctrl</span>+Enter
-        </kbd>
+      {/* Tab nav & Theme Toggle */}
+      <div className="flex items-center gap-2">
+        {/* Tab nav */}
+        <div className="flex items-center gap-0.5">
+          {[
+            { id: 'table' as const, label: 'Tables' },
+            { id: 'sql' as const, label: 'SQL Editor' },
+            { id: 'erd' as const, label: 'ERD' },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => onTabChange(tab.id)}
+              className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
+                activeTab === tab.id
+                  ? 'text-[var(--fg)] bg-[var(--active)] font-medium'
+                  : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+              }`}>{tab.label}</button>
+          ))}
+        </div>
+
+        {/* Dark/Light Toggle */}
+        <button onClick={onToggleTheme}
+          className="p-1.5 rounded text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+          title={`${isDark ? 'Light' : 'Dark'} mode`}>
+          {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+        </button>
       </div>
     </header>
   )
-}
-
-function getDialectBadge(dialect: string): string {
-  switch (dialect.toLowerCase()) {
-    case 'postgres': return 'badge-pg'
-    case 'mysql': return 'badge-mysql'
-    case 'sqlite': return 'badge-sqlite'
-    default: return 'bg-white/[0.08] text-zinc-300'
-  }
 }

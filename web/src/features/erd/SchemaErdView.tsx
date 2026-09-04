@@ -1,66 +1,78 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import {
   ReactFlow,
-  MiniMap,
-  Controls,
   Background,
-  BackgroundVariant,
+  Controls,
   Handle,
   Position,
+  useNodesState,
+  useEdgesState,
+  BackgroundVariant,
   type Node,
   type Edge,
+  type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Table2, Key } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { useAppStore } from '../../stores/appStore'
-import type { TableMeta } from '../../lib/api'
+import { Table, Key } from 'lucide-react'
+import { api, type ERDTable, type ColumnMeta } from '../../lib/api'
 
-const TableNode = ({ data }: { data: { table: TableMeta } }) => {
+interface Props {
+  connId: string
+  schema?: string
+}
+
+type TableNodeData = {
+  table: ERDTable
+}
+
+type TableNodeType = Node<TableNodeData, 'tableNode'>
+
+const TableNode: React.FC<NodeProps<TableNodeType>> = ({ data }) => {
   const { table } = data
-  const colList = table.columns || []
+  const hasManyColumns = table.columns.length > 12
 
   return (
-    <div className="bg-[#16181d] border border-white/[0.08] rounded min-w-[200px] overflow-hidden text-xs">
-      <Handle type="target" position={Position.Left} className="w-1.5 h-1.5 bg-indigo-400! border-none!" />
+    <div className="bg-[var(--surface)] text-[var(--fg)] border border-[var(--border)] rounded-md shadow-md overflow-hidden min-w-[220px] select-none">
+      <Handle type="target" position={Position.Left} className="w-2 h-2 !bg-indigo-500 !border-0" />
+      <Handle type="source" position={Position.Right} className="w-2 h-2 !bg-indigo-500 !border-0" />
 
-      {/* Header */}
-      <div className="bg-white/[0.03] px-2.5 py-1.5 border-b border-white/[0.06] flex items-center justify-between font-mono font-medium text-zinc-200">
-        <div className="flex items-center gap-1.5 truncate">
-          <Table2 className="w-3 h-3 text-zinc-400 shrink-0" />
-          <span className="truncate">{table.name}</span>
+      <div className="bg-[#16181d] px-3 py-1.5 border-b border-[var(--border)] font-semibold text-xs flex items-center justify-between">
+        <div className="flex items-center gap-1.5 overflow-hidden">
+          <Table className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
+          <span className="truncate text-white font-bold">{table.name}</span>
         </div>
-        <span className="text-[10px] text-zinc-500 font-normal">
-          {colList.length}
-        </span>
+        {table.schema && (
+          <span className="text-[10px] text-[var(--muted)] font-mono px-1.5 py-0.5 rounded bg-[var(--bg)] border border-[var(--border)] shrink-0 ml-2">
+            {table.schema}
+          </span>
+        )}
       </div>
 
-      {/* Columns */}
-      <div className="divide-y divide-white/[0.03] font-mono text-[11px]">
-        {colList.map((col) => (
-          <div
-            key={col.name}
-            className="px-2.5 py-1 flex items-center justify-between gap-2 text-zinc-300"
-          >
-            <div className="flex items-center gap-1.5 truncate">
-              {col.isPrimaryKey || col.isPrimary ? (
-                <Key className="w-2.5 h-2.5 text-amber-400 shrink-0" />
-              ) : (
-                <div className="w-2.5 h-2.5" />
-              )}
-              <span className={`truncate ${col.isPrimaryKey || col.isPrimary ? 'text-amber-200' : ''}`}>
-                {col.name}
-              </span>
+      <div className={`px-3 py-2 flex flex-col gap-1 text-[11px] ${hasManyColumns ? 'max-h-[300px] overflow-y-auto' : ''}`}>
+        {table.columns.map((col: ColumnMeta) => {
+          const isPk = col.isPrimaryKey || col.isPrimary
+          const isFk = col.isForeignKey
+          const dataTypeStr = col.dataType || col.type || ''
+
+          return (
+            <div key={col.name} className="flex items-center justify-between gap-2 py-0.5">
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                {isPk && <Key className="w-3 h-3 text-amber-500 shrink-0" />}
+                <span className="truncate font-mono text-xs">{col.name}</span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {isFk && (
+                  <span className="text-[9px] px-1 bg-indigo-500/20 text-indigo-400 rounded">
+                    FK
+                  </span>
+                )}
+                <span className="font-mono text-[10px] text-[var(--muted)]">{dataTypeStr}</span>
+              </div>
             </div>
-
-            <span className="text-[10px] text-zinc-500 shrink-0">
-              {col.dataType || col.type || 'text'}
-            </span>
-          </div>
-        ))}
+          )
+        })}
       </div>
-
-      <Handle type="source" position={Position.Right} className="w-1.5 h-1.5 bg-indigo-400! border-none!" />
     </div>
   )
 }
@@ -69,98 +81,73 @@ const nodeTypes = {
   tableNode: TableNode,
 }
 
-export const SchemaErdView: React.FC = () => {
-  const { activeConnectionId, selectedSchema } = useAppStore()
-
-  const { data: erdData } = useQuery({
-    queryKey: ['erd', activeConnectionId, selectedSchema],
-    queryFn: async () => {
-      if (!activeConnectionId) return null
-      const res = await fetch(`/api/connections/${activeConnectionId}/erd`)
-      if (!res.ok) throw new Error('Failed to load ERD')
-      const json = await res.json()
-      return (json.data ?? json) as Array<{
-        name: string
-        schema: string
-        columns: Array<any>
-        fks: Array<{ column: string; refTable: string; refColumn: string }>
-      }>
-    },
-    enabled: !!activeConnectionId,
+export const SchemaErdView: React.FC<Props> = ({ connId, schema }) => {
+  const { data: erdTables } = useQuery({
+    queryKey: ['erd', connId],
+    queryFn: () => api.getERDData(connId),
   })
 
-  const { nodes, edges } = useMemo(() => {
-    if (!erdData) return { nodes: [], edges: [] }
+  const [nodes, setNodes, onNodesChange] = useNodesState<TableNodeType>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
 
-    const calculatedNodes: Node[] = []
-    const calculatedEdges: Edge[] = []
+  const filteredTables = useMemo(() => {
+    if (!erdTables) return []
+    const targetSchema = schema || 'public'
+    return erdTables.filter((t) => !t.schema || t.schema === targetSchema)
+  }, [erdTables, schema])
 
-    const colsPerRow = 3
-    const spacingX = 280
-    const spacingY = 240
+  useEffect(() => {
+    if (!filteredTables) return
 
-    erdData.forEach((tbl, idx) => {
-      const x = (idx % colsPerRow) * spacingX + 40
-      const y = Math.floor(idx / colsPerRow) * spacingY + 40
+    const initialNodes: TableNodeType[] = filteredTables.map((t, i) => ({
+      id: t.name,
+      type: 'tableNode',
+      position: {
+        x: (i % 3) * 320 + 40,
+        y: Math.floor(i / 3) * 260 + 40,
+      },
+      data: {
+        table: t,
+      },
+    }))
 
-      calculatedNodes.push({
-        id: tbl.name,
-        type: 'tableNode',
-        position: { x, y },
-        data: {
-          table: {
-            name: tbl.name,
-            schema: tbl.schema,
-            type: 'table',
-            columns: tbl.columns?.map((c) => ({
-              name: c.name,
-              type: c.dataType || c.type || 'text',
-              dataType: c.dataType,
-              nullable: c.isNullable ?? c.nullable,
-              isNullable: c.isNullable ?? c.nullable,
-              isPrimaryKey: c.isPrimary ?? c.isPrimaryKey,
-              isPrimary: c.isPrimary ?? c.isPrimaryKey,
-              isForeignKey: !!tbl.fks?.some((fk) => fk.column === c.name),
-            })) || [],
-          },
-        },
-      })
+    const initialEdges: Edge[] = filteredTables.flatMap((table: ERDTable) =>
+      (table.fks || []).map((fk) => ({
+        id: `e-${table.name}.${fk.column}-${fk.refTable}.${fk.refColumn}`,
+        source: table.name,
+        target: fk.refTable,
+        label: `${fk.column} → ${fk.refColumn}`,
+        type: 'smoothstep',
+        animated: true,
+        style: { stroke: '#6366f1', strokeWidth: 1.5 },
+        labelStyle: { fill: '#a1a1a1', fontSize: 10, fontFamily: 'monospace' },
+        labelBgStyle: { fill: '#0c0c0c', fillOpacity: 0.8 },
+      }))
+    )
 
-      tbl.fks?.forEach((fk) => {
-        if (fk.refTable && fk.refColumn) {
-          calculatedEdges.push({
-            id: `edge_${tbl.name}_${fk.column}_to_${fk.refTable}`,
-            source: tbl.name,
-            target: fk.refTable,
-            style: { stroke: 'rgba(255, 255, 255, 0.2)', strokeWidth: 1 },
-          })
-        }
-      })
-    })
-
-    return { nodes: calculatedNodes, edges: calculatedEdges }
-  }, [erdData])
+    setNodes(initialNodes)
+    setEdges(initialEdges)
+  }, [filteredTables, setNodes, setEdges])
 
   return (
-    <div className="flex-1 h-full w-full bg-[#0b0c0e] relative">
-      <div className="absolute top-2 left-2 z-10 bg-[#16181d] border border-white/[0.06] rounded px-2 py-1 text-xs text-zinc-400 font-mono">
-        {selectedSchema} • {nodes.length} tables
-      </div>
-
+    <div className="w-full h-full relative bg-[var(--bg)]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
-        className="bg-[#0b0c0e]"
+        fitViewOptions={{ padding: 0.2 }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="rgba(255, 255, 255, 0.05)" />
-        <Controls className="bg-[#16181d]! border-white/[0.06]! fill-zinc-400!" />
-        <MiniMap
-          nodeColor="#27272a"
-          maskColor="rgba(11, 12, 14, 0.8)"
-          className="bg-[#0b0c0e]! border-white/[0.06]!"
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1.2}
+          color="var(--muted)"
+          className="opacity-40"
         />
+        <Controls className="bg-[var(--surface)] border border-[var(--border)]" />
       </ReactFlow>
     </div>
   )

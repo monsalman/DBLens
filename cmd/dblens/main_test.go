@@ -81,6 +81,39 @@ func TestBackendFlow(t *testing.T) {
 		t.Fatalf("expected 200 containing test_prof, got %d: %s", listProfRec.Code, listProfRec.Body.String())
 	}
 
+	// Test profile update (PUT /api/profiles/:id)
+	updateProfBody := `{"label":"Updated Profile","dsn":"sqlite:///tmp/dblens_prof_updated.db","color":"#00ff00","readOnly":true}`
+	updateProfReq := httptest.NewRequest("PUT", "/api/profiles/test_prof", strings.NewReader(updateProfBody))
+	updateProfReq.Header.Set("Content-Type", "application/json")
+	updateProfRec := httptest.NewRecorder()
+	router.ServeHTTP(updateProfRec, updateProfReq)
+	if updateProfRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 ok for update profile, got %d: %s", updateProfRec.Code, updateProfRec.Body.String())
+	}
+	if !strings.Contains(updateProfRec.Body.String(), "Updated Profile") {
+		t.Fatalf("response does not contain updated label: %s", updateProfRec.Body.String())
+	}
+
+	// Test connection test endpoint (POST /api/connections/test) - Success
+	testConnBody := `{"label":"Test Temp","dsn":"sqlite:///tmp/dblens_temp_test.db"}`
+	testConnReq := httptest.NewRequest("POST", "/api/connections/test", strings.NewReader(testConnBody))
+	testConnReq.Header.Set("Content-Type", "application/json")
+	testConnRec := httptest.NewRecorder()
+	router.ServeHTTP(testConnRec, testConnReq)
+	if testConnRec.Code != http.StatusOK || !strings.Contains(testConnRec.Body.String(), `"success":true`) {
+		t.Fatalf("expected 200 with success:true for test connection, got %d: %s", testConnRec.Code, testConnRec.Body.String())
+	}
+
+	// Test connection test endpoint (POST /api/connections/test) - Unsupported / Invalid DSN
+	testInvalidConnBody := `{"label":"Invalid","dsn":"invalid://localhost:5432"}`
+	testInvalidReq := httptest.NewRequest("POST", "/api/connections/test", strings.NewReader(testInvalidConnBody))
+	testInvalidReq.Header.Set("Content-Type", "application/json")
+	testInvalidRec := httptest.NewRecorder()
+	router.ServeHTTP(testInvalidRec, testInvalidReq)
+	if testInvalidRec.Code != http.StatusOK || !strings.Contains(testInvalidRec.Body.String(), `"success":false`) {
+		t.Fatalf("expected 200 with success:false for invalid test connection, got %d: %s", testInvalidRec.Code, testInvalidRec.Body.String())
+	}
+
 	req := httptest.NewRequest("GET", "/api/connections", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

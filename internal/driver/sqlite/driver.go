@@ -40,6 +40,14 @@ func (s *SQLiteDriver) Close() error {
 	return s.db.Close()
 }
 
+func (s *SQLiteDriver) InspectDatabases(ctx context.Context) ([]string, error) {
+	return []string{"main"}, nil
+}
+
+func (s *SQLiteDriver) SelectDatabase(ctx context.Context, dbName string) error {
+	return nil
+}
+
 func (s *SQLiteDriver) InspectSchemas(ctx context.Context) ([]string, error) {
 	return []string{"main"}, nil
 }

@@ -49,57 +49,76 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 		})
 	}
 
-	r.Route("/api", func(api chi.Router) {
-		api.Get("/profiles", h.ListProfiles)
-		api.Post("/profiles", h.CreateProfile)
-		api.Delete("/profiles/{id}", h.DeleteProfile)
+	// ── API routes FIRST (before catch-all) ──
+	api := chi.NewRouter()
+	api.Get("/profiles", h.ListProfiles)
+	api.Post("/profiles", h.CreateProfile)
+	api.Put("/profiles/{id}", h.UpdateProfile)
+	api.Delete("/profiles/{id}", h.DeleteProfile)
 
-		api.Get("/connections", h.ListConnections)
-		api.Post("/connections", h.AddConnection)
-		api.Delete("/connections/{connId}", h.RemoveConnection)
-		api.Get("/connections/{connId}/ping", h.PingConnection)
-		api.Get("/connections/{connId}/schemas", h.GetSchemas)
-		api.Get("/connections/{connId}/tables", h.GetTables)
-		api.Get("/connections/{connId}/tables/{table}", h.GetTableDetails)
-		api.Post("/connections/{connId}/tables/{table}/data", h.QueryTableData)
-		api.Post("/connections/{connId}/query", h.ExecuteQuery)
-		api.Post("/connections/{connId}/mutate", h.MutateRow)
-		api.Get("/connections/{connId}/erd", h.GetERDData)
-	})
+	api.Get("/connections", h.ListConnections)
+	api.Post("/connections", h.AddConnection)
+	api.Post("/connections/test", h.TestConnection)
+	api.Delete("/connections/{connId}", h.RemoveConnection)
+	api.Get("/connections/{connId}/ping", h.PingConnection)
+	api.Get("/connections/{connId}/databases", h.GetDatabases)
+	api.Post("/connections/{connId}/databases/select", h.SelectDatabase)
+	api.Get("/connections/{connId}/schemas", h.GetSchemas)
+	api.Get("/connections/{connId}/tables", h.GetTables)
+	api.Get("/connections/{connId}/tables/{table}", h.GetTableDetails)
+	api.Post("/connections/{connId}/tables/{table}/data", h.QueryTableData)
+	api.Post("/connections/{connId}/query", h.ExecuteQuery)
+	api.Post("/connections/{connId}/mutate", h.MutateRow)
+	api.Get("/connections/{connId}/erd", h.GetERDData)
 
+	r.Mount("/api", api)
+
+	// ── SPA fallback (skip /api/ entirely) ──
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Never serve static files for API routes
 		reqPath := strings.TrimPrefix(r.URL.Path, "/")
+		if strings.HasPrefix(reqPath, "api/") {
+			http.NotFound(w, r)
+			return
+		}
 		if reqPath == "" {
 			reqPath = "index.html"
 		}
+
+		var served bool
 
 		if cfg.StaticDir != "" {
 			diskPath := filepath.Join(cfg.StaticDir, reqPath)
 			if fileInfo, err := os.Stat(diskPath); err == nil && !fileInfo.IsDir() {
 				http.ServeFile(w, r, diskPath)
-				return
+				served = true
 			}
-			indexPath := filepath.Join(cfg.StaticDir, "index.html")
-			if _, err := os.Stat(indexPath); err == nil {
-				http.ServeFile(w, r, indexPath)
-				return
+			if !served {
+				indexPath := filepath.Join(cfg.StaticDir, "index.html")
+				if _, err := os.Stat(indexPath); err == nil {
+					http.ServeFile(w, r, indexPath)
+					served = true
+				}
 			}
 		}
 
-		// Try current directory web/dist
-		defaultDiskDir := "./web/dist"
-		diskPath := filepath.Join(defaultDiskDir, reqPath)
-		if fileInfo, err := os.Stat(diskPath); err == nil && !fileInfo.IsDir() {
-			http.ServeFile(w, r, diskPath)
-			return
-		}
-		defaultIndex := filepath.Join(defaultDiskDir, "index.html")
-		if _, err := os.Stat(defaultIndex); err == nil {
-			http.ServeFile(w, r, defaultIndex)
-			return
+		if !served {
+			defaultDiskDir := "./web/dist"
+			diskPath := filepath.Join(defaultDiskDir, reqPath)
+			if fileInfo, err := os.Stat(diskPath); err == nil && !fileInfo.IsDir() {
+				http.ServeFile(w, r, diskPath)
+				served = true
+			}
+			if !served {
+				defaultIndex := filepath.Join(defaultDiskDir, "index.html")
+				if _, err := os.Stat(defaultIndex); err == nil {
+					http.ServeFile(w, r, defaultIndex)
+					served = true
+				}
+			}
 		}
 
-		if cfg.EmbedFS != nil {
+		if !served && cfg.EmbedFS != nil {
 			if f, err := cfg.EmbedFS.Open(reqPath); err == nil {
 				if fi, err := f.Stat(); err == nil && !fi.IsDir() {
 					_ = f.Close()
@@ -115,7 +134,9 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 			}
 		}
 
-		http.NotFound(w, r)
+		if !served {
+			http.NotFound(w, r)
+		}
 	})
 
 	return r

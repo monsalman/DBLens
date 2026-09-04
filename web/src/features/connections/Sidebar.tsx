@@ -1,184 +1,130 @@
 import React, { useEffect, useState } from 'react'
-import { Database, Table2, ChevronRight, ChevronDown } from 'lucide-react'
-import { api } from '../../lib/api'
-import { useAppStore } from '../../stores/appStore'
+import { Table2 } from 'lucide-react'
+import { api, type ConnectionConfig } from '../../lib/api'
 
-type TreeNode = { name: string; type: 'schema' | 'table'; count?: number }
+interface Props {
+  connections: ConnectionConfig[]
+  activeConnId: string
+  selectedSchema?: string
+  onSelectSchema?: (schema: string) => void
+  selectedTable?: string | null
+  onSelectTable?: (table: string | null) => void
+}
 
-export const Sidebar: React.FC = () => {
-  const { 
-    activeConnectionId, selectedSchema, setSelectedSchema, 
-    selectedTable, setSelectedTable, setActiveTab, activeTab 
-  } = useAppStore()
-  
-  const [nodes, setNodes] = useState<TreeNode[]>([])
+export const Sidebar: React.FC<Props> = ({
+  activeConnId,
+  selectedSchema = 'public',
+  onSelectSchema,
+  selectedTable,
+  onSelectTable,
+}) => {
+  const [tables, setTables] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [schemas, setSchemas] = useState<string[]>(['public'])
-  
-  // Expand state for schemas
-  const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set(['public']))
-  
-  useEffect(() => {
-    async function loadSchemas() {
-      if (!activeConnectionId) return
-      try {
-        const sList = await api.getSchemas(activeConnectionId)
-        if (sList && sList.length > 0) {
-          setSchemas(sList)
-          if (!sList.includes(selectedSchema)) {
-            setSelectedSchema(sList[0])
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load schemas:', err)
+  const [databases, setDatabases] = useState<string[]>([])
+  const [selectedDb, setSelectedDb] = useState<string>('')
+  const [dbLoading, setDbLoading] = useState(false)
+
+  const loadTables = (connId: string, schema: string) => {
+    setLoading(true)
+    api.getTables(connId, schema).then(tList => {
+      const names = tList.map(t => t.name)
+      setTables(names)
+      if (names.length > 0 && (!selectedTable || !names.includes(selectedTable)) && onSelectTable) {
+        onSelectTable(names[0])
       }
-    }
-    loadSchemas()
-  }, [activeConnectionId])
+    }).catch(() => {}).finally(() => setLoading(false))
+  }
+
+  // Load databases & schemas automatically on active connection change
+  useEffect(() => {
+    if (!activeConnId) return
+    
+    setDbLoading(true)
+    api.getDatabases(activeConnId).then(dbList => {
+      if (dbList && dbList.length > 0) {
+        setDatabases(dbList)
+        if (!selectedDb) setSelectedDb(dbList[0])
+      }
+    }).catch(() => {}).finally(() => setDbLoading(false))
+
+    api.getSchemas(activeConnId).then(sList => {
+      if (sList && sList.length > 0) {
+        setSchemas(sList)
+        if (!sList.includes(selectedSchema) && onSelectSchema) {
+          onSelectSchema(sList[0])
+        }
+      }
+    }).catch(() => {})
+  }, [activeConnId])
 
   useEffect(() => {
-    async function load() {
-      if (!activeConnectionId) return
-      setLoading(true)
-      try {
-        const tables = await api.getTables(activeConnectionId, selectedSchema)
-        // Group by schema
-        const grouped: Record<string, number> = {}
-        tables.forEach(t => {
-          const s = t.schema || selectedSchema || 'public'
-          grouped[s] = (grouped[s] || 0) + 1
-        })
-        
-        const newNodes: TreeNode[] = []
-        if (Object.keys(grouped).length === 0) {
-          newNodes.push({ name: selectedSchema || 'public', type: 'schema', count: 0 })
-        } else {
-          Object.entries(grouped).forEach(([schema]) => {
-            newNodes.push({ name: schema, type: 'schema', count: grouped[schema] })
-          })
-        }
+    if (!activeConnId) return
+    loadTables(activeConnId, selectedSchema)
+  }, [activeConnId, selectedSchema])
 
-        // Add tables and views
-        tables.forEach(t => {
-          newNodes.push({
-            name: t.type === 'view' ? `${t.name} (view)` : t.name,
-            type: 'table',
-            count: t.rowCount,
-          })
-        })
-        
-        setNodes(newNodes)
-        
-        // Auto-select first table if none selected or selected table not in list
-        if (tables.length > 0 && (!selectedTable || !tables.some(t => t.name === selectedTable))) {
-          setSelectedTable(tables[0].name)
-        }
-      } catch (err) {
-        console.error('Failed to load schema:', err)
-      } finally {
-        setLoading(false)
-      }
+  const handleDbChange = async (dbName: string) => {
+    setSelectedDb(dbName)
+    try {
+      await api.selectDatabase(activeConnId, dbName)
+      loadTables(activeConnId, selectedSchema)
+    } catch (err) {
+      console.error('Failed to select database', err)
     }
-    load()
-  }, [activeConnectionId, selectedSchema])
-  
-  if (!activeConnectionId) return null
-  
+  }
+
   return (
-    <aside className="w-56 border-r border-white/[0.06] bg-[#0b0c0e] flex flex-col shrink-0">
-      {/* Tabs */}
-      <div className="flex border-b border-white/[0.06] px-1">
-        {[
-          { id: 'table' as const, label: 'Data' },
-          { id: 'sql' as const, label: 'SQL' },
-          { id: 'erd' as const, label: 'ERD' },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1.5 text-[11px] font-medium capitalize transition-colors relative ${
-              activeTab === tab.id
-                ? 'text-zinc-100'
-                : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-          >
-            {tab.label}
-            {activeTab === tab.id && (
-              <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-zinc-100" />
-            )}
-          </button>
-        ))}
-      </div>
-      
-      {/* Schema selector */}
-      <div className="px-2 pt-2 pb-1">
-        <label className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">Database</label>
+    <aside className="w-56 bg-[var(--bg)] border-r border-[var(--border)] flex flex-col shrink-0 overflow-hidden">
+      {/* Database Selector (Always visible like Adminer) */}
+      <div className="px-3 py-2 border-b border-[var(--border)] space-y-1">
+        <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider block">
+          Database {dbLoading && <span className="text-[9px] lowercase font-normal opacity-70">(loading...)</span>}
+        </label>
         <select
-          value={selectedSchema}
-          onChange={e => setSelectedSchema(e.target.value)}
-          className="mt-1 w-full bg-[#0b0c0e] text-xs text-zinc-200 border border-white/[0.06] rounded px-2 py-1 focus:border-white/[0.15] outline-none cursor-pointer font-mono"
+          value={selectedDb}
+          onChange={(e) => handleDbChange(e.target.value)}
+          className="w-full bg-[var(--surface)] text-xs text-[var(--fg)] border border-[var(--border)] rounded px-2 py-1 outline-none font-mono cursor-pointer"
         >
-          {schemas.map(s => (
-            <option key={s} value={s} className="bg-[#16181d] text-zinc-200">
-              {s}
+          {databases.length === 0 && <option value="">(default db)</option>}
+          {databases.map((db) => (
+            <option key={db} value={db}>
+              {db}
             </option>
           ))}
         </select>
       </div>
-      
-      {/* Tree */}
-      <div className="flex-1 overflow-y-auto p-2">
-        <div className="flex items-center justify-between px-1 mb-1">
-          <label className="text-[10px] text-zinc-500 uppercase font-semibold tracking-wider">Tables</label>
-          {loading && <span className="text-[10px] text-zinc-500 font-mono">Loading...</span>}
+
+      {/* Schema Selector (for Postgres/multischema DBs) */}
+      {schemas.length > 1 && (
+        <div className="px-3 py-2 border-b border-[var(--border)] space-y-1">
+          <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider block">Schema</label>
+          <select
+            value={selectedSchema}
+            onChange={(e) => onSelectSchema?.(e.target.value)}
+            className="w-full bg-[var(--surface)] text-xs text-[var(--fg)] border border-[var(--border)] rounded px-2 py-1 outline-none font-mono cursor-pointer"
+          >
+            {schemas.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
         </div>
-        {!loading && nodes.filter(n => n.type === 'table').length === 0 && (
-          <span className="text-xs text-zinc-600 px-1">No tables found</span>
-        )}
-        {nodes.map((node, i) => (
-          <div key={`${node.type}-${node.name}-${i}`} className="mb-0.5">
-            {node.type === 'schema' ? (
-              <div className="flex items-center gap-1 mt-1 px-1 text-zinc-400">
-                <button
-                  onClick={() => {
-                    const next = new Set(expandedSchemas)
-                    if (next.has(node.name)) next.delete(node.name)
-                    else next.add(node.name)
-                    setExpandedSchemas(next)
-                  }}
-                  className="p-0.5 text-zinc-500 hover:text-zinc-300"
-                >
-                  {expandedSchemas.has(node.name) ? (
-                    <ChevronDown className="w-3 h-3" />
-                  ) : (
-                    <ChevronRight className="w-3 h-3" />
-                  )}
-                </button>
-                <Database className="w-3 h-3 text-zinc-500" />
-                <span className="text-xs text-zinc-300 font-mono">{node.name}</span>
-                {node.count !== undefined && (
-                  <span className="text-[10px] text-zinc-600 font-mono">({node.count})</span>
-                )}
-              </div>
-            ) : (
-              <div
-                className={`sidebar-item ${
-                  selectedTable === node.name.replace(' (view)', '') ? 'sidebar-item-active' : ''
-                }`}
-                onClick={() => {
-                  setSelectedTable(node.name.replace(' (view)', ''))
-                  if (activeTab !== 'table') setActiveTab('table')
-                }}
-              >
-                <Table2 className="w-3 h-3 text-zinc-500 shrink-0" />
-                <span className="truncate text-xs font-mono text-zinc-300">
-                  {node.name.replace(' (view)', '')}
-                </span>
-                {node.name.includes('(view)') && (
-                  <span className="text-[9px] text-zinc-600 font-mono ml-auto">view</span>
-                )}
-              </div>
-            )}
+      )}
+
+      {/* Tables List */}
+      <div className="flex-1 overflow-y-auto p-2">
+        <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider ml-1 mb-1 block">Tables</label>
+        {loading && <div className="ml-1 text-[11px] text-[var(--muted)]">Loading...</div>}
+        {!loading && tables.length === 0 && <div className="ml-1 text-[11px] text-[var(--muted)]">No tables found</div>}
+        {tables.map(name => (
+          <div
+            key={name}
+            onClick={() => onSelectTable?.(name)}
+            className={`sidebar-item ${selectedTable === name ? 'sidebar-item-active' : ''}`}
+          >
+            <Table2 className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{name}</span>
           </div>
         ))}
       </div>

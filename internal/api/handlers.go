@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/driver"
@@ -73,6 +75,26 @@ type CreateProfileRequest struct {
 	ReadOnly bool   `json:"readOnly"`
 }
 
+type UpdateProfileRequest struct {
+	Label    string `json:"label"`
+	DSN      string `json:"dsn"`
+	Color    string `json:"color"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+type TestConnectionRequest struct {
+	DSN      string `json:"dsn"`
+	Label    string `json:"label"`
+	Color    string `json:"color"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+type TestConnectionResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Dialect string `json:"dialect"`
+}
+
 func (h *Handler) ListProfiles(w http.ResponseWriter, r *http.Request) {
 	profiles, err := h.mgr.ListProfiles()
 	if err != nil {
@@ -112,6 +134,38 @@ func (h *Handler) CreateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sendJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":       entry.ID,
+		"label":    entry.Label,
+		"color":    entry.Color,
+		"readOnly": entry.ReadOnly,
+		"dialect":  entry.Driver.Dialect(),
+	})
+}
+
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		sendError(w, http.StatusBadRequest, "profile id is required")
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.DSN == "" {
+		sendError(w, http.StatusBadRequest, "dsn is required")
+		return
+	}
+
+	entry, err := h.mgr.UpdateProfile(id, req.Label, req.DSN, req.Color, req.ReadOnly)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
 		"id":       entry.ID,
 		"label":    entry.Label,
 		"color":    entry.Color,
@@ -179,6 +233,90 @@ func (h *Handler) PingConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	var req TestConnectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.DSN == "" {
+		sendError(w, http.StatusBadRequest, "dsn is required")
+		return
+	}
+
+	// Try to create a driver instance and ping
+	drv, err := driver.NewDriver(req.DSN)
+	if err != nil {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false, "message": "Failed to parse DSN: " + err.Error(),
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pingErr := drv.Ping(ctx)
+	dialect := drv.Dialect()
+	drv.Close() // Always close after test
+
+	if pingErr != nil {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false, "message": "Connection failed: " + pingErr.Error(), "dialect": dialect,
+		})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true, "message": "Connected successfully", "dialect": dialect,
+	})
+}
+
+type SelectDatabaseRequest struct {
+	Database string `json:"database"`
+}
+
+func (h *Handler) GetDatabases(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	dbs, err := entry.Driver.InspectDatabases(r.Context())
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, dbs)
+}
+
+func (h *Handler) SelectDatabase(w http.ResponseWriter, r *http.Request) {
+	connID := chi.URLParam(r, "connId")
+	entry, err := h.mgr.Get(connID)
+	if err != nil {
+		sendError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var req SelectDatabaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.Database == "" {
+		sendError(w, http.StatusBadRequest, "database is required")
+		return
+	}
+
+	if err := entry.Driver.SelectDatabase(r.Context(), req.Database); err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, map[string]string{"message": "database switched"})
 }
 
 func (h *Handler) GetSchemas(w http.ResponseWriter, r *http.Request) {
