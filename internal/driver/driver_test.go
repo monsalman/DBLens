@@ -2,6 +2,7 @@ package driver_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -326,5 +327,226 @@ func TestUnsupportedDSNMasking(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "oracle://scott:***@localhost:1521/xe") {
 		t.Fatalf("expected masked DSN in error message, got: %v", err)
+	}
+}
+
+func TestDriverMutateRow(t *testing.T) {
+	dbFile := "/tmp/dblens_mutate_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	drv, err := driver.NewDriver("sqlite://" + dbFile)
+	if err != nil {
+		t.Fatalf("failed to create sqlite driver: %v", err)
+	}
+	defer drv.Close()
+
+	ctx := context.Background()
+
+	// Setup table with composite primary key
+	_, err = drv.ExecuteQuery(ctx, `
+		CREATE TABLE order_items (
+			tenant_id INTEGER,
+			order_id INTEGER,
+			item_id INTEGER,
+			quantity INTEGER,
+			note TEXT,
+			PRIMARY KEY (tenant_id, order_id, item_id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// 1. INSERT tests
+	res, err := drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationInsert,
+		Data: map[string]interface{}{
+			"tenant_id": 1,
+			"order_id":  100,
+			"item_id":   1,
+			"quantity":  2,
+			"note":      "first item",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert row 1: %v", err)
+	}
+	if res.AffectedRows != 1 {
+		t.Fatalf("expected 1 affected row, got %d", res.AffectedRows)
+	}
+
+	// Insert second row
+	res, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationInsert,
+		Data: map[string]interface{}{
+			"tenant_id": 1,
+			"order_id":  100,
+			"item_id":   2,
+			"quantity":  5,
+			"note":      "second item",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert row 2: %v", err)
+	}
+
+	// Insert row for tenant 2
+	res, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationInsert,
+		Data: map[string]interface{}{
+			"tenant_id": 2,
+			"order_id":  100,
+			"item_id":   1,
+			"quantity":  10,
+			"note":      "tenant 2 item",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to insert row 3: %v", err)
+	}
+
+	// Verify count is 3
+	queryRes, err := drv.QueryTableData(ctx, types.QueryOptions{Table: "order_items"})
+	if err != nil {
+		t.Fatalf("failed to query table data: %v", err)
+	}
+	if len(queryRes.Rows) != 3 {
+		t.Fatalf("expected 3 rows after insert, got %d", len(queryRes.Rows))
+	}
+
+	// 2. UPDATE with composite primary key
+	res, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationUpdate,
+		Data: map[string]interface{}{
+			"quantity": 20,
+			"note":     "updated first item",
+		},
+		Where: map[string]interface{}{
+			"tenant_id": 1,
+			"order_id":  100,
+			"item_id":   1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to update row with composite PK: %v", err)
+	}
+	if res.AffectedRows != 1 {
+		t.Fatalf("expected 1 affected row on composite update, got %d", res.AffectedRows)
+	}
+
+	// Verify only row (1, 100, 1) was updated
+	queryUpdated, err := drv.QueryTableData(ctx, types.QueryOptions{
+		Table: "order_items",
+		Filters: []types.Filter{
+			{Column: "tenant_id", Operator: "=", Value: "1"},
+			{Column: "item_id", Operator: "=", Value: "1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to query updated row: %v", err)
+	}
+	if len(queryUpdated.Rows) != 1 {
+		t.Fatalf("expected 1 matching row, got %d", len(queryUpdated.Rows))
+	}
+	colMap := make(map[string]int)
+	for i, c := range queryUpdated.Columns {
+		colMap[c] = i
+	}
+	row := queryUpdated.Rows[0]
+	qty := fmt.Sprintf("%v", row[colMap["quantity"]])
+	note := fmt.Sprintf("%v", row[colMap["note"]])
+	if qty != "20" || note != "updated first item" {
+		t.Fatalf("unexpected row data after update: qty=%s, note=%s", qty, note)
+	}
+
+	// Verify tenant 2 row was untouched
+	queryTenant2, err := drv.QueryTableData(ctx, types.QueryOptions{
+		Table: "order_items",
+		Filters: []types.Filter{
+			{Column: "tenant_id", Operator: "=", Value: "2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to query tenant 2: %v", err)
+	}
+	colMap2 := make(map[string]int)
+	for i, c := range queryTenant2.Columns {
+		colMap2[c] = i
+	}
+	qty2 := fmt.Sprintf("%v", queryTenant2.Rows[0][colMap2["quantity"]])
+	if len(queryTenant2.Rows) != 1 || qty2 != "10" {
+		t.Fatalf("tenant 2 row was affected unexpectedly: %v", queryTenant2.Rows)
+	}
+
+	// 3. DELETE with composite primary key
+	res, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationDelete,
+		Where: map[string]interface{}{
+			"tenant_id": 1,
+			"order_id":  100,
+			"item_id":   1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to delete row with composite PK: %v", err)
+	}
+	if res.AffectedRows != 1 {
+		t.Fatalf("expected 1 affected row on composite delete, got %d", res.AffectedRows)
+	}
+
+	// Verify 2 rows remain
+	queryRemaining, err := drv.QueryTableData(ctx, types.QueryOptions{Table: "order_items"})
+	if err != nil {
+		t.Fatalf("failed to query remaining rows: %v", err)
+	}
+	if len(queryRemaining.Rows) != 2 {
+		t.Fatalf("expected 2 rows after delete, got %d", len(queryRemaining.Rows))
+	}
+
+	// 4. Error validations
+	// Empty data on INSERT
+	_, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationInsert,
+		Data:  map[string]interface{}{},
+	})
+	if err == nil {
+		t.Fatalf("expected error on empty data insert, got nil")
+	}
+
+	// Empty WHERE on UPDATE
+	_, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationUpdate,
+		Data:  map[string]interface{}{"quantity": 99},
+		Where: map[string]interface{}{},
+	})
+	if err == nil {
+		t.Fatalf("expected error on empty where update, got nil")
+	}
+
+	// Empty WHERE on DELETE
+	_, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  types.MutationDelete,
+		Where: map[string]interface{}{},
+	})
+	if err == nil {
+		t.Fatalf("expected error on empty where delete, got nil")
+	}
+
+	// Unsupported mutation type
+	_, err = drv.MutateRow(ctx, types.Mutation{
+		Table: "order_items",
+		Type:  "UPSERT",
+	})
+	if err == nil {
+		t.Fatalf("expected error on unsupported mutation type, got nil")
 	}
 }

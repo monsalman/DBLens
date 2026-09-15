@@ -444,7 +444,12 @@ export const api = {
     })
     if (!res.ok) {
       const text = await res.text()
-      throw new Error(text)
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg)
     }
     const json = await res.json()
     return json.data ?? json ?? { affectedRows: 0 }
