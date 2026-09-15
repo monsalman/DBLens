@@ -292,10 +292,12 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 	return detail, nil
 }
 
-func (p *PostgresDriver) QueryTableData(ctx context.Context, opts types.QueryOptions) (*types.QueryResult, error) {
-	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
 
+// BuildQuerySQL constructs the SELECT query and parameter slice from QueryOptions.
+func BuildQuerySQL(opts types.QueryOptions) (string, []interface{}) {
 	if opts.Schema == "" {
 		opts.Schema = "public"
 	}
@@ -310,16 +312,25 @@ func (p *PostgresDriver) QueryTableData(ctx context.Context, opts types.QueryOpt
 	var args []interface{}
 	argIdx := 1
 
-	targetTable := fmt.Sprintf(`"%s"."%s"`, opts.Schema, opts.Table)
+	targetTable := fmt.Sprintf(`%s.%s`, quoteIdent(opts.Schema), quoteIdent(opts.Table))
 	sb.WriteString(fmt.Sprintf(`SELECT * FROM %s`, targetTable))
 
-	if len(opts.Filters) > 0 {
+	var validFilters []types.Filter
+	for _, f := range opts.Filters {
+		col := strings.TrimSpace(f.Column)
+		if col == "" || col == "*" {
+			continue
+		}
+		validFilters = append(validFilters, f)
+	}
+
+	if len(validFilters) > 0 {
 		sb.WriteString(" WHERE ")
-		for i, f := range opts.Filters {
+		for i, f := range validFilters {
 			if i > 0 {
 				sb.WriteString(" AND ")
 			}
-			col := fmt.Sprintf(`"%s"`, f.Column)
+			col := quoteIdent(strings.TrimSpace(f.Column))
 			switch strings.ToUpper(f.Operator) {
 			case "=":
 				sb.WriteString(fmt.Sprintf("%s = $%d", col, argIdx))
@@ -367,16 +378,23 @@ func (p *PostgresDriver) QueryTableData(ctx context.Context, opts types.QueryOpt
 
 	if opts.OrderBy != "" {
 		dir := "ASC"
-		if strings.ToUpper(opts.OrderDir) == "DESC" {
+		if strings.EqualFold(strings.TrimSpace(opts.OrderDir), "DESC") {
 			dir = "DESC"
 		}
-		sb.WriteString(fmt.Sprintf(` ORDER BY "%s" %s`, opts.OrderBy, dir))
+		sb.WriteString(fmt.Sprintf(` ORDER BY %s %s`, quoteIdent(opts.OrderBy), dir))
 	}
 
 	sb.WriteString(fmt.Sprintf(" LIMIT $%d OFFSET $%d", argIdx, argIdx+1))
 	args = append(args, opts.Limit, opts.Offset)
 
-	sqlStr := sb.String()
+	return sb.String(), args
+}
+
+func (p *PostgresDriver) QueryTableData(ctx context.Context, opts types.QueryOptions) (*types.QueryResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	sqlStr, args := BuildQuerySQL(opts)
 	start := time.Now()
 	rows, err := p.db.QueryContext(ctxTimeout, sqlStr, args...)
 	if err != nil {
@@ -484,7 +502,7 @@ func (p *PostgresDriver) MutateRow(ctx context.Context, m types.Mutation) (*type
 	if m.Schema == "" {
 		m.Schema = "public"
 	}
-	targetTable := fmt.Sprintf(`"%s"."%s"`, m.Schema, m.Table)
+	targetTable := fmt.Sprintf(`%s.%s`, quoteIdent(m.Schema), quoteIdent(m.Table))
 
 	var sqlStr string
 	var args []interface{}
@@ -495,7 +513,7 @@ func (p *PostgresDriver) MutateRow(ctx context.Context, m types.Mutation) (*type
 		var cols []string
 		var placeholders []string
 		for col, val := range m.Data {
-			cols = append(cols, fmt.Sprintf(`"%s"`, col))
+			cols = append(cols, quoteIdent(col))
 			placeholders = append(placeholders, fmt.Sprintf("$%d", argIdx))
 			args = append(args, val)
 			argIdx++
@@ -508,13 +526,13 @@ func (p *PostgresDriver) MutateRow(ctx context.Context, m types.Mutation) (*type
 	case types.MutationUpdate:
 		var sets []string
 		for col, val := range m.Data {
-			sets = append(sets, fmt.Sprintf(`"%s" = $%d`, col, argIdx))
+			sets = append(sets, fmt.Sprintf(`%s = $%d`, quoteIdent(col), argIdx))
 			args = append(args, val)
 			argIdx++
 		}
 		var wheres []string
 		for col, val := range m.Where {
-			wheres = append(wheres, fmt.Sprintf(`"%s" = $%d`, col, argIdx))
+			wheres = append(wheres, fmt.Sprintf(`%s = $%d`, quoteIdent(col), argIdx))
 			args = append(args, val)
 			argIdx++
 		}
@@ -529,7 +547,7 @@ func (p *PostgresDriver) MutateRow(ctx context.Context, m types.Mutation) (*type
 	case types.MutationDelete:
 		var wheres []string
 		for col, val := range m.Where {
-			wheres = append(wheres, fmt.Sprintf(`"%s" = $%d`, col, argIdx))
+			wheres = append(wheres, fmt.Sprintf(`%s = $%d`, quoteIdent(col), argIdx))
 			args = append(args, val)
 			argIdx++
 		}

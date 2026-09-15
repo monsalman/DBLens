@@ -7,3 +7,6 @@ cmd/dblens/dist
 /tmp/dblens*
 ROADMAP.md
 *PLAN*.md
+dblens
+/dblens
+*.exe

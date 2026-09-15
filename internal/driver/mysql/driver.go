@@ -16,7 +16,23 @@ type MySQLDriver struct {
 }
 
 func New(dsn string) (*MySQLDriver, error) {
-	cleanDSN := strings.TrimPrefix(dsn, "mysql://")
+	cleanDSN := dsn
+	if len(cleanDSN) >= 8 && strings.EqualFold(cleanDSN[:8], "mysql://") {
+		cleanDSN = cleanDSN[8:]
+	}
+	if strings.Contains(cleanDSN, "@") && !strings.Contains(cleanDSN, "(") {
+		atIdx := strings.LastIndex(cleanDSN, "@")
+		auth := cleanDSN[:atIdx]
+		hostAndDb := cleanDSN[atIdx+1:]
+		if slashIdx := strings.Index(hostAndDb, "/"); slashIdx != -1 {
+			hostPort := hostAndDb[:slashIdx]
+			dbRest := hostAndDb[slashIdx:]
+			cleanDSN = auth + "@tcp(" + hostPort + ")" + dbRest
+		} else if hostAndDb != "" {
+			cleanDSN = auth + "@tcp(" + hostAndDb + ")/"
+		}
+	}
+
 	db, err := sql.Open("mysql", cleanDSN)
 	if err != nil {
 		return nil, err
@@ -25,6 +41,10 @@ func New(dsn string) (*MySQLDriver, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(10 * time.Minute)
 	return &MySQLDriver{db: db}, nil
+}
+
+func NewDriver(dsn string) (*MySQLDriver, error) {
+	return New(dsn)
 }
 
 func (m *MySQLDriver) Dialect() string {
@@ -219,10 +239,12 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 	return detail, nil
 }
 
-func (m *MySQLDriver) QueryTableData(ctx context.Context, opts types.QueryOptions) (*types.QueryResult, error) {
-	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+func quoteIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
 
+// BuildQuerySQL constructs the SELECT query and parameter slice from QueryOptions for MySQL.
+func BuildQuerySQL(opts types.QueryOptions) (string, []interface{}) {
 	if opts.Limit <= 0 || opts.Limit > 500 {
 		opts.Limit = 500
 	}
@@ -234,18 +256,27 @@ func (m *MySQLDriver) QueryTableData(ctx context.Context, opts types.QueryOption
 	var args []interface{}
 
 	if opts.Schema != "" {
-		sb.WriteString(fmt.Sprintf("SELECT * FROM `%s`.`%s`", opts.Schema, opts.Table))
+		sb.WriteString(fmt.Sprintf("SELECT * FROM %s.%s", quoteIdent(opts.Schema), quoteIdent(opts.Table)))
 	} else {
-		sb.WriteString(fmt.Sprintf("SELECT * FROM `%s`", opts.Table))
+		sb.WriteString(fmt.Sprintf("SELECT * FROM %s", quoteIdent(opts.Table)))
 	}
 
-	if len(opts.Filters) > 0 {
+	var validFilters []types.Filter
+	for _, f := range opts.Filters {
+		col := strings.TrimSpace(f.Column)
+		if col == "" || col == "*" {
+			continue
+		}
+		validFilters = append(validFilters, f)
+	}
+
+	if len(validFilters) > 0 {
 		sb.WriteString(" WHERE ")
-		for i, f := range opts.Filters {
+		for i, f := range validFilters {
 			if i > 0 {
 				sb.WriteString(" AND ")
 			}
-			col := fmt.Sprintf("`%s`", f.Column)
+			col := quoteIdent(strings.TrimSpace(f.Column))
 			switch strings.ToUpper(f.Operator) {
 			case "=", "!=", ">", "<", ">=", "<=":
 				sb.WriteString(fmt.Sprintf("%s %s ?", col, f.Operator))
@@ -266,16 +297,23 @@ func (m *MySQLDriver) QueryTableData(ctx context.Context, opts types.QueryOption
 
 	if opts.OrderBy != "" {
 		dir := "ASC"
-		if strings.ToUpper(opts.OrderDir) == "DESC" {
+		if strings.EqualFold(strings.TrimSpace(opts.OrderDir), "DESC") {
 			dir = "DESC"
 		}
-		sb.WriteString(fmt.Sprintf(" ORDER BY `%s` %s", opts.OrderBy, dir))
+		sb.WriteString(fmt.Sprintf(" ORDER BY %s %s", quoteIdent(opts.OrderBy), dir))
 	}
 
 	sb.WriteString(" LIMIT ? OFFSET ?")
 	args = append(args, opts.Limit, opts.Offset)
 
-	sqlStr := sb.String()
+	return sb.String(), args
+}
+
+func (m *MySQLDriver) QueryTableData(ctx context.Context, opts types.QueryOptions) (*types.QueryResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	sqlStr, args := BuildQuerySQL(opts)
 	start := time.Now()
 	rows, err := m.db.QueryContext(ctxTimeout, sqlStr, args...)
 	if err != nil {
@@ -382,9 +420,9 @@ func (m *MySQLDriver) MutateRow(ctx context.Context, mut types.Mutation) (*types
 
 	var targetTable string
 	if mut.Schema != "" {
-		targetTable = fmt.Sprintf("`%s`.`%s`", mut.Schema, mut.Table)
+		targetTable = fmt.Sprintf("%s.%s", quoteIdent(mut.Schema), quoteIdent(mut.Table))
 	} else {
-		targetTable = fmt.Sprintf("`%s`", mut.Table)
+		targetTable = quoteIdent(mut.Table)
 	}
 
 	var sqlStr string
@@ -395,7 +433,7 @@ func (m *MySQLDriver) MutateRow(ctx context.Context, mut types.Mutation) (*types
 		var cols []string
 		var placeholders []string
 		for col, val := range mut.Data {
-			cols = append(cols, fmt.Sprintf("`%s`", col))
+			cols = append(cols, quoteIdent(col))
 			placeholders = append(placeholders, "?")
 			args = append(args, val)
 		}
@@ -407,12 +445,12 @@ func (m *MySQLDriver) MutateRow(ctx context.Context, mut types.Mutation) (*types
 	case types.MutationUpdate:
 		var sets []string
 		for col, val := range mut.Data {
-			sets = append(sets, fmt.Sprintf("`%s` = ?", col))
+			sets = append(sets, fmt.Sprintf("%s = ?", quoteIdent(col)))
 			args = append(args, val)
 		}
 		var wheres []string
 		for col, val := range mut.Where {
-			wheres = append(wheres, fmt.Sprintf("`%s` = ?", col))
+			wheres = append(wheres, fmt.Sprintf("%s = ?", quoteIdent(col)))
 			args = append(args, val)
 		}
 		if len(sets) == 0 {
@@ -426,7 +464,7 @@ func (m *MySQLDriver) MutateRow(ctx context.Context, mut types.Mutation) (*types
 	case types.MutationDelete:
 		var wheres []string
 		for col, val := range mut.Where {
-			wheres = append(wheres, fmt.Sprintf("`%s` = ?", col))
+			wheres = append(wheres, fmt.Sprintf("%s = ?", quoteIdent(col)))
 			args = append(args, val)
 		}
 		if len(wheres) == 0 {

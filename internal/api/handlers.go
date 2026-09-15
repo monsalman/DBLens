@@ -17,18 +17,7 @@ type Response struct {
 }
 
 func MaskDSN(dsn string) string {
-	if strings.Contains(dsn, "://") {
-		parts := strings.SplitN(dsn, "://", 2)
-		cred := parts[0]
-		rest := parts[1]
-		if idx := strings.Index(rest, "@"); idx > 0 {
-			if passIdx := strings.Index(rest[:idx], ":"); passIdx > 0 {
-				rest = rest[:passIdx+1] + "***" + rest[idx:]
-			}
-		}
-		return cred + "://" + rest
-	}
-	return dsn
+	return driver.MaskDSN(dsn)
 }
 
 func sendJSON(w http.ResponseWriter, status int, data interface{}) {
