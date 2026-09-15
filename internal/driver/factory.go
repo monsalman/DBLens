@@ -16,12 +16,15 @@ func NewDriver(dsn string) (Driver, error) {
 	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
 		return postgres.New(dsnTrim)
 	}
-	if strings.HasPrefix(lower, "mysql://") {
+	if strings.HasPrefix(lower, "mysql://") || strings.Contains(lower, "@tcp(") {
 		return mysql.New(dsnTrim)
 	}
-	if strings.HasPrefix(lower, "sqlite://") || strings.HasPrefix(lower, "file:") || strings.HasSuffix(lower, ".db") || strings.HasSuffix(lower, ".sqlite") || strings.HasSuffix(lower, ".sqlite3") {
+	if strings.HasPrefix(lower, "sqlite://") || strings.HasPrefix(lower, "file:") ||
+		strings.HasSuffix(lower, ".db") || strings.HasSuffix(lower, ".sqlite") || strings.HasSuffix(lower, ".sqlite3") ||
+		strings.HasPrefix(lower, "/") || strings.HasPrefix(lower, "./") || strings.HasPrefix(lower, "../") ||
+		lower == ":memory:" {
 		return sqlite.New(dsnTrim)
 	}
 
-	return nil, fmt.Errorf("unsupported database DSN scheme or format: %s", dsn)
+	return nil, fmt.Errorf("unsupported database DSN scheme or format: %s", MaskDSN(dsnTrim))
 }

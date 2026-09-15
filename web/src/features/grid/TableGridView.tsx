@@ -1,8 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
 
 interface Props {
   connId: string
@@ -14,11 +15,21 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(50)
   const [sortCol, setSortCol] = useState('')
-  const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [searchTerm, setSearchTerm] = useState('')
+  const [selectedCol, setSelectedCol] = useState('')
   const [selectedRows, setSelectedRows] = useState<Record<string, boolean>>({})
-  
+
+  useEffect(() => {
+    setPageIndex(0)
+    setSortCol('')
+    setSelectedRows({})
+    setSearchTerm('')
+    setSelectedCol('')
+  }, [table, schema, connId])
+
   const qc = useQueryClient()
+  const { openPeekDrawer } = useAppStore()
 
   // Columns metadata
   const { data: cols, isLoading: colsLoading } = useQuery({
@@ -26,16 +37,53 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     queryFn: () => api.getTableDetails(connId, table, schema),
     enabled: !!table,
   })
-  
-  const pkCol = cols?.columns?.find((c: ColumnMeta) => c.isPrimaryKey || c.isPrimary)?.name ?? 'id'
+
   const metaCols: ColumnMeta[] = cols?.columns ?? []
+  const pkCol = metaCols.find((c: ColumnMeta) => c.isPrimaryKey || c.isPrimary)?.name ?? metaCols[0]?.name ?? 'id'
+
+  // FK lookup map by column name
+  const fkMap = useMemo(() => {
+    const map = new Map<string, { column: string; refTable: string; refColumn: string }>()
+    if (cols?.fks) {
+      for (const f of cols.fks) {
+        if (f.column && f.refTable && f.refColumn) {
+          map.set(f.column, f)
+        }
+      }
+    }
+    if (cols?.columns) {
+      for (const c of cols.columns) {
+        if (c.isForeignKey && c.foreignKeyTarget && !map.has(c.name)) {
+          map.set(c.name, {
+            column: c.name,
+            refTable: c.foreignKeyTarget.table,
+            refColumn: c.foreignKeyTarget.column,
+          })
+        }
+      }
+    }
+    return map
+  }, [cols])
+
+  // Active filter column
+  const filterCol = (selectedCol && metaCols.some(c => c.name === selectedCol))
+    ? selectedCol
+    : (metaCols.find((c: ColumnMeta) => c.isPrimaryKey || c.isPrimary)?.name ?? metaCols[0]?.name ?? '')
 
   // Data rows
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['data', connId, table, schema, pageIndex, pageSize, sortCol, sortDir, searchTerm],
-    queryFn: () => api.queryTableData(connId, table, {
-      schema, limit: pageSize, offset: pageIndex * pageSize, orderBy: sortCol, orderDir: sortDir, filters: searchTerm ? [{column:'*',operator:'LIKE',value:searchTerm}] : [],
-    }),
+    queryKey: ['data', connId, table, schema, pageIndex, pageSize, sortCol, sortDir, searchTerm, filterCol],
+    queryFn: () =>
+      api.queryTableData(connId, table, {
+        schema,
+        limit: pageSize,
+        offset: pageIndex * pageSize,
+        orderBy: sortCol,
+        orderDir: sortDir,
+        filters: searchTerm.trim() && filterCol
+          ? [{ column: filterCol, operator: 'LIKE', value: searchTerm.trim() }]
+          : [],
+      }),
     enabled: !!table,
   })
 
@@ -83,7 +131,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     a.href = url
     a.download = filename
     a.click()
-    URL.revokeObjectURL(url)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   // Column headers
@@ -92,6 +140,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     type: col.dataType || col.type || 'text',
     nullable: col.isNullable ?? true,
     isPk: !!(col.isPrimaryKey || col.isPrimary),
+    fk: fkMap.get(col.name),
   }))
 
   const formatValue = (val: any) => {
@@ -107,12 +156,38 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     <div className="flex-1 flex flex-col bg-[var(--bg)] overflow-hidden">
       {/* Toolbar */}
       <div className="h-10 border-b border-[var(--border)] px-3 flex items-center gap-3 shrink-0">
-        {/* Search */}
-        <div className="relative flex-1 max-w-xs">
-          <Search className="w-3 h-3 text-[var(--muted)] absolute left-2 top-1/2 -translate-y-1/2" />
-          <input type="text" value={searchTerm} onChange={e => { setSearchTerm(e.target.value); setPageIndex(0); }}
-            placeholder={`Filter ${table}...`}
-            className="form-input pl-7 pr-2 py-0.5 text-xs" />
+        {/* Search & Column Picker */}
+        <div className="flex items-center gap-1.5 flex-1 max-w-sm">
+          {metaCols.length > 0 && (
+            <select
+              value={filterCol}
+              onChange={(e) => {
+                setSelectedCol(e.target.value)
+                setPageIndex(0)
+              }}
+              title="Search Column"
+              className="text-xs py-1 px-2 bg-[var(--surface)] text-[var(--fg)] border border-[var(--border)] rounded font-mono max-w-[130px] shrink-0 truncate focus:outline-none"
+            >
+              {metaCols.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name} {c.isPrimaryKey || c.isPrimary ? '(PK)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="relative flex-1">
+            <Search className="w-3 h-3 text-[var(--muted)] absolute left-2 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => {
+                setSearchTerm(e.target.value)
+                setPageIndex(0)
+              }}
+              placeholder={filterCol ? `Filter ${table} by ${filterCol}...` : `Filter ${table}...`}
+              className="form-input pl-7 pr-2 py-0.5 text-xs w-full"
+            />
+          </div>
         </div>
         
         <span className="text-[11px] text-[var(--muted)] font-mono">{metaCols.length} cols</span>
@@ -157,10 +232,19 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     if (sortCol === c.name) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
                     else { setSortCol(c.name); setSortDir('asc') }
                   }}>
-                    {c.isPk && <Key className="w-2.5 h-2.5 text-amber-500" />}
+                    {c.isPk && <Key className="w-2.5 h-2.5 text-amber-500 shrink-0" />}
+                    {c.fk && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-mono bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 shrink-0"
+                        title={`Foreign key -> ${c.fk.refTable}.${c.fk.refColumn}`}
+                      >
+                        <Link2 className="w-2.5 h-2.5" />
+                        <span>FK</span>
+                      </span>
+                    )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
-                    <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)]" />
+                    <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
                   </div>
                 </th>
               ))}
@@ -175,9 +259,31 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     onChange={e => setSelectedRows(p => ({ ...p, [String(row[pkCol])]: e.target.checked }))}
                     className="rounded border-[var(--border)] bg-[var(--surface)] text-indigo-500 w-3 h-3" />
                 </td>
-                {colDefs.map(c => (
-                  <td key={c.name} className="px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]">{formatValue(row[c.name])}</td>
-                ))}
+                {colDefs.map(c => {
+                  const val = row[c.name]
+                  const isFkValue = !!c.fk && val !== null && val !== undefined && String(val) !== ''
+
+                  return (
+                    <td key={c.name} className="px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]">
+                      {isFkValue ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
+                          }}
+                          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
+                          title={`Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
+                        >
+                          <span className="truncate">{formatValue(val)}</span>
+                          <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
+                        </button>
+                      ) : (
+                        formatValue(val)
+                      )}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
             {rows.length === 0 && (

@@ -10,6 +10,7 @@ import { SchemaErdView } from './features/erd/SchemaErdView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
+import { useAppStore } from './stores/appStore'
 import { Monitor, Moon, Sun, Database, Zap, Shield, GitBranch } from 'lucide-react'
 
 const queryClient = new QueryClient({
@@ -58,8 +59,15 @@ export function App() {
     setConnections(localProfiles)
     if (localProfiles.length > 0 && !activeConnId) {
       setActiveConnId(localProfiles[0].id)
+      useAppStore.getState().setActiveConnectionId(localProfiles[0].id)
     }
   }, [])
+
+  useEffect(() => {
+    if (activeConnId) {
+      useAppStore.getState().setActiveConnectionId(activeConnId)
+    }
+  }, [activeConnId])
 
   const handleDeleted = (id: string) => {
     setConnections(prev => {
@@ -197,7 +205,7 @@ export function App() {
             }}
           />
           <main className="flex-1 flex flex-col overflow-hidden relative bg-[var(--bg)] text-[var(--fg)]">
-            {activeTab === 'table' && <TableGridView connId={activeConnId!} schema={selectedSchema} table={selectedTable || ''} />}
+            {activeTab === 'table' && <TableGridView key={`${activeConnId}:${selectedSchema}:${selectedTable || ''}`} connId={activeConnId!} schema={selectedSchema} table={selectedTable || ''} />}
             {activeTab === 'sql' && <SqlConsoleView connId={activeConnId!} />}
             {activeTab === 'erd' && <SchemaErdView connId={activeConnId!} schema={selectedSchema} />}
           </main>

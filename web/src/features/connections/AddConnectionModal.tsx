@@ -41,29 +41,38 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
           if (url.hostname) setHost(url.hostname)
           if (url.port) setPort(url.port)
           if (url.username) setUser(decodeURIComponent(url.username))
-          if (url.password) setPassword(decodeURIComponent(url.password))
+          if (url.password) {
+            const p = decodeURIComponent(url.password)
+            setPassword(p === '***' ? '' : p)
+          }
           const pathDb = url.pathname.replace(/^\//, '')
           if (pathDb) setDb(pathDb)
         }
       } else if (currentDriver === 'mysql') {
-        // mysql://user:pass@tcp(host:3306)/db
-        const match = str.match(/^mysql:\/\/(?:([^:]+)(?::([^@]*))?@)?tcp\(([^:]+):(\d+)\)\/(.*)$/)
+        // mysql://user:***@tcp(host:3306)/db or user:***@tcp(host:3306)/db
+        const match = str.match(/^(?:mysql:\/\/)?(?:([^:]+)(?::([^@]*))?@)?tcp\(([^:]+):(\d+)\)(?:\/([^?]*))?/)
         if (match) {
           const [, u, p, h, pt, d] = match
           if (u !== undefined) setUser(decodeURIComponent(u))
-          if (p !== undefined) setPassword(decodeURIComponent(p))
+          if (p !== undefined) {
+            const decodedPass = decodeURIComponent(p)
+            setPassword(decodedPass === '***' ? '' : decodedPass)
+          }
           if (h) setHost(h)
           if (pt) setPort(pt)
           if (d !== undefined) setDb(d)
         } else {
-          // fallback standard URL attempt: mysql://user:pass@host:3306/db
+          // fallback standard URL attempt: mysql://user:***@host:3306/db
           if (str.startsWith('mysql://')) {
             const urlStr = str.replace(/^mysql:\/\//, 'http://')
             const url = new URL(urlStr)
             if (url.hostname) setHost(url.hostname)
             if (url.port) setPort(url.port)
             if (url.username) setUser(decodeURIComponent(url.username))
-            if (url.password) setPassword(decodeURIComponent(url.password))
+            if (url.password) {
+              const p = decodeURIComponent(url.password)
+              setPassword(p === '***' ? '' : p)
+            }
             const pathDb = url.pathname.replace(/^\//, '')
             if (pathDb) setDb(pathDb)
           }
@@ -124,17 +133,18 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
 
   function buildDSN(): string {
     if (dsnInput.trim()) return dsnInput.trim()
+    const auth = user ? `${encodeURIComponent(user)}${password ? `:${encodeURIComponent(password)}` : ''}@` : ''
     switch (driver) {
       case 'sqlite':
         return `file:/data/app.db`
       case 'mysql': {
         const targetDb = showAllDatabases ? (db.trim() || 'mysql') : db.trim()
         const dbPath = targetDb ? `/${targetDb}` : ''
-        return `mysql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@tcp(${host}:${port || 3306})${dbPath}`
+        return `mysql://${auth}tcp(${host}:${port || 3306})${dbPath}`
       }
       default: {
         const targetDb = showAllDatabases ? (db.trim() || 'postgres') : db.trim()
-        return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port || 5432}/${targetDb}?sslmode=disable`
+        return `postgres://${auth}${host}:${port || 5432}/${targetDb}?sslmode=disable`
       }
     }
   }

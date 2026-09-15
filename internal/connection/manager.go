@@ -132,7 +132,7 @@ func (m *Manager) GlobalProfiles() []map[string]string {
 		}
 		result = append(result, map[string]string{
 			"id":    fmt.Sprintf("global_%d", i+1),
-			"dsn":   maskDSN(part),
+			"dsn":   driver.MaskDSN(part),
 			"label": fmt.Sprintf("Shared DB %d", i+1),
 		})
 	}
@@ -198,18 +198,4 @@ func (m *Manager) idleCleaner() {
 		}
 		m.mu.Unlock()
 	}
-}
-
-func maskDSN(dsn string) string {
-	if idx := strings.Index(dsn, "@"); idx != -1 {
-		prefix := strings.Index(dsn, "://")
-		if prefix != -1 && prefix < idx {
-			credPart := dsn[prefix+3 : idx]
-			if colonIdx := strings.LastIndex(credPart, ":"); colonIdx != -1 {
-				user := credPart[:colonIdx]
-				return dsn[:prefix+3] + user + ":***" + dsn[idx:]
-			}
-		}
-	}
-	return dsn
 }
