@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -566,6 +567,89 @@ func (p *PostgresDriver) MutateRow(ctx context.Context, m types.Mutation) (*type
 	}
 	affected, _ := res.RowsAffected()
 
+	return &types.MutationResult{
+		AffectedRows: affected,
+		GeneratedSQL: sqlStr,
+	}, nil
+}
+
+// BuildBatchInsertSQL constructs the parameterized INSERT statement and args for PostgreSQL.
+func BuildBatchInsertSQL(schema, table string, rows []map[string]interface{}) (string, []interface{}, error) {
+	if len(rows) == 0 {
+		return "", nil, fmt.Errorf("no rows provided for batch insert")
+	}
+	if schema == "" {
+		schema = "public"
+	}
+
+	colSet := make(map[string]struct{})
+	for _, row := range rows {
+		for col := range row {
+			colSet[col] = struct{}{}
+		}
+	}
+	if len(colSet) == 0 {
+		return "", nil, fmt.Errorf("no columns found in rows")
+	}
+	cols := make([]string, 0, len(colSet))
+	for col := range colSet {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+
+	quotedCols := make([]string, len(cols))
+	for i, c := range cols {
+		quotedCols[i] = quoteIdent(c)
+	}
+
+	targetTable := fmt.Sprintf(`%s.%s`, quoteIdent(schema), quoteIdent(table))
+
+	var valPlaceholders []string
+	var args []interface{}
+	argIdx := 1
+	for _, row := range rows {
+		var rowPlaceholders []string
+		for _, col := range cols {
+			rowPlaceholders = append(rowPlaceholders, fmt.Sprintf("$%d", argIdx))
+			args = append(args, row[col])
+			argIdx++
+		}
+		valPlaceholders = append(valPlaceholders, fmt.Sprintf("(%s)", strings.Join(rowPlaceholders, ", ")))
+	}
+
+	sqlStr := fmt.Sprintf(`INSERT INTO %s (%s) VALUES %s`,
+		targetTable,
+		strings.Join(quotedCols, ", "),
+		strings.Join(valPlaceholders, ", "),
+	)
+	return sqlStr, args, nil
+}
+
+func (p *PostgresDriver) BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*types.MutationResult, error) {
+	sqlStr, args, err := BuildBatchInsertSQL(schema, table, rows)
+	if err != nil {
+		return nil, err
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	tx, err := p.db.BeginTx(ctxTimeout, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctxTimeout, sqlStr, args...)
+	if err != nil {
+		return &types.MutationResult{GeneratedSQL: sqlStr}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return &types.MutationResult{GeneratedSQL: sqlStr}, err
+	}
+
+	affected, _ := res.RowsAffected()
 	return &types.MutationResult{
 		AffectedRows: affected,
 		GeneratedSQL: sqlStr,

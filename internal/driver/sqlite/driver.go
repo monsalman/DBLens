@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -391,6 +392,128 @@ func (s *SQLiteDriver) MutateRow(ctx context.Context, mut types.Mutation) (*type
 	return &types.MutationResult{
 		AffectedRows: affected,
 		GeneratedSQL: sqlStr,
+	}, nil
+}
+
+// BuildBatchInsertSQL constructs the parameterized INSERT statement and args for SQLite.
+func BuildBatchInsertSQL(schema, table string, rows []map[string]interface{}) (string, []interface{}, error) {
+	if len(rows) == 0 {
+		return "", nil, fmt.Errorf("no rows provided for batch insert")
+	}
+
+	colSet := make(map[string]struct{})
+	for _, row := range rows {
+		for col := range row {
+			colSet[col] = struct{}{}
+		}
+	}
+	if len(colSet) == 0 {
+		return "", nil, fmt.Errorf("no columns found in rows")
+	}
+	cols := make([]string, 0, len(colSet))
+	for col := range colSet {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+
+	quotedCols := make([]string, len(cols))
+	for i, c := range cols {
+		quotedCols[i] = quoteIdent(c)
+	}
+
+	var targetTable string
+	if schema != "" && schema != "main" {
+		targetTable = fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent(table))
+	} else {
+		targetTable = quoteIdent(table)
+	}
+
+	var valPlaceholders []string
+	var args []interface{}
+	for _, row := range rows {
+		var rowPlaceholders []string
+		for _, col := range cols {
+			rowPlaceholders = append(rowPlaceholders, "?")
+			args = append(args, row[col])
+		}
+		valPlaceholders = append(valPlaceholders, fmt.Sprintf("(%s)", strings.Join(rowPlaceholders, ", ")))
+	}
+
+	sqlStr := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s",
+		targetTable,
+		strings.Join(quotedCols, ", "),
+		strings.Join(valPlaceholders, ", "),
+	)
+	return sqlStr, args, nil
+}
+
+func (s *SQLiteDriver) BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*types.MutationResult, error) {
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no rows provided for batch insert")
+	}
+
+	colSet := make(map[string]struct{})
+	for _, row := range rows {
+		for col := range row {
+			colSet[col] = struct{}{}
+		}
+	}
+	if len(colSet) == 0 {
+		return nil, fmt.Errorf("no columns found in rows")
+	}
+	cols := make([]string, 0, len(colSet))
+	for col := range colSet {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+
+	// SQLite parameter limit: if rows * cols exceeds 500 parameters, batch into chunks within same transaction
+	maxParams := 500
+	chunkSize := maxParams / len(cols)
+	if chunkSize < 1 {
+		chunkSize = 1
+	}
+
+	ctxTimeout, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctxTimeout, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var totalAffected int64
+	var lastSQL string
+
+	for i := 0; i < len(rows); i += chunkSize {
+		end := i + chunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		chunkRows := rows[i:end]
+
+		sqlStr, args, err := BuildBatchInsertSQL(schema, table, chunkRows)
+		if err != nil {
+			return nil, err
+		}
+		lastSQL = sqlStr
+
+		res, err := tx.ExecContext(ctxTimeout, sqlStr, args...)
+		if err != nil {
+			return &types.MutationResult{GeneratedSQL: sqlStr}, err
+		}
+		aff, _ := res.RowsAffected()
+		totalAffected += aff
+	}
+
+	if err := tx.Commit(); err != nil {
+		return &types.MutationResult{GeneratedSQL: lastSQL}, err
+	}
+
+	return &types.MutationResult{
+		AffectedRows: totalAffected,
+		GeneratedSQL: lastSQL,
 	}, nil
 }
 

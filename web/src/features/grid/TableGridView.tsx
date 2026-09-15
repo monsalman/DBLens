@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { AddRowModal } from './AddRowModal'
+import { MockDataModal } from './MockDataModal'
 
 interface Props {
   connId: string
@@ -24,6 +25,9 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [editValue, setEditValue] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
+  const [showMockModal, setShowMockModal] = useState(false)
+  const [mockError, setMockError] = useState<string | null>(null)
+  const [mockLoading, setMockLoading] = useState(false)
   const [inlineError, setInlineError] = useState<string | null>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
@@ -232,6 +236,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     }
   }
 
+  const handleMockSubmit = async (rows: Record<string, any>[]) => {
+    setMockError(null)
+    setMockLoading(true)
+    try {
+      await api.batchInsert(connId, schema, table, rows)
+      qc.invalidateQueries({ queryKey: ['data', connId, table] })
+      setShowMockModal(false)
+    } catch (err: any) {
+      setMockError(err?.message ?? 'Batch insert failed')
+    } finally {
+      setMockLoading(false)
+    }
+  }
+
   if (!table) return <div className="flex-1 flex items-center justify-center text-[var(--muted)] font-mono text-xs">Select a table</div>
   if (isLoading || colsLoading) return <div className="flex-1 flex items-center justify-center text-[var(--muted)] font-mono text-xs">Loading...</div>
 
@@ -298,6 +316,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
           >
             <Plus className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Mock Data */}
+          <button
+            onClick={() => { setMockError(null); setShowMockModal(true) }}
+            title="Generate Mock Data"
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
           </button>
           
           <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]">
@@ -453,6 +480,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           onClose={() => setShowAddModal(false)}
           error={addError}
           loading={mutateM.isPending}
+        />
+      )}
+
+      {/* Mock Data Modal */}
+      {showMockModal && (
+        <MockDataModal
+          connId={connId}
+          schema={schema}
+          table={table}
+          columns={metaCols}
+          onSubmit={handleMockSubmit}
+          onClose={() => setShowMockModal(false)}
+          error={mockError}
+          loading={mockLoading}
         />
       )}
     </div>

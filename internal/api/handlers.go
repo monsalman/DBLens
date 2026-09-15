@@ -268,6 +268,42 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 	sendJSON(w, http.StatusOK, res)
 }
 
+func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
+	var req driver.BatchInsertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Table) == "" {
+		sendError(w, http.StatusBadRequest, "Table name is required")
+		return
+	}
+	if len(req.Rows) == 0 {
+		sendError(w, http.StatusBadRequest, "Rows must not be empty")
+		return
+	}
+	if len(req.Rows) > 1000 {
+		sendError(w, http.StatusBadRequest, "batch size exceeds maximum limit of 1000 rows")
+		return
+	}
+
+	res, err := entry.Driver.BatchInsert(r.Context(), req.Schema, req.Table, req.Rows)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, res)
+}
+
 func (h *Handler) GetERDData(w http.ResponseWriter, r *http.Request) {
 	entry, err := h.resolveDriver(r)
 	if err != nil {
