@@ -5,3 +5,5 @@ cmd/dblens/dist
 .DS_Store
 .env
 /tmp/dblens*
+ROADMAP.md
+*PLAN*.md
