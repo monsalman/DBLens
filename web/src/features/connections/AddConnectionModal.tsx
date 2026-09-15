@@ -165,14 +165,18 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
       const dsn = buildDSN()
       if (initialData) {
         const conn = await api.updateProfile(initialData.id, dsn, label, initialData.color || '#6366f1', readOnly)
+        setTestResult({ success: true, message: 'Updated successfully', dialect: conn.dialect })
         if (onUpdated) onUpdated(conn)
       } else {
         const conn = await api.addProfile(dsn, label, '#6366f1', readOnly)
+        setTestResult({ success: true, message: 'Connection successful', dialect: conn.dialect })
         if (onAdded) onAdded(conn)
       }
       if (onClose) onClose()
     } catch (err: any) {
-      setError(err?.message || 'Failed to save connection')
+      const msg = err?.message || 'Failed to save connection'
+      setError(msg)
+      setTestResult({ success: false, message: msg })
     } finally {
       setSubmitting(false)
     }
@@ -197,32 +201,36 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
 
         <form onSubmit={submit} className="pt-4 space-y-4">
           {error && (
-            <div className="px-3 py-2 bg-red-950/40 border border-red-800/40 rounded text-red-400 text-xs font-mono">
+            <div className="px-3 py-2.5 bg-[#ef4444] border-2 border-[#fca5a5] rounded-md text-white font-bold text-xs font-mono shadow-md">
               {error}
             </div>
           )}
 
           {testResult && (
-            <div className={`p-3 rounded border text-xs font-mono flex items-start gap-2 ${
+            <div className={`p-3 rounded-md border-2 text-xs font-mono flex items-start gap-2.5 shadow-md ${
               testResult.success
-                ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300 dark:bg-emerald-950/40 dark:border-emerald-800/40 dark:text-emerald-300 bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-red-950/40 border-red-800/40 text-red-300 dark:bg-red-950/40 dark:border-red-800/40 dark:text-red-300 bg-red-50 border-red-200 text-red-800'
+                ? 'bg-[#22c55e] border-[#86efac] text-slate-950 font-semibold'
+                : 'bg-[#ef4444] border-[#fca5a5] text-white font-semibold'
             }`}>
               {testResult.success ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-4 h-4 text-slate-950 shrink-0 mt-0.5" />
               ) : (
-                <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-white shrink-0 mt-0.5" />
               )}
               <div className="flex-1 overflow-hidden">
-                <div className="flex items-center justify-between gap-2 font-semibold">
+                <div className="flex items-center justify-between gap-2 font-bold">
                   <span>{testResult.success ? 'Connection Successful' : 'Connection Failed'}</span>
                   {testResult.dialect && (
-                    <span className="px-1.5 py-0.5 text-[10px] rounded uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    <span className={`px-1.5 py-0.5 text-[10px] rounded uppercase tracking-wider font-bold border ${
+                      testResult.success 
+                        ? 'bg-black/20 text-slate-950 border-black/20' 
+                        : 'bg-black/30 text-white border-white/20'
+                    }`}>
                       {testResult.dialect}
                     </span>
                   )}
                 </div>
-                <div className="mt-1 text-[11px] break-words opacity-90">{testResult.message}</div>
+                <div className="mt-1 text-[11px] break-words font-medium opacity-95">{testResult.message}</div>
               </div>
             </div>
           )}

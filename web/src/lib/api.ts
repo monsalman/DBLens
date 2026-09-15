@@ -1,14 +1,26 @@
 export type DatabaseDriver = 'postgres' | 'mysql' | 'sqlite'
 
+// LocalStorage key for user's private profiles
+const PROFILES_KEY = 'dblens-private-profiles'
+
+export interface Profile {
+  id: string
+  label: string
+  dsn: string        // full DSN with password (stored only in user's browser)
+  color?: string
+  readOnly?: boolean
+  dialect?: string   // cached after test
+}
+
 export interface ConnectionConfig {
   id: string
-  label?: string
-  name?: string
-  driver?: DatabaseDriver
+  label: string
+  dsn: string
   color?: string
   readOnly?: boolean
   dialect?: string
-  dsn?: string
+  name?: string
+  driver?: DatabaseDriver
 }
 
 export interface ForeignKeyTarget {
@@ -92,82 +104,167 @@ export interface TestConnectionResult {
   dialect?: string
 }
 
+// ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
+
 export const api = {
-  // Profiles (persistent)
-  async testConnection(dsn: string, label: string = ''): Promise<TestConnectionResult> {
-    const res = await fetch('/api/connections/test', {
+  getProfiles(): ConnectionConfig[] {
+    try {
+      const raw = localStorage.getItem(PROFILES_KEY)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  },
+
+  saveProfiles(profiles: ConnectionConfig[]): void {
+    localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles))
+  },
+
+  addProfile(dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+    return new Promise((resolve, reject) => {
+      // Test connection first
+      fetch('/api/connections/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dsn, label }),
+      })
+        .then(r => r.json())
+        .then(json => {
+          const result = json.data ?? json
+          if (!result.success) {
+            reject(new Error(result.message || 'Connection failed'))
+            return
+          }
+          const profile: ConnectionConfig = {
+            id: `local_${Date.now()}`,
+            label: label || `${result.dialect || 'db'} DB`,
+            dsn,
+            color,
+            readOnly,
+            dialect: result.dialect,
+            driver: result.dialect as DatabaseDriver,
+          }
+          const existing = api.getProfiles()
+          api.saveProfiles([...existing, profile])
+          resolve(profile)
+        })
+        .catch(reject)
+    })
+  },
+
+  updateProfile(id: string, dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+    return new Promise((resolve, reject) => {
+      fetch('/api/connections/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dsn, label }),
+      })
+        .then(r => r.json())
+        .then(json => {
+          const result = json.data ?? json
+          if (!result.success) {
+            reject(new Error(result.message || 'Connection failed'))
+            return
+          }
+          const profiles = api.getProfiles()
+          const updated: ConnectionConfig = {
+            id,
+            label: label || `${result.dialect || 'db'} DB`,
+            dsn,
+            color,
+            readOnly,
+            dialect: result.dialect,
+            driver: result.dialect as DatabaseDriver,
+          }
+          api.saveProfiles(profiles.map(p => (p.id === id ? updated : p)))
+          resolve(updated)
+        })
+        .catch(reject)
+    })
+  },
+
+  removeProfile(id: string): void {
+    const profiles = api.getProfiles().filter(p => p.id !== id)
+    api.saveProfiles(profiles)
+  },
+
+  testConnection(dsn: string, label: string = ''): Promise<TestConnectionResult> {
+    return fetch('/api/connections/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dsn, label }),
     })
-    const json = await res.json()
-    return json.data ?? json
+      .then(r => r.json())
+      .then(json => json.data ?? json)
   },
 
-  async getProfiles(): Promise<ConnectionConfig[]> {
-    const res = await fetch('/api/profiles')
-    if (!res.ok) throw new Error('Failed to load profiles')
-    const json = await res.json()
-    return json.data ?? []
-  },
-
-  async addProfile(dsn: string, label: string = '', color: string = '#3b82f6', readOnly: boolean = false): Promise<ConnectionConfig> {
-    const res = await fetch('/api/profiles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dsn, label, color, readOnly }),
-    })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`Failed to add connection: ${text}`)
+  // Global profiles from server env DBLENS_CONNECTIONS
+  async getGlobalProfiles(): Promise<ConnectionConfig[]> {
+    try {
+      const r = await fetch('/api/profiles/global')
+      const json = await r.json()
+      return (json.data ?? []).map((p: any) => ({
+        ...p,
+        label: p.label || p.name || p.id,
+        dsn: '',
+      }))
+    } catch {
+      return []
     }
-    const json = await res.json()
-    return json.data ?? json
   },
 
-  async updateProfile(id: string, dsn: string, label: string = '', color: string = '#3b82f6', readOnly: boolean = false): Promise<ConnectionConfig> {
-    const res = await fetch(`/api/profiles/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dsn, label, color, readOnly }),
-    })
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`Failed to update profile: ${text}`)
+  // Active Connections backward compatibility
+  getConnections(): ConnectionConfig[] {
+    return this.getProfiles()
+  },
+
+  async pingConnection(connId: string, profiles?: ConnectionConfig[]): Promise<boolean> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const res = await fetch(`/api/connections/${connId}/databases`, {
+        headers: this._headers(dsn),
+      })
+      return res.ok
+    } catch {
+      return false
     }
-    const json = await res.json()
-    return json.data ?? json
   },
 
-  async removeProfile(id: string): Promise<void> {
-    const res = await fetch(`/api/profiles/${id}`, { method: 'DELETE' })
-    if (!res.ok) throw new Error('Failed to remove profile')
+  // ── Database Queries — all pass DSN via X-DBLENS-DSN header ──
+  _headers(dsn: string): HeadersInit {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    return headers
   },
 
-  // Active Connections
-  async getConnections(): Promise<ConnectionConfig[]> {
-    const res = await fetch('/api/connections')
-    if (!res.ok) throw new Error('Failed to list connections')
-    const json = await res.json()
-    return json.data ?? []
+  _getDSN(connId: string, profiles?: ConnectionConfig[]): string {
+    const allProfiles = profiles ?? api.getProfiles()
+    return allProfiles.find(p => p.id === connId)?.dsn ?? ''
   },
 
-  async pingConnection(connId: string): Promise<boolean> {
-    const res = await fetch(`/api/connections/${connId}/ping`)
-    return res.ok
+  async getDatabases(connId: string, profiles?: ConnectionConfig[]): Promise<string[]> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const res = await fetch(`/api/connections/${connId}/databases`, {
+        headers: this._headers(dsn),
+      })
+      if (!res.ok) return []
+      const json = await res.json()
+      return json.data ?? json ?? []
+    } catch {
+      return []
+    }
   },
 
-  async getDatabases(connId: string): Promise<string[]> {
-    const res = await fetch(`/api/connections/${connId}/databases`)
-    if (!res.ok) throw new Error('Failed to get databases')
-    const json = await res.json()
-    return json.data ?? []
-  },
-
-  async selectDatabase(connId: string, database: string): Promise<void> {
+  async selectDatabase(connId: string, database: string, profiles?: ConnectionConfig[]): Promise<void> {
+    const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/databases/select`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this._headers(dsn),
       body: JSON.stringify({ database }),
     })
     if (!res.ok) {
@@ -176,39 +273,56 @@ export const api = {
     }
   },
 
-  // Schema Inspection
-  async getSchemas(connId: string): Promise<string[]> {
-    const res = await fetch(`/api/connections/${connId}/schemas`)
-    if (!res.ok) throw new Error('Failed to get schemas')
-    const json = await res.json()
-    return json.data ?? []
+  async getSchemas(connId: string, profiles?: ConnectionConfig[]): Promise<string[]> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const r = await fetch(`/api/connections/${connId}/schemas`, { headers: this._headers(dsn) })
+      if (!r.ok) return ['public']
+      const json = await r.json()
+      return json.data ?? json ?? ['public']
+    } catch {
+      return ['public']
+    }
   },
 
-  async getERDData(connId: string): Promise<ERDTable[]> {
-    const res = await fetch(`/api/connections/${connId}/erd`)
-    if (!res.ok) throw new Error('Failed to get ERD data')
-    const json = await res.json()
-    return json.data ?? []
+  async getTables(connId: string, schema: string = 'public', profiles?: ConnectionConfig[]): Promise<TableMeta[]> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const r = await fetch(`/api/connections/${connId}/tables?schema=${encodeURIComponent(schema)}`, {
+        headers: this._headers(dsn),
+      })
+      if (!r.ok) return []
+      const json = await r.json()
+      return json.data ?? json ?? []
+    } catch {
+      return []
+    }
   },
 
-  async getTables(connId: string, schema: string = 'public'): Promise<TableMeta[]> {
-    const res = await fetch(`/api/connections/${connId}/tables?schema=${encodeURIComponent(schema)}`)
-    if (!res.ok) throw new Error('Failed to get tables')
-    const json = await res.json()
-    return json.data ?? []
+  async getTableDetails(
+    connId: string,
+    table: string,
+    schema: string = 'public',
+    profiles?: ConnectionConfig[]
+  ): Promise<{ columns: ColumnMeta[]; fks?: any[]; indexes?: string[] }> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const r = await fetch(
+        `/api/connections/${connId}/tables/${encodeURIComponent(table)}?schema=${encodeURIComponent(schema)}`,
+        { headers: this._headers(dsn) }
+      )
+      if (!r.ok) return { columns: [] }
+      const json = await r.json()
+      return json.data ?? json ?? { columns: [] }
+    } catch {
+      return { columns: [] }
+    }
   },
 
-  async getTableDetails(connId: string, table: string, schema: string = 'public'): Promise<{columns: ColumnMeta[]; fks?: any[]; indexes?: string[]}> {
-    const res = await fetch(`/api/connections/${connId}/tables/${encodeURIComponent(table)}?schema=${encodeURIComponent(schema)}`)
-    if (!res.ok) throw new Error('Failed to get table details')
-    const json = await res.json()
-    return json.data ?? {}
-  },
-
-  async getSchema(connId: string, schemaName?: string): Promise<SchemaMeta> {
-    const schemas = await this.getSchemas(connId)
+  async getSchema(connId: string, schemaName?: string, profiles?: ConnectionConfig[]): Promise<SchemaMeta> {
+    const schemas = await this.getSchemas(connId, profiles)
     const targetSchema = schemaName || schemas[0] || 'public'
-    const tables = await this.getTables(connId, targetSchema)
+    const tables = await this.getTables(connId, targetSchema, profiles)
     return {
       schemas,
       currentSchema: targetSchema,
@@ -219,11 +333,20 @@ export const api = {
   async queryTableData(
     connId: string,
     tableName: string,
-    opts: { schema?: string; limit?: number; offset?: number; orderBy?: string; orderDir?: string; filters?: Array<{column: string; operator: string; value: string}> } = {}
-  ): Promise<{rows: Record<string, any>[]; columns: string[]; totalCount?: number; affectedRows?: number}> {
+    opts: {
+      schema?: string
+      limit?: number
+      offset?: number
+      orderBy?: string
+      orderDir?: string
+      filters?: Array<{ column: string; operator: string; value: string }>
+    } = {},
+    profiles?: ConnectionConfig[]
+  ): Promise<{ rows: Record<string, any>[]; columns: string[]; totalCount?: number; affectedRows?: number }> {
+    const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/tables/${encodeURIComponent(tableName)}/data`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this._headers(dsn),
       body: JSON.stringify(opts),
     })
     if (!res.ok) {
@@ -259,49 +382,64 @@ export const api = {
     return raw ?? { rows: [], columns: [] }
   },
 
-  async executeQuery(connId: string, sql: string): Promise<QueryResult> {
+  async executeQuery(connId: string, sql: string, profiles?: ConnectionConfig[]): Promise<QueryResult> {
     const start = performance.now()
-    const res = await fetch(`/api/connections/${connId}/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql }),
-    })
-    if (!res.ok) {
-      const text = await res.text()
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const res = await fetch(`/api/connections/${connId}/query`, {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify({ sql }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        return {
+          columns: [],
+          rows: [],
+          durationMs: Math.round(performance.now() - start),
+          error: text || 'Query failed',
+        }
+      }
+      const json = await res.json()
+      const data = json.data ?? json
+      const rawRows = data?.rows ?? []
+      const cols = data?.columns ?? []
+      const isArrayOfArrays = rawRows.length > 0 && Array.isArray(rawRows[0])
+      const rows = isArrayOfArrays
+        ? rawRows.map((rowArr: any[]) => {
+            const rowObj: Record<string, any> = {}
+            cols.forEach((c: string, i: number) => {
+              rowObj[c] = rowArr[i]
+            })
+            return rowObj
+          })
+        : rawRows
+
+      return {
+        columns: cols,
+        rows,
+        affectedRows: data?.affectedRows ?? 0,
+        durationMs: data?.elapsed ?? Math.round(performance.now() - start),
+      }
+    } catch (err: any) {
       return {
         columns: [],
         rows: [],
         durationMs: Math.round(performance.now() - start),
-        error: text || 'Query failed',
+        error: err?.message || 'Query failed',
       }
-    }
-    const json = await res.json()
-    const data = json.data ?? json
-    const rawRows = data?.rows ?? []
-    const cols = data?.columns ?? []
-    const isArrayOfArrays = rawRows.length > 0 && Array.isArray(rawRows[0])
-    const rows = isArrayOfArrays
-      ? rawRows.map((rowArr: any[]) => {
-          const rowObj: Record<string, any> = {}
-          cols.forEach((c: string, i: number) => {
-            rowObj[c] = rowArr[i]
-          })
-          return rowObj
-        })
-      : rawRows
-
-    return {
-      columns: cols,
-      rows,
-      affectedRows: data?.affectedRows ?? 0,
-      durationMs: data?.elapsed ?? Math.round(performance.now() - start),
     }
   },
 
-  async mutateRow(connId: string, payload: { schema?: string; table: string; data?: Record<string, any>; where?: Record<string, any>; type: 'INSERT' | 'UPDATE' | 'DELETE' }): Promise<{affectedRows: number; generatedSQL: string}> {
+  async mutateRow(
+    connId: string,
+    payload: MutateRowPayload,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ affectedRows: number; generatedSQL?: string }> {
+    const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/mutate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this._headers(dsn),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -309,7 +447,20 @@ export const api = {
       throw new Error(text)
     }
     const json = await res.json()
-    return json.data ?? {}
+    return json.data ?? json ?? { affectedRows: 0 }
+  },
+
+  async getERDData(connId: string, profiles?: ConnectionConfig[]): Promise<ERDTable[]> {
+    const dsn = this._getDSN(connId, profiles)
+    try {
+      const res = await fetch(`/api/connections/${connId}/erd`, {
+        headers: this._headers(dsn),
+      })
+      if (!res.ok) return []
+      const json = await res.json()
+      return json.data ?? json ?? []
+    } catch {
+      return []
+    }
   },
 }
-

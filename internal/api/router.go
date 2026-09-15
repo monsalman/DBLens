@@ -29,7 +29,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -51,16 +51,9 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 
 	// ── API routes FIRST (before catch-all) ──
 	api := chi.NewRouter()
-	api.Get("/profiles", h.ListProfiles)
-	api.Post("/profiles", h.CreateProfile)
-	api.Put("/profiles/{id}", h.UpdateProfile)
-	api.Delete("/profiles/{id}", h.DeleteProfile)
+	api.Get("/profiles/global", h.ListGlobalProfiles)
 
-	api.Get("/connections", h.ListConnections)
-	api.Post("/connections", h.AddConnection)
 	api.Post("/connections/test", h.TestConnection)
-	api.Delete("/connections/{connId}", h.RemoveConnection)
-	api.Get("/connections/{connId}/ping", h.PingConnection)
 	api.Get("/connections/{connId}/databases", h.GetDatabases)
 	api.Post("/connections/{connId}/databases/select", h.SelectDatabase)
 	api.Get("/connections/{connId}/schemas", h.GetSchemas)

@@ -1,11 +1,10 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/driver"
@@ -22,7 +21,6 @@ func MaskDSN(dsn string) string {
 		parts := strings.SplitN(dsn, "://", 2)
 		cred := parts[0]
 		rest := parts[1]
-		// Simple mask: if contains ://user:pass@host, hide the pass
 		if idx := strings.Index(rest, "@"); idx > 0 {
 			if passIdx := strings.Index(rest[:idx], ":"); passIdx > 0 {
 				rest = rest[:passIdx+1] + "***" + rest[idx:]
@@ -59,180 +57,30 @@ func NewHandler(mgr *connection.Manager) *Handler {
 	return &Handler{mgr: mgr}
 }
 
-type AddConnectionRequest struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	DSN      string `json:"dsn"`
-	Color    string `json:"color"`
-	ReadOnly bool   `json:"readOnly"`
-}
-
-type CreateProfileRequest struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	DSN      string `json:"dsn"`
-	Color    string `json:"color"`
-	ReadOnly bool   `json:"readOnly"`
-}
-
-type UpdateProfileRequest struct {
-	Label    string `json:"label"`
-	DSN      string `json:"dsn"`
-	Color    string `json:"color"`
-	ReadOnly bool   `json:"readOnly"`
-}
-
 type TestConnectionRequest struct {
-	DSN      string `json:"dsn"`
-	Label    string `json:"label"`
-	Color    string `json:"color"`
-	ReadOnly bool   `json:"readOnly"`
+	DSN string `json:"dsn"`
 }
 
-type TestConnectionResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Dialect string `json:"dialect"`
-}
-
-func (h *Handler) ListProfiles(w http.ResponseWriter, r *http.Request) {
-	profiles, err := h.mgr.ListProfiles()
-	if err != nil {
-		sendError(w, http.StatusInternalServerError, err.Error())
-		return
+// resolveDriver extracts DSN from X-DBLENS-DSN header first,
+// and falls back to resolving global server-seeded connections by connId param.
+func (h *Handler) resolveDriver(r *http.Request) (*connection.PoolEntry, error) {
+	dsn := strings.TrimSpace(r.Header.Get("X-DBLENS-DSN"))
+	if dsn != "" {
+		return h.mgr.GetByDSN(dsn)
 	}
 
-	masked := make([]connection.Profile, len(profiles))
-	for i, p := range profiles {
-		masked[i] = connection.Profile{
-			ID:       p.ID,
-			Label:    p.Label,
-			DSN:      MaskDSN(p.DSN),
-			Color:    p.Color,
-			ReadOnly: p.ReadOnly,
+	connID := chi.URLParam(r, "connId")
+	if connID != "" {
+		if globalDSN, ok := h.mgr.GetGlobalDSNByID(connID); ok {
+			return h.mgr.GetByDSN(globalDSN)
 		}
 	}
 
-	sendJSON(w, http.StatusOK, masked)
+	return nil, fmt.Errorf("X-DBLENS-DSN header is required")
 }
 
-func (h *Handler) CreateProfile(w http.ResponseWriter, r *http.Request) {
-	var req CreateProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
-		return
-	}
-	if req.DSN == "" {
-		sendError(w, http.StatusBadRequest, "dsn is required")
-		return
-	}
-
-	entry, err := h.mgr.ConnectProfile(req.ID, req.Label, req.DSN, req.Color, req.ReadOnly)
-	if err != nil {
-		sendError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	sendJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":       entry.ID,
-		"label":    entry.Label,
-		"color":    entry.Color,
-		"readOnly": entry.ReadOnly,
-		"dialect":  entry.Driver.Dialect(),
-	})
-}
-
-func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		sendError(w, http.StatusBadRequest, "profile id is required")
-		return
-	}
-
-	var req UpdateProfileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
-		return
-	}
-	if req.DSN == "" {
-		sendError(w, http.StatusBadRequest, "dsn is required")
-		return
-	}
-
-	entry, err := h.mgr.UpdateProfile(id, req.Label, req.DSN, req.Color, req.ReadOnly)
-	if err != nil {
-		sendError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	sendJSON(w, http.StatusOK, map[string]interface{}{
-		"id":       entry.ID,
-		"label":    entry.Label,
-		"color":    entry.Color,
-		"readOnly": entry.ReadOnly,
-		"dialect":  entry.Driver.Dialect(),
-	})
-}
-
-func (h *Handler) DeleteProfile(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		id = chi.URLParam(r, "connId")
-	}
-	if err := h.mgr.RemoveProfile(id); err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	sendJSON(w, http.StatusOK, map[string]string{"message": "profile removed"})
-}
-
-func (h *Handler) ListConnections(w http.ResponseWriter, r *http.Request) {
-	list := h.mgr.List()
-	sendJSON(w, http.StatusOK, list)
-}
-
-func (h *Handler) AddConnection(w http.ResponseWriter, r *http.Request) {
-	var req AddConnectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
-		return
-	}
-	if req.DSN == "" {
-		sendError(w, http.StatusBadRequest, "dsn is required")
-		return
-	}
-
-	entry, err := h.mgr.AddWithID(req.ID, req.Label, req.DSN, req.Color, req.ReadOnly)
-	if err != nil {
-		sendError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	sendJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":       entry.ID,
-		"label":    entry.Label,
-		"color":    entry.Color,
-		"readOnly": entry.ReadOnly,
-		"dialect":  entry.Driver.Dialect(),
-	})
-}
-
-func (h *Handler) RemoveConnection(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-	if err := h.mgr.Remove(connID); err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	sendJSON(w, http.StatusOK, map[string]string{"message": "connection removed"})
-}
-
-func (h *Handler) PingConnection(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-	if err := h.mgr.Ping(connID); err != nil {
-		sendError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	sendJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (h *Handler) ListGlobalProfiles(w http.ResponseWriter, r *http.Request) {
+	sendJSON(w, http.StatusOK, h.mgr.GlobalProfiles())
 }
 
 func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
@@ -241,36 +89,26 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
+	req.DSN = strings.TrimSpace(req.DSN)
 	if req.DSN == "" {
 		sendError(w, http.StatusBadRequest, "dsn is required")
 		return
 	}
 
-	// Try to create a driver instance and ping
-	drv, err := driver.NewDriver(req.DSN)
+	dialect, err := h.mgr.TestDSN(req.DSN)
 	if err != nil {
 		sendJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false, "message": "Failed to parse DSN: " + err.Error(),
-		})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	pingErr := drv.Ping(ctx)
-	dialect := drv.Dialect()
-	drv.Close() // Always close after test
-
-	if pingErr != nil {
-		sendJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false, "message": "Connection failed: " + pingErr.Error(), "dialect": dialect,
+			"success": false,
+			"message": "Connection failed: " + err.Error(),
+			"dialect": dialect,
 		})
 		return
 	}
 
 	sendJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true, "message": "Connected successfully", "dialect": dialect,
+		"success": true,
+		"message": "Connected successfully",
+		"dialect": dialect,
 	})
 }
 
@@ -279,10 +117,9 @@ type SelectDatabaseRequest struct {
 }
 
 func (h *Handler) GetDatabases(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -295,10 +132,9 @@ func (h *Handler) GetDatabases(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SelectDatabase(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -320,10 +156,9 @@ func (h *Handler) SelectDatabase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetSchemas(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -336,12 +171,11 @@ func (h *Handler) GetSchemas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetTables(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
 	schema := r.URL.Query().Get("schema")
 
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -354,13 +188,12 @@ func (h *Handler) GetTables(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
 	tableName := chi.URLParam(r, "table")
 	schema := r.URL.Query().Get("schema")
 
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -373,12 +206,11 @@ func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
 	tableName := chi.URLParam(r, "table")
 
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -401,11 +233,9 @@ type ExecuteQueryRequest struct {
 }
 
 func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -429,16 +259,9 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
-	if entry.ReadOnly {
-		sendError(w, http.StatusForbidden, "Connection is read-only")
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -457,11 +280,9 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetERDData(w http.ResponseWriter, r *http.Request) {
-	connID := chi.URLParam(r, "connId")
-
-	entry, err := h.mgr.Get(connID)
+	entry, err := h.resolveDriver(r)
 	if err != nil {
-		sendError(w, http.StatusNotFound, err.Error())
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
