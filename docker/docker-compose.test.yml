@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  dblens-test-postgres:
+    image: postgres:16-alpine
+    container_name: dblens-test-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dblens_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  dblens-test-mysql:
+    image: mariadb:10.11
+    container_name: dblens-test-mysql
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: mysqlpassword
+      MARIADB_DATABASE: dblens_test
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./init-mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
