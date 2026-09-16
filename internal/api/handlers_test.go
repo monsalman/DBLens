@@ -533,3 +533,95 @@ func TestSplitSQLStatements(t *testing.T) {
 		t.Errorf("stmt 4 should preserve doubled quotes, got: %s", stmts[4])
 	}
 }
+
+func TestCommandPaletteMetadataEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_palette_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE palette_items (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL
+		);
+		CREATE VIEW palette_items_view AS SELECT id, name FROM palette_items;
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table and view: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Test Schemas Endpoint
+	reqSchemas := httptest.NewRequest("GET", "/api/connections/default/schemas", nil)
+	reqSchemas.Header.Set("X-DBLENS-DSN", dsn)
+	recSchemas := httptest.NewRecorder()
+	router.ServeHTTP(recSchemas, reqSchemas)
+
+	if recSchemas.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get schemas, got %d: %s", recSchemas.Code, recSchemas.Body.String())
+	}
+
+	var resSchemas struct {
+		Data  []string `json:"data"`
+		Error *string  `json:"error"`
+	}
+	if err := json.Unmarshal(recSchemas.Body.Bytes(), &resSchemas); err != nil {
+		t.Fatalf("failed to decode schemas response: %v", err)
+	}
+	if len(resSchemas.Data) == 0 {
+		t.Errorf("expected at least 1 schema, got %d", len(resSchemas.Data))
+	}
+
+	// 2. Test Tables & Views Endpoint
+	reqTables := httptest.NewRequest("GET", "/api/connections/default/tables", nil)
+	reqTables.Header.Set("X-DBLENS-DSN", dsn)
+	recTables := httptest.NewRecorder()
+	router.ServeHTTP(recTables, reqTables)
+
+	if recTables.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get tables, got %d: %s", recTables.Code, recTables.Body.String())
+	}
+
+	var resTables struct {
+		Data  []map[string]interface{} `json:"data"`
+		Error *string                  `json:"error"`
+	}
+	if err := json.Unmarshal(recTables.Body.Bytes(), &resTables); err != nil {
+		t.Fatalf("failed to decode tables response: %v", err)
+	}
+	if len(resTables.Data) < 2 {
+		t.Fatalf("expected at least 2 tables/views, got %d", len(resTables.Data))
+	}
+
+	foundTable := false
+	foundView := false
+	for _, tbl := range resTables.Data {
+		name, _ := tbl["name"].(string)
+		tblType, _ := tbl["type"].(string)
+		if name == "palette_items" && tblType == "table" {
+			foundTable = true
+		}
+		if name == "palette_items_view" && tblType == "view" {
+			foundView = true
+		}
+	}
+
+	if !foundTable {
+		t.Errorf("expected palette_items table in metadata response")
+	}
+	if !foundView {
+		t.Errorf("expected palette_items_view in metadata response")
+	}
+}
+
