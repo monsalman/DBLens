@@ -183,6 +183,11 @@ func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
 	tableName := chi.URLParam(r, "table")
 	schema := r.URL.Query().Get("schema")
 
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -195,6 +200,35 @@ func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendJSON(w, http.StatusOK, details)
+}
+
+func (h *Handler) GetTableDDL(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "table")
+	schema := r.URL.Query().Get("schema")
+
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ddl, err := entry.Driver.GenerateTableDDL(r.Context(), schema, tableName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"table":   tableName,
+		"schema":  schema,
+		"dialect": entry.Driver.Dialect(),
+		"ddl":     ddl,
+	})
 }
 
 func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
