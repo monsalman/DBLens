@@ -180,15 +180,24 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 	detail := &types.TableDetail{
 		Name:    table,
 		Schema:  schema,
+		Dialect: "postgres",
 		Columns: []types.ColumnMeta{},
 		FKs:     []types.ForeignKey{},
-		Indexes: []string{},
+		Indexes: []types.IndexMeta{},
 	}
 
 	colQuery := `
 		SELECT 
 			c.column_name, 
-			c.data_type, 
+			CASE 
+				WHEN c.data_type = 'character varying' AND c.character_maximum_length IS NOT NULL 
+					THEN 'varchar(' || c.character_maximum_length || ')'
+				WHEN c.data_type = 'character' AND c.character_maximum_length IS NOT NULL 
+					THEN 'char(' || c.character_maximum_length || ')'
+				WHEN c.data_type = 'numeric' AND c.numeric_precision IS NOT NULL 
+					THEN 'numeric(' || c.numeric_precision || COALESCE(',' || c.numeric_scale, '') || ')'
+				ELSE c.data_type 
+			END AS data_type,
 			c.is_nullable, 
 			c.column_default,
 			COALESCE(tc.constraint_type = 'PRIMARY KEY', false) AS is_primary
@@ -239,12 +248,18 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 			}
 		}
 	}
+	if err := colRows.Err(); err != nil {
+		return nil, err
+	}
 
 	fkQuery := `
 		SELECT
+			tc.constraint_name,
 			kcu.column_name,
 			ccu.table_name AS foreign_table_name,
-			ccu.column_name AS foreign_column_name
+			ccu.column_name AS foreign_column_name,
+			COALESCE(rc.update_rule, ''),
+			COALESCE(rc.delete_rule, '')
 		FROM information_schema.table_constraints AS tc
 		JOIN information_schema.key_column_usage AS kcu
 			ON tc.constraint_name = kcu.constraint_name
@@ -252,9 +267,13 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 		JOIN information_schema.constraint_column_usage AS ccu
 			ON ccu.constraint_name = tc.constraint_name
 			AND ccu.table_schema = tc.table_schema
+		JOIN information_schema.referential_constraints AS rc
+			ON rc.constraint_name = tc.constraint_name
+			AND rc.constraint_schema = tc.table_schema
 		WHERE tc.constraint_type = 'FOREIGN KEY'
 			AND tc.table_schema = $1
-			AND tc.table_name = $2;
+			AND tc.table_name = $2
+		ORDER BY tc.constraint_name, kcu.ordinal_position;
 	`
 	fkRows, err := p.db.QueryContext(ctxTimeout, fkQuery, schema, table)
 	if err == nil {
@@ -262,7 +281,7 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 		fkCols := make(map[string]bool)
 		for fkRows.Next() {
 			var fk types.ForeignKey
-			if err := fkRows.Scan(&fk.Column, &fk.RefTable, &fk.RefColumn); err == nil {
+			if err := fkRows.Scan(&fk.Name, &fk.Column, &fk.RefTable, &fk.RefColumn, &fk.OnUpdate, &fk.OnDelete); err == nil {
 				detail.FKs = append(detail.FKs, fk)
 				fkCols[fk.Column] = true
 			}
@@ -275,22 +294,179 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 	}
 
 	idxQuery := `
-		SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = $1 AND tablename = $2;
+		SELECT
+			i.relname AS index_name,
+			am.amname AS index_type,
+			ix.indisunique,
+			ix.indisprimary,
+			pg_get_indexdef(ix.indexrelid) AS index_def
+		FROM pg_index ix
+		JOIN pg_class t ON t.oid = ix.indrelid
+		JOIN pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		JOIN pg_am am ON am.oid = i.relam
+		WHERE n.nspname = $1 AND t.relname = $2
+		ORDER BY ix.indisprimary DESC, i.relname ASC;
 	`
 	idxRows, err := p.db.QueryContext(ctxTimeout, idxQuery, schema, table)
 	if err == nil {
 		defer idxRows.Close()
 		for idxRows.Next() {
-			var idxName string
-			if err := idxRows.Scan(&idxName); err == nil {
-				detail.Indexes = append(detail.Indexes, idxName)
+			var idxName, idxType, indexDef string
+			var isUnique, isPrimary bool
+			if err := idxRows.Scan(&idxName, &idxType, &isUnique, &isPrimary, &indexDef); err == nil {
+				var cols []string
+				start := strings.Index(indexDef, "(")
+				end := strings.LastIndex(indexDef, ")")
+				if start != -1 && end > start {
+					colsStr := indexDef[start+1 : end]
+					if whereIdx := strings.Index(indexDef, ") WHERE "); whereIdx != -1 && whereIdx > start {
+						colsStr = indexDef[start+1 : whereIdx]
+					}
+					for _, p := range strings.Split(colsStr, ",") {
+						c := strings.Trim(strings.TrimSpace(p), `"`)
+						if c != "" {
+							cols = append(cols, c)
+						}
+					}
+				}
+				detail.Indexes = append(detail.Indexes, types.IndexMeta{
+					Name:      idxName,
+					Columns:   cols,
+					IsUnique:  isUnique,
+					IsPrimary: isPrimary,
+					Type:      idxType,
+				})
 			}
 		}
 	}
 
+	if ddl, err := p.GenerateTableDDL(ctx, schema, table); err == nil {
+		detail.DDL = ddl
+	}
+
 	return detail, nil
+}
+
+func (p *PostgresDriver) GenerateTableDDL(ctx context.Context, schema, table string) (string, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if schema == "" {
+		schema = "public"
+	}
+
+	colQuery := `
+		SELECT 
+			a.attname,
+			format_type(a.atttypid, a.atttypmod) AS data_type,
+			a.attnotnull,
+			COALESCE(pg_get_expr(d.adbin, d.adrelid), '') AS column_default
+		FROM pg_attribute a
+		JOIN pg_class t ON t.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		WHERE n.nspname = $1 
+		  AND t.relname = $2 
+		  AND a.attnum > 0 
+		  AND NOT a.attisdropped
+		ORDER BY a.attnum;
+	`
+	colRows, err := p.db.QueryContext(ctxTimeout, colQuery, schema, table)
+	if err != nil {
+		return "", err
+	}
+	defer colRows.Close()
+
+	var colDefs []string
+	for colRows.Next() {
+		var colName, dataType, colDefault string
+		var notNull bool
+		if err := colRows.Scan(&colName, &dataType, &notNull, &colDefault); err != nil {
+			return "", err
+		}
+		def := fmt.Sprintf("  %s %s", quoteIdent(colName), dataType)
+		if notNull {
+			def += " NOT NULL"
+		}
+		if colDefault != "" {
+			def += " DEFAULT " + colDefault
+		}
+		colDefs = append(colDefs, def)
+	}
+	if err := colRows.Err(); err != nil {
+		return "", err
+	}
+
+	if len(colDefs) == 0 {
+		return "", fmt.Errorf("table not found: %s.%s", schema, table)
+	}
+
+	conQuery := `
+		SELECT 
+			con.conname,
+			con.contype,
+			pg_get_constraintdef(con.oid) AS constraint_def
+		FROM pg_constraint con
+		JOIN pg_class t ON t.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		WHERE n.nspname = $1 
+		  AND t.relname = $2
+		ORDER BY CASE con.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, con.conname;
+	`
+	conRows, err := p.db.QueryContext(ctxTimeout, conQuery, schema, table)
+	if err == nil {
+		defer conRows.Close()
+		for conRows.Next() {
+			var conName, conType, conDef string
+			if err := conRows.Scan(&conName, &conType, &conDef); err == nil {
+				colDefs = append(colDefs, fmt.Sprintf("  CONSTRAINT %s %s", quoteIdent(conName), conDef))
+			}
+		}
+	}
+
+	idxQuery := `
+		SELECT 
+			pg_get_indexdef(ix.indexrelid) AS index_def
+		FROM pg_index ix
+		JOIN pg_class t ON t.oid = ix.indrelid
+		JOIN pg_class i ON i.oid = ix.indexrelid
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		WHERE n.nspname = $1 
+		  AND t.relname = $2 
+		  AND NOT ix.indisprimary
+		  AND NOT EXISTS (
+		      SELECT 1 FROM pg_constraint con WHERE con.conindid = ix.indexrelid
+		  )
+		ORDER BY i.relname;
+	`
+	idxRows, err := p.db.QueryContext(ctxTimeout, idxQuery, schema, table)
+	var indexDefs []string
+	if err == nil {
+		defer idxRows.Close()
+		for idxRows.Next() {
+			var idxDef string
+			if err := idxRows.Scan(&idxDef); err == nil {
+				idxTrimmed := strings.TrimSpace(idxDef)
+				if !strings.HasSuffix(idxTrimmed, ";") {
+					idxTrimmed += ";"
+				}
+				indexDefs = append(indexDefs, idxTrimmed)
+			}
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("CREATE TABLE %s.%s (\n", quoteIdent(schema), quoteIdent(table)))
+	sb.WriteString(strings.Join(colDefs, ",\n"))
+	sb.WriteString("\n);")
+
+	if len(indexDefs) > 0 {
+		sb.WriteString("\n\n")
+		sb.WriteString(strings.Join(indexDefs, "\n"))
+	}
+
+	return sb.String(), nil
 }
 
 func quoteIdent(s string) string {

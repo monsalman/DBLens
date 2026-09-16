@@ -159,15 +159,17 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 	detail := &types.TableDetail{
 		Name:    table,
 		Schema:  schema,
+		Dialect: "mysql",
 		Columns: []types.ColumnMeta{},
 		FKs:     []types.ForeignKey{},
-		Indexes: []string{},
+		Indexes: []types.IndexMeta{},
 	}
 
 	colQuery := `
 		SELECT 
 			column_name, 
 			data_type, 
+			column_type,
 			is_nullable, 
 			column_default,
 			column_key
@@ -184,12 +186,17 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 
 	for colRows.Next() {
 		var col types.ColumnMeta
+		var columnType string
 		var isNullable string
 		var colKey string
 		var defVal sql.NullString
 
-		if err := colRows.Scan(&col.Name, &col.DataType, &isNullable, &defVal, &colKey); err != nil {
+		if err := colRows.Scan(&col.Name, &col.DataType, &columnType, &isNullable, &defVal, &colKey); err != nil {
 			return nil, err
+		}
+		col.Type = columnType
+		if col.Type == "" {
+			col.Type = col.DataType
 		}
 		col.IsNullable = (isNullable == "YES")
 		col.IsPrimary = (colKey == "PRI")
@@ -198,46 +205,120 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 		}
 		detail.Columns = append(detail.Columns, col)
 	}
+	if err := colRows.Err(); err != nil {
+		return nil, err
+	}
 
 	fkQuery := `
 		SELECT 
-			column_name, 
-			referenced_table_name, 
-			referenced_column_name
-		FROM information_schema.key_column_usage
-		WHERE table_schema = CASE WHEN ? = '' THEN DATABASE() ELSE ? END 
-		  AND table_name = ?
-		  AND referenced_table_name IS NOT NULL;
+			kcu.constraint_name,
+			kcu.column_name, 
+			kcu.referenced_table_name, 
+			kcu.referenced_column_name,
+			COALESCE(rc.update_rule, ''),
+			COALESCE(rc.delete_rule, '')
+		FROM information_schema.key_column_usage kcu
+		JOIN information_schema.referential_constraints rc
+			ON kcu.constraint_name = rc.constraint_name
+			AND kcu.constraint_schema = rc.constraint_schema
+		WHERE kcu.table_schema = CASE WHEN ? = '' THEN DATABASE() ELSE ? END 
+		  AND kcu.table_name = ?
+		  AND kcu.referenced_table_name IS NOT NULL
+		ORDER BY kcu.ordinal_position;
 	`
 	fkRows, err := m.db.QueryContext(ctxTimeout, fkQuery, schema, schema, table)
 	if err == nil {
 		defer fkRows.Close()
 		for fkRows.Next() {
 			var fk types.ForeignKey
-			if err := fkRows.Scan(&fk.Column, &fk.RefTable, &fk.RefColumn); err == nil {
+			if err := fkRows.Scan(&fk.Name, &fk.Column, &fk.RefTable, &fk.RefColumn, &fk.OnUpdate, &fk.OnDelete); err == nil {
 				detail.FKs = append(detail.FKs, fk)
+			}
+		}
+
+		fkCols := make(map[string]bool)
+		for _, fk := range detail.FKs {
+			fkCols[fk.Column] = true
+		}
+		for i := range detail.Columns {
+			if fkCols[detail.Columns[i].Name] {
+				detail.Columns[i].IsForeignKey = true
 			}
 		}
 	}
 
 	idxQuery := `
-		SELECT DISTINCT index_name
+		SELECT 
+			index_name,
+			non_unique,
+			index_type,
+			column_name
 		FROM information_schema.statistics
 		WHERE table_schema = CASE WHEN ? = '' THEN DATABASE() ELSE ? END 
-		  AND table_name = ?;
+		  AND table_name = ?
+		ORDER BY index_name, seq_in_index;
 	`
 	idxRows, err := m.db.QueryContext(ctxTimeout, idxQuery, schema, schema, table)
 	if err == nil {
 		defer idxRows.Close()
+		indexMap := make(map[string]*types.IndexMeta)
+		var indexOrder []string
+
 		for idxRows.Next() {
-			var idxName string
-			if err := idxRows.Scan(&idxName); err == nil {
-				detail.Indexes = append(detail.Indexes, idxName)
+			var idxName, idxType, colName string
+			var nonUnique int
+			if err := idxRows.Scan(&idxName, &nonUnique, &idxType, &colName); err == nil {
+				if meta, exists := indexMap[idxName]; exists {
+					meta.Columns = append(meta.Columns, colName)
+				} else {
+					meta := &types.IndexMeta{
+						Name:      idxName,
+						Columns:   []string{colName},
+						IsUnique:  nonUnique == 0,
+						IsPrimary: strings.ToUpper(idxName) == "PRIMARY",
+						Type:      idxType,
+					}
+					indexMap[idxName] = meta
+					indexOrder = append(indexOrder, idxName)
+				}
 			}
+		}
+		for _, name := range indexOrder {
+			detail.Indexes = append(detail.Indexes, *indexMap[name])
 		}
 	}
 
+	if ddl, err := m.GenerateTableDDL(ctx, schema, table); err == nil {
+		detail.DDL = ddl
+	}
+
 	return detail, nil
+}
+
+func (m *MySQLDriver) GenerateTableDDL(ctx context.Context, schema, table string) (string, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var target string
+	if schema != "" {
+		target = fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent(table))
+	} else {
+		target = quoteIdent(table)
+	}
+
+	query := fmt.Sprintf("SHOW CREATE TABLE %s", target)
+	row := m.db.QueryRowContext(ctxTimeout, query)
+
+	var tableName, createSQL string
+	if err := row.Scan(&tableName, &createSQL); err != nil {
+		return "", err
+	}
+
+	createSQL = strings.TrimSpace(createSQL)
+	if !strings.HasSuffix(createSQL, ";") {
+		createSQL += ";"
+	}
+	return createSQL, nil
 }
 
 func quoteIdent(s string) string {

@@ -6,6 +6,7 @@ import (
 
 type ColumnMeta = types.ColumnMeta
 type ForeignKey = types.ForeignKey
+type IndexMeta = types.IndexMeta
 type TableMeta = types.TableMeta
 type TableDetail = types.TableDetail
 type QueryOptions = types.QueryOptions

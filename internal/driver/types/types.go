@@ -16,9 +16,20 @@ type ColumnMeta struct {
 }
 
 type ForeignKey struct {
+	Name      string `json:"name,omitempty"`
 	Column    string `json:"column"`
 	RefTable  string `json:"refTable"`
 	RefColumn string `json:"refColumn"`
+	OnUpdate  string `json:"onUpdate,omitempty"`
+	OnDelete  string `json:"onDelete,omitempty"`
+}
+
+type IndexMeta struct {
+	Name      string   `json:"name"`
+	Columns   []string `json:"columns"`
+	IsUnique  bool     `json:"isUnique"`
+	IsPrimary bool     `json:"isPrimary"`
+	Type      string   `json:"type"`
 }
 
 type TableMeta struct {
@@ -30,9 +41,11 @@ type TableMeta struct {
 type TableDetail struct {
 	Name    string       `json:"name"`
 	Schema  string       `json:"schema"`
+	Dialect string       `json:"dialect,omitempty"`
 	Columns []ColumnMeta `json:"columns"`
 	FKs     []ForeignKey `json:"fks"`
-	Indexes []string     `json:"indexes"`
+	Indexes []IndexMeta  `json:"indexes"`
+	DDL     string       `json:"ddl,omitempty"`
 }
 
 type QueryOptions struct {
@@ -99,6 +112,7 @@ type Driver interface {
 	InspectSchemas(ctx context.Context) ([]string, error)
 	InspectTables(ctx context.Context, schema string) ([]TableMeta, error)
 	InspectTableDetails(ctx context.Context, schema, table string) (*TableDetail, error)
+	GenerateTableDDL(ctx context.Context, schema, table string) (string, error)
 	QueryTableData(ctx context.Context, opts QueryOptions) (*QueryResult, error)
 	QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
