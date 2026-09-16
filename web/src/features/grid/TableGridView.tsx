@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2 } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
+import { AddRowModal } from './AddRowModal'
 
 interface Props {
   connId: string
@@ -19,6 +20,14 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCol, setSelectedCol] = useState('')
   const [selectedRows, setSelectedRows] = useState<Record<string, boolean>>({})
+  const [editingCell, setEditingCell] = useState<{ rowIdx: number; col: string } | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const [inlineError, setInlineError] = useState<string | null>(null)
+  const editInputRef = useRef<HTMLInputElement>(null)
+  const cancelledRef = useRef(false)
+  const isCommittingRef = useRef(false)
 
   useEffect(() => {
     setPageIndex(0)
@@ -26,7 +35,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedRows({})
     setSearchTerm('')
     setSelectedCol('')
+    setEditingCell(null)
   }, [table, schema, connId])
+
+  // Focus edit input when entering edit mode
+  useEffect(() => {
+    if (editingCell) {
+      setTimeout(() => editInputRef.current?.focus(), 0)
+    }
+  }, [editingCell])
 
   const qc = useQueryClient()
   const { openPeekDrawer } = useAppStore()
@@ -39,7 +56,8 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   })
 
   const metaCols: ColumnMeta[] = cols?.columns ?? []
-  const pkCol = metaCols.find((c: ColumnMeta) => c.isPrimaryKey || c.isPrimary)?.name ?? metaCols[0]?.name ?? 'id'
+  const pkCols = useMemo(() => metaCols.filter(c => c.isPrimaryKey || c.isPrimary), [metaCols])
+  const hasPk = pkCols.length > 0
 
   // FK lookup map by column name
   const fkMap = useMemo(() => {
@@ -68,7 +86,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   // Active filter column
   const filterCol = (selectedCol && metaCols.some(c => c.name === selectedCol))
     ? selectedCol
-    : (metaCols.find((c: ColumnMeta) => c.isPrimaryKey || c.isPrimary)?.name ?? metaCols[0]?.name ?? '')
+    : (pkCols[0]?.name ?? metaCols[0]?.name ?? '')
 
   // Data rows
   const { data, isLoading, refetch } = useQuery({
@@ -97,11 +115,21 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const totalCount = data?.totalCount ?? rows.length
   const totalPages = Math.ceil(totalCount / pageSize) || 1
 
+  const getRowKey = (row: Record<string, any>, i: number) => {
+    if (!hasPk) return String(i)
+    return pkCols.map(c => `${c.name}:${row[c.name]}`).join('|')
+  }
+
   const handleDelete = async () => {
-    const pks = Object.keys(selectedRows).filter(k => selectedRows[k])
-    if (!pks.length || !table) return
-    for (const pk of pks) {
-      await mutateM.mutateAsync({ schema, table, type: 'DELETE', where: { [pkCol]: pk } })
+    if (!hasPk || !table) return
+    const toDelete = rows.filter((r, i) => selectedRows[getRowKey(r, i)])
+    if (!toDelete.length) return
+    for (const r of toDelete) {
+      const where: Record<string, any> = {}
+      for (const pk of pkCols) {
+        where[pk.name] = r[pk.name]
+      }
+      await mutateM.mutateAsync({ schema, table, type: 'DELETE', where })
     }
     setSelectedRows({})
   }
@@ -149,11 +177,72 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     return String(val)
   }
 
+  // Inline edit handlers
+  const startEdit = (rowIdx: number, col: string, currentVal: any) => {
+    if (!hasPk) return
+    cancelledRef.current = false
+    isCommittingRef.current = false
+    setEditingCell({ rowIdx, col })
+    setEditValue(currentVal === null || currentVal === undefined ? '' : String(currentVal))
+  }
+
+  const cancelEdit = () => {
+    cancelledRef.current = true
+    setEditingCell(null)
+  }
+
+  const commitEdit = async (row: Record<string, any>) => {
+    if (cancelledRef.current || isCommittingRef.current) return
+    if (!editingCell) return
+    isCommittingRef.current = true
+    try {
+      const { col } = editingCell
+      setEditingCell(null)
+      const originalVal = row[col]
+      const newVal = editValue
+      // skip if unchanged
+      if (String(originalVal ?? '') === newVal) return
+      setInlineError(null)
+      const where: Record<string, any> = {}
+      for (const pk of pkCols) {
+        where[pk.name] = row[pk.name]
+      }
+      await mutateM.mutateAsync({
+        schema,
+        table,
+        type: 'UPDATE',
+        data: { [col]: newVal === '' ? null : newVal },
+        where,
+      })
+    } catch (err: any) {
+      setInlineError(`Update failed: ${err?.message ?? 'Unknown error'}`)
+    } finally {
+      isCommittingRef.current = false
+      cancelledRef.current = false
+    }
+  }
+
+  const handleAddRow = async (formData: Record<string, any>) => {
+    setAddError(null)
+    try {
+      await mutateM.mutateAsync({ schema, table, type: 'INSERT', data: formData })
+      setShowAddModal(false)
+    } catch (err: any) {
+      setAddError(err?.message ?? 'Insert failed')
+    }
+  }
+
   if (!table) return <div className="flex-1 flex items-center justify-center text-[var(--muted)] font-mono text-xs">Select a table</div>
   if (isLoading || colsLoading) return <div className="flex-1 flex items-center justify-center text-[var(--muted)] font-mono text-xs">Loading...</div>
 
   return (
     <div className="flex-1 flex flex-col bg-[var(--bg)] overflow-hidden">
+      {inlineError && (
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-xs px-3 py-1.5 flex items-center justify-between font-mono shrink-0">
+          <span>{inlineError}</span>
+          <button onClick={() => setInlineError(null)} className="hover:text-red-300 font-bold ml-2">✕</button>
+        </div>
+      )}
       {/* Toolbar */}
       <div className="h-10 border-b border-[var(--border)] px-3 flex items-center gap-3 shrink-0">
         {/* Search & Column Picker */}
@@ -201,6 +290,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
               <Trash2 className="w-3 h-3" /> <span>{Object.values(selectedRows).filter(Boolean).length}</span>
             </button>
           )}
+
+          {/* Add Row */}
+          <button
+            onClick={() => { setAddError(null); setShowAddModal(true) }}
+            title="Add Row"
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
           
           <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]">
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -219,12 +317,16 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           <thead className="sticky top-0 bg-[var(--bg)] z-10">
             <tr>
               <th className="w-8 px-2 py-1.5 text-[10px] text-[var(--muted)] font-mono border-r border-[var(--border)]">
-                <input type="checkbox" checked={rows.length > 0 && rows.every(r => selectedRows[String(r[pkCol])])}
+                <input
+                  type="checkbox"
+                  disabled={!hasPk}
+                  checked={hasPk && rows.length > 0 && rows.every((r, i) => selectedRows[getRowKey(r, i)])}
                   onChange={e => {
                     const checked = e.target.checked
-                    setSelectedRows(checked ? Object.fromEntries(rows.map(r => [String(r[pkCol]), true])) : {} as Record<string, boolean>)
+                    setSelectedRows(checked ? Object.fromEntries(rows.map((r, i) => [getRowKey(r, i), true])) : {} as Record<string, boolean>)
                   }}
-                  className="rounded border-[var(--border)] bg-[var(--surface)] text-indigo-500 w-3 h-3" />
+                  className="rounded border-[var(--border)] bg-[var(--surface)] text-indigo-500 w-3 h-3 disabled:opacity-30"
+                />
               </th>
               {colDefs.map(c => (
                 <th key={c.name} className="px-2 py-1.5 text-[10px] text-[var(--muted)] font-mono border-r border-[var(--border)] whitespace-nowrap">
@@ -252,20 +354,57 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           </thead>
           
           <tbody>
-            {rows.map((row, i) => (
-              <tr key={i} className="data-row-hover border-b border-[var(--border)]">
-                <td className="px-2 py-1.5">
-                  <input type="checkbox" checked={!!selectedRows[String(row[pkCol])] }
-                    onChange={e => setSelectedRows(p => ({ ...p, [String(row[pkCol])]: e.target.checked }))}
-                    className="rounded border-[var(--border)] bg-[var(--surface)] text-indigo-500 w-3 h-3" />
-                </td>
-                {colDefs.map(c => {
-                  const val = row[c.name]
-                  const isFkValue = !!c.fk && val !== null && val !== undefined && String(val) !== ''
+            {rows.map((row, i) => {
+              const rowKey = getRowKey(row, i)
+              return (
+                <tr key={i} className="data-row-hover border-b border-[var(--border)]">
+                  <td className="px-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      disabled={!hasPk}
+                      checked={!!selectedRows[rowKey]}
+                      onChange={e => setSelectedRows(p => ({ ...p, [rowKey]: e.target.checked }))}
+                      className="rounded border-[var(--border)] bg-[var(--surface)] text-indigo-500 w-3 h-3 disabled:opacity-30"
+                    />
+                  </td>
+                  {colDefs.map(c => {
+                    const val = row[c.name]
+                    const isFkValue = !!c.fk && val !== null && val !== undefined && String(val) !== ''
+                    const isEditing = editingCell?.rowIdx === i && editingCell?.col === c.name
+                    const isPending = mutateM.isPending
 
-                  return (
-                    <td key={c.name} className="px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]">
-                      {isFkValue ? (
+                    return (
+                      <td
+                        key={c.name}
+                        title={!hasPk ? 'Inline edit requires a primary key' : undefined}
+                        className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] ${hasPk && !isFkValue ? 'cursor-text' : ''} ${isPending && isEditing ? 'opacity-50' : ''}`}
+                        onDoubleClick={() => {
+                          if (!hasPk) return
+                          if (isFkValue) return
+                          startEdit(i, c.name, val)
+                        }}
+                      >
+                        {isEditing ? (
+                          <input
+                            ref={editInputRef}
+                            type="text"
+                            value={editValue}
+                            onChange={e => setEditValue(e.target.value)}
+                            onBlur={() => commitEdit(row)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                e.currentTarget.blur()
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault()
+                                cancelEdit()
+                              }
+                            }}
+                            className="w-full bg-[var(--surface)] border border-indigo-500 rounded px-1 py-0 text-xs font-mono text-[var(--fg)] focus:outline-none"
+                            onClick={e => e.stopPropagation()}
+                          />
+                        ) : isFkValue ? (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -285,7 +424,8 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                   )
                 })}
               </tr>
-            ))}
+              )
+            })}
             {rows.length === 0 && (
               <tr><td colSpan={Math.max(colDefs.length + 1, 2)} className="text-center py-12 text-[var(--muted)] font-mono text-xs">No rows returned</td></tr>
             )}
@@ -304,6 +444,17 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             className="px-2 py-0.5 rounded hover:bg-[var(--hover)] disabled:opacity-30">&gt;</button>
         </div>
       </div>
+
+      {/* Add Row Modal */}
+      {showAddModal && (
+        <AddRowModal
+          colDefs={colDefs}
+          onSubmit={handleAddRow}
+          onClose={() => setShowAddModal(false)}
+          error={addError}
+          loading={mutateM.isPending}
+        />
+      )}
     </div>
   )
 }
