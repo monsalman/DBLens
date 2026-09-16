@@ -435,6 +435,17 @@ func (p *PostgresDriver) QueryTableData(ctx context.Context, opts types.QueryOpt
 	}, nil
 }
 
+func (p *PostgresDriver) QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error) {
+	var targetTable string
+	if schema != "" {
+		targetTable = fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent(table))
+	} else {
+		targetTable = quoteIdent(table)
+	}
+	query := fmt.Sprintf("SELECT * FROM %s", targetTable)
+	return p.db.QueryContext(ctx, query)
+}
+
 func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

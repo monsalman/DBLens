@@ -64,6 +64,9 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/mutate", h.MutateRow)
 	api.Post("/connections/{connId}/batch-insert", h.BatchInsert)
 	api.Get("/connections/{connId}/erd", h.GetERDData)
+	api.Get("/connections/{connId}/export", h.ExportTable)
+	api.Post("/connections/{connId}/import/csv", h.ImportCSV)
+	api.Post("/connections/{connId}/import/sql", h.ImportSQL)
 
 	r.Mount("/api", api)
 

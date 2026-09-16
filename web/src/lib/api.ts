@@ -494,4 +494,110 @@ export const api = {
     const json = await res.json()
     return json.data ?? json ?? { affectedRows: 0 }
   },
+
+  async exportTableBlob(
+    connId: string,
+    schema: string,
+    table: string,
+    format: 'csv' | 'json' | 'sql',
+    profiles?: ConnectionConfig[]
+  ): Promise<void> {
+    const dsn = this._getDSN(connId, profiles)
+    const params = new URLSearchParams({
+      table,
+      schema: schema || '',
+      format,
+    })
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    const res = await fetch(`/api/connections/${connId}/export?${params.toString()}`, {
+      headers,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Export failed')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${table}_export.${format}`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
+
+  async importCSV(
+    connId: string,
+    schema: string,
+    table: string,
+    file: File,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ affectedRows: number; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('table', table)
+    if (schema) {
+      formData.append('schema', schema)
+    }
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    const res = await fetch(`/api/connections/${connId}/import/csv`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Import CSV failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async importSQL(
+    connId: string,
+    file: File,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ statementsExecuted: number; affectedRows: number; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const formData = new FormData()
+    formData.append('file', file)
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    const res = await fetch(`/api/connections/${connId}/import/sql`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Import SQL failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
 }

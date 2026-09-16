@@ -3,7 +3,9 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -185,5 +187,349 @@ func TestBatchInsertHandler(t *testing.T) {
 	}
 	if !strings.Contains(rec5.Body.String(), "exceeds maximum limit") {
 		t.Fatalf("expected limit error message, got: %s", rec5.Body.String())
+	}
+}
+
+func TestExportTableStreaming(t *testing.T) {
+	dbFile := "/tmp/dblens_api_export_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE books (
+			id INTEGER PRIMARY KEY,
+			title TEXT,
+			author TEXT,
+			price REAL
+		);
+		INSERT INTO books (id, title, author, price) VALUES (1, 'Book A', 'Alice', 12.50);
+		INSERT INTO books (id, title, author, price) VALUES (2, 'Book B', NULL, 15.00);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create books table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Export CSV
+	reqCSV := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=csv", nil)
+	reqCSV.Header.Set("X-DBLENS-DSN", dsn)
+	recCSV := httptest.NewRecorder()
+	router.ServeHTTP(recCSV, reqCSV)
+
+	if recCSV.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on CSV export, got %d: %s", recCSV.Code, recCSV.Body.String())
+	}
+	if !strings.Contains(recCSV.Header().Get("Content-Type"), "text/csv") {
+		t.Fatalf("expected text/csv Content-Type, got %s", recCSV.Header().Get("Content-Type"))
+	}
+	rdr := csv.NewReader(recCSV.Body)
+	csvRecords, err := rdr.ReadAll()
+	if err != nil {
+		t.Fatalf("failed to read exported CSV: %v", err)
+	}
+	if len(csvRecords) != 3 { // 1 header + 2 rows
+		t.Fatalf("expected 3 CSV records, got %d", len(csvRecords))
+	}
+	if csvRecords[0][0] != "id" || csvRecords[0][1] != "title" {
+		t.Fatalf("unexpected CSV headers: %v", csvRecords[0])
+	}
+	if csvRecords[2][2] != "" { // NULL author in row 2
+		t.Fatalf("expected empty string for NULL author, got %q", csvRecords[2][2])
+	}
+
+	// 2. Export JSON
+	reqJSON := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=json", nil)
+	reqJSON.Header.Set("X-DBLENS-DSN", dsn)
+	recJSON := httptest.NewRecorder()
+	router.ServeHTTP(recJSON, reqJSON)
+
+	if recJSON.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on JSON export, got %d", recJSON.Code)
+	}
+	var jsonRows []map[string]interface{}
+	if err := json.Unmarshal(recJSON.Body.Bytes(), &jsonRows); err != nil {
+		t.Fatalf("failed to parse exported JSON: %v. Body: %s", err, recJSON.Body.String())
+	}
+	if len(jsonRows) != 2 {
+		t.Fatalf("expected 2 JSON rows, got %d", len(jsonRows))
+	}
+	if jsonRows[0]["title"] != "Book A" {
+		t.Fatalf("unexpected row 0 title: %v", jsonRows[0]["title"])
+	}
+
+	// 3. Export SQL
+	reqSQL := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=sql", nil)
+	reqSQL.Header.Set("X-DBLENS-DSN", dsn)
+	recSQL := httptest.NewRecorder()
+	router.ServeHTTP(recSQL, reqSQL)
+
+	if recSQL.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on SQL export, got %d", recSQL.Code)
+	}
+	sqlBody := recSQL.Body.String()
+	if !strings.Contains(sqlBody, "INSERT INTO `books`") {
+		t.Fatalf("expected INSERT INTO statement in SQL export, got: %s", sqlBody)
+	}
+	if !strings.Contains(sqlBody, "NULL") {
+		t.Fatalf("expected NULL in SQL export for null author, got: %s", sqlBody)
+	}
+
+	// 4. Test dsn query parameter is rejected / header is required
+	reqQueryDSN := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=csv&dsn="+dsn, nil)
+	recQueryDSN := httptest.NewRecorder()
+	router.ServeHTTP(recQueryDSN, reqQueryDSN)
+	if recQueryDSN.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request with dsn query param, got %d", recQueryDSN.Code)
+	}
+	if !strings.Contains(recQueryDSN.Body.String(), "X-DBLENS-DSN header is required") {
+		t.Fatalf("expected 'X-DBLENS-DSN header is required' error, got: %s", recQueryDSN.Body.String())
+	}
+
+	// 5. Test validation errors
+	reqNoTable := httptest.NewRequest("GET", "/api/connections/default/export?format=csv", nil)
+	reqNoTable.Header.Set("X-DBLENS-DSN", dsn)
+	recNoTable := httptest.NewRecorder()
+	router.ServeHTTP(recNoTable, reqNoTable)
+	if recNoTable.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request when table is missing, got %d", recNoTable.Code)
+	}
+
+	reqBadFormat := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=xml", nil)
+	reqBadFormat.Header.Set("X-DBLENS-DSN", dsn)
+	recBadFormat := httptest.NewRecorder()
+	router.ServeHTTP(recBadFormat, reqBadFormat)
+	if recBadFormat.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on bad format, got %d", recBadFormat.Code)
+	}
+
+	// Control characters in table/schema (SQL comment injection protection)
+	reqNewlineTable := httptest.NewRequest("GET", "/api/connections/default/export?table=books%0Ainjection&format=csv", nil)
+	reqNewlineTable.Header.Set("X-DBLENS-DSN", dsn)
+	recNewlineTable := httptest.NewRecorder()
+	router.ServeHTTP(recNewlineTable, reqNewlineTable)
+	if recNewlineTable.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on newline in table name, got %d", recNewlineTable.Code)
+	}
+
+	reqNullTable := httptest.NewRequest("GET", "/api/connections/default/export?table=books%00injection&format=csv", nil)
+	reqNullTable.Header.Set("X-DBLENS-DSN", dsn)
+	recNullTable := httptest.NewRecorder()
+	router.ServeHTTP(recNullTable, reqNullTable)
+	if recNullTable.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on null byte in table name, got %d", recNullTable.Code)
+	}
+
+	reqCrSchema := httptest.NewRequest("GET", "/api/connections/default/export?table=books&schema=pub%0Dlic&format=csv", nil)
+	reqCrSchema.Header.Set("X-DBLENS-DSN", dsn)
+	recCrSchema := httptest.NewRecorder()
+	router.ServeHTTP(recCrSchema, reqCrSchema)
+	if recCrSchema.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request on carriage return in schema, got %d", recCrSchema.Code)
+	}
+
+	// 6. Test context cancellation
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reqCanceled := httptest.NewRequest("GET", "/api/connections/default/export?table=books&format=csv", nil).WithContext(canceledCtx)
+	reqCanceled.Header.Set("X-DBLENS-DSN", dsn)
+	recCanceled := httptest.NewRecorder()
+	router.ServeHTTP(recCanceled, reqCanceled)
+}
+
+func TestImportCSVHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_import_csv_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
+			qty INTEGER
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create items table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	csvData := "name,qty\nApple,10\nBanana,20\nOrange,\n"
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("table", "items")
+	part, err := writer.CreateFormFile("file", "items.csv")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = part.Write([]byte(csvData))
+	_ = writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/connections/default/import/csv", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on CSV import, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"affectedRows":3`) {
+		t.Fatalf("expected affectedRows: 3 in response, got: %s", rec.Body.String())
+	}
+
+	// Verify data in table
+	qr, err := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM items")
+	if err != nil {
+		t.Fatalf("failed to count rows: %v", err)
+	}
+	if len(qr.Rows) != 1 || qr.Rows[0][0].(int64) != 3 {
+		t.Fatalf("expected 3 rows in items table, got %v", qr.Rows)
+	}
+}
+
+func TestImportSQLHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_import_sql_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	sqlData := `
+		-- Table creation
+		CREATE TABLE customers (
+			id INTEGER PRIMARY KEY,
+			full_name TEXT
+		);
+
+		/* Insert records with semicolons inside strings */
+		INSERT INTO customers (id, full_name) VALUES (1, 'Alice; Corporate & Co');
+		INSERT INTO customers (id, full_name) VALUES (2, 'Bob Smith');
+	`
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "script.sql")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+	_, _ = part.Write([]byte(sqlData))
+	_ = writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/connections/default/import/sql", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on SQL import, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"statementsExecuted":3`) {
+		t.Fatalf("expected statementsExecuted: 3 in response, got: %s", rec.Body.String())
+	}
+
+	// Verify data in table
+	ctx := context.Background()
+	qr, err := entry.Driver.ExecuteQuery(ctx, "SELECT full_name FROM customers WHERE id = 1")
+	if err != nil {
+		t.Fatalf("failed to query imported table: %v", err)
+	}
+	if len(qr.Rows) != 1 || qr.Rows[0][0] != "Alice; Corporate & Co" {
+		t.Fatalf("expected 'Alice; Corporate & Co', got %v", qr.Rows)
+	}
+}
+
+func TestFormatSQLValue(t *testing.T) {
+	// MySQL escaping: backslash escaped first, then single quotes
+	input := "C:\\dir\\sub\\'file'"
+	gotMySQL := api.FormatSQLValue("mysql", input)
+	expectedMySQL := "'C:\\\\dir\\\\sub\\\\''file'''"
+	if gotMySQL != expectedMySQL {
+		t.Errorf("FormatSQLValue(mysql) = %q, want %q", gotMySQL, expectedMySQL)
+	}
+
+	// SQLite/Postgres escaping: single quotes escaped only
+	gotPG := api.FormatSQLValue("postgres", input)
+	expectedPG := "'C:\\dir\\sub\\''file'''"
+	if gotPG != expectedPG {
+		t.Errorf("FormatSQLValue(postgres) = %q, want %q", gotPG, expectedPG)
+	}
+
+	// NULL, numbers, booleans
+	if got := api.FormatSQLValue("mysql", nil); got != "NULL" {
+		t.Errorf("expected NULL, got %s", got)
+	}
+	if got := api.FormatSQLValue("mysql", 42); got != "42" {
+		t.Errorf("expected 42, got %s", got)
+	}
+	if got := api.FormatSQLValue("mysql", true); got != "TRUE" {
+		t.Errorf("expected TRUE, got %s", got)
+	}
+}
+
+func TestSplitSQLStatements(t *testing.T) {
+	sql := `
+		-- Line comment; with semicolon
+		/* Block comment; with semicolon */
+		INSERT INTO t (val) VALUES ('It\'s fine; with semicolon');
+		SELECT ` + "`" + `col;name` + "`" + ` FROM ` + "`" + `tbl;name` + "`" + `;
+		CREATE FUNCTION foo() RETURNS void AS $$
+			BEGIN
+				SELECT 1;
+				-- comment;
+			END;
+		$$ LANGUAGE plpgsql;
+		CREATE FUNCTION bar() RETURNS void AS $tag$
+			BEGIN
+				SELECT 2;
+			END;
+		$tag$ LANGUAGE plpgsql;
+		SELECT 'regular ''quote''';
+	`
+	stmts := api.SplitSQLStatements(sql)
+	if len(stmts) != 5 {
+		t.Fatalf("expected 5 statements, got %d: %#v", len(stmts), stmts)
+	}
+	if !strings.Contains(stmts[0], "It\\'s fine; with semicolon") {
+		t.Errorf("stmt 0 should preserve backslash escaped quote, got: %s", stmts[0])
+	}
+	if !strings.Contains(stmts[1], "`col;name`") {
+		t.Errorf("stmt 1 should preserve backtick identifier, got: %s", stmts[1])
+	}
+	if !strings.Contains(stmts[2], "SELECT 1;") {
+		t.Errorf("stmt 2 should preserve body inside $$, got: %s", stmts[2])
+	}
+	if !strings.Contains(stmts[3], "SELECT 2;") {
+		t.Errorf("stmt 3 should preserve body inside $tag$, got: %s", stmts[3])
+	}
+	if !strings.Contains(stmts[4], "regular ''quote''") {
+		t.Errorf("stmt 4 should preserve doubled quotes, got: %s", stmts[4])
 	}
 }

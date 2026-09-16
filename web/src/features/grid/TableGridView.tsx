@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { AddRowModal } from './AddRowModal'
 import { MockDataModal } from './MockDataModal'
+import { ImportModal } from './ImportModal'
 
 interface Props {
   connId: string
@@ -29,9 +30,23 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [mockError, setMockError] = useState<string | null>(null)
   const [mockLoading, setMockLoading] = useState(false)
   const [inlineError, setInlineError] = useState<string | null>(null)
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [showExportMenu, setShowExportMenu] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
   const isCommittingRef = useRef(false)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   useEffect(() => {
     setPageIndex(0)
@@ -138,32 +153,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedRows({})
   }
 
-  const handleExport = (format: 'csv' | 'json') => {
-    if (!rows.length || !table) return
-    let content = ''
-    const filename = `${table}_export.${format}`
-    let mimeType = 'text/plain'
-
-    if (format === 'json') {
-      content = JSON.stringify(rows, null, 2)
-      mimeType = 'application/json'
-    } else if (format === 'csv') {
-      const keys = metaCols.length > 0 ? metaCols.map(c => c.name) : Object.keys(rows[0])
-      const header = keys.join(',')
-      const lines = rows.map((r) =>
-        keys.map((k) => `"${String(r[k] ?? '').replace(/"/g, '""')}"`).join(',')
-      )
-      content = [header, ...lines].join('\n')
-      mimeType = 'text/csv'
+  const handleExport = async (format: 'csv' | 'json' | 'sql') => {
+    setShowExportMenu(false)
+    if (!table) return
+    setExportLoading(true)
+    setInlineError(null)
+    try {
+      await api.exportTableBlob(connId, schema, table, format)
+    } catch (err: any) {
+      setInlineError(`Export failed: ${err?.message ?? 'Unknown error'}`)
+    } finally {
+      setExportLoading(false)
     }
-
-    const blob = new Blob([content], { type: mimeType })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   // Column headers
@@ -326,14 +327,58 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           >
             <Sparkles className="w-3.5 h-3.5" />
           </button>
+
+          {/* Import Data */}
+          <button
+            onClick={() => setShowImportModal(true)}
+            title="Import Data (CSV / SQL)"
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] font-mono"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Import</span>
+          </button>
           
-          <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]">
+          <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
           
-          <div className="flex items-center border border-[var(--border)] rounded overflow-hidden">
-            <button onClick={() => handleExport('csv')} className="px-2 py-0.5 text-[10px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border-r border-[var(--border)]">CSV</button>
-            <button onClick={() => handleExport('json')} className="px-2 py-0.5 text-[10px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]">JSON</button>
+          {/* Export Dropdown */}
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              onClick={() => setShowExportMenu(prev => !prev)}
+              disabled={exportLoading}
+              title="Export Full Table"
+              className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors disabled:opacity-50"
+            >
+              <Download className={`w-3.5 h-3.5 ${exportLoading ? 'animate-bounce' : ''}`} />
+              <span>Export</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 mt-1 w-36 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                <button
+                  onClick={() => handleExport('csv')}
+                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                >
+                  <span>Export CSV</span>
+                  <span className="text-[10px] text-[var(--muted)]">.csv</span>
+                </button>
+                <button
+                  onClick={() => handleExport('json')}
+                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                >
+                  <span>Export JSON</span>
+                  <span className="text-[10px] text-[var(--muted)]">.json</span>
+                </button>
+                <button
+                  onClick={() => handleExport('sql')}
+                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                >
+                  <span>Export SQL</span>
+                  <span className="text-[10px] text-[var(--muted)]">.sql</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -494,6 +539,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           onClose={() => setShowMockModal(false)}
           error={mockError}
           loading={mockLoading}
+        />
+      )}
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <ImportModal
+          connId={connId}
+          schema={schema}
+          table={table}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['data', connId, table] })
+            refetch()
+          }}
         />
       )}
     </div>

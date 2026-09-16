@@ -1,6 +1,9 @@
 package types
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 type ColumnMeta struct {
 	Name         string  `json:"name"`
@@ -97,6 +100,7 @@ type Driver interface {
 	InspectTables(ctx context.Context, schema string) ([]TableMeta, error)
 	InspectTableDetails(ctx context.Context, schema, table string) (*TableDetail, error)
 	QueryTableData(ctx context.Context, opts QueryOptions) (*QueryResult, error)
+	QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
