@@ -455,7 +455,7 @@ export const api = {
     return json.data ?? json ?? { affectedRows: 0 }
   },
 
-  async getERDData(connId: string, profiles?: ConnectionConfig[]): Promise<ERDTable[]> {
+	async getERDData(connId: string, profiles?: ConnectionConfig[]): Promise<ERDTable[]> {
     const dsn = this._getDSN(connId, profiles)
     try {
       const res = await fetch(`/api/connections/${connId}/erd`, {
@@ -467,5 +467,31 @@ export const api = {
     } catch {
       return []
     }
+  },
+
+  async batchInsert(
+    connId: string,
+    schema: string,
+    table: string,
+    rows: Record<string, any>[],
+    profiles?: ConnectionConfig[]
+  ): Promise<{ affectedRows: number; generatedSQL?: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/batch-insert`, {
+      method: 'POST',
+      headers: this._headers(dsn),
+      body: JSON.stringify({ schema, table, rows }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg)
+    }
+    const json = await res.json()
+    return json.data ?? json ?? { affectedRows: 0 }
   },
 }

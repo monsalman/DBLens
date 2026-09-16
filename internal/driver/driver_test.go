@@ -550,3 +550,157 @@ func TestDriverMutateRow(t *testing.T) {
 		t.Fatalf("expected error on unsupported mutation type, got nil")
 	}
 }
+
+func TestDriverBatchInsert(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. PostgreSQL BuildBatchInsertSQL test
+	pgRows := []map[string]interface{}{
+		{"name": "Alice", "email": "alice@example.com"},
+		{"name": "Bob", "email": "bob@example.com"},
+	}
+	pgSQL, pgArgs, err := postgres.BuildBatchInsertSQL("public", "users", pgRows)
+	if err != nil {
+		t.Fatalf("pg BuildBatchInsertSQL failed: %v", err)
+	}
+	expectedPgSQL := `INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4)`
+	if pgSQL != expectedPgSQL {
+		t.Fatalf("expected pg SQL %q, got %q", expectedPgSQL, pgSQL)
+	}
+	if len(pgArgs) != 4 || pgArgs[0] != "alice@example.com" || pgArgs[1] != "Alice" || pgArgs[2] != "bob@example.com" || pgArgs[3] != "Bob" {
+		t.Fatalf("unexpected pg args: %v", pgArgs)
+	}
+
+	// 2. MySQL BuildBatchInsertSQL test
+	myRows := []map[string]interface{}{
+		{"name": "Alice", "email": "alice@example.com"},
+		{"name": "Bob", "email": "bob@example.com"},
+	}
+	mySQL, myArgs, err := mysql.BuildBatchInsertSQL("mydb", "users", myRows)
+	if err != nil {
+		t.Fatalf("mysql BuildBatchInsertSQL failed: %v", err)
+	}
+	expectedMySQL := "INSERT INTO `mydb`.`users` (`email`, `name`) VALUES (?, ?), (?, ?)"
+	if mySQL != expectedMySQL {
+		t.Fatalf("expected mysql SQL %q, got %q", expectedMySQL, mySQL)
+	}
+	if len(myArgs) != 4 || myArgs[0] != "alice@example.com" || myArgs[1] != "Alice" || myArgs[2] != "bob@example.com" || myArgs[3] != "Bob" {
+		t.Fatalf("unexpected mysql args: %v", myArgs)
+	}
+
+	// 3. SQLite execution tests
+	dbFile := "/tmp/dblens_batch_insert_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	drv, err := driver.NewDriver("sqlite://" + dbFile)
+	if err != nil {
+		t.Fatalf("failed to create sqlite driver: %v", err)
+	}
+	defer drv.Close()
+
+	_, err = drv.ExecuteQuery(ctx, `
+		CREATE TABLE members (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT UNIQUE,
+			name TEXT,
+			role TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// A. Normal batch insert
+	insertRows := []map[string]interface{}{
+		{"email": "mem1@example.com", "name": "Member 1", "role": "admin"},
+		{"email": "mem2@example.com", "name": "Member 2", "role": "user"},
+		{"email": "mem3@example.com", "name": "Member 3", "role": "user"},
+	}
+	res, err := drv.BatchInsert(ctx, "", "members", insertRows)
+	if err != nil {
+		t.Fatalf("failed to batch insert rows: %v", err)
+	}
+	if res.AffectedRows != 3 {
+		t.Fatalf("expected 3 affected rows, got %d", res.AffectedRows)
+	}
+
+	// Verify data
+	qRes, err := drv.QueryTableData(ctx, types.QueryOptions{Table: "members"})
+	if err != nil {
+		t.Fatalf("failed to query members: %v", err)
+	}
+	if len(qRes.Rows) != 3 {
+		t.Fatalf("expected 3 rows in database, got %d", len(qRes.Rows))
+	}
+
+	// B. Chunking test: > 500 parameters (e.g. 60 rows * 10 columns = 600 parameters)
+	_, err = drv.ExecuteQuery(ctx, `
+		CREATE TABLE wide_table (
+			c1 TEXT, c2 TEXT, c3 TEXT, c4 TEXT, c5 TEXT,
+			c6 TEXT, c7 TEXT, c8 TEXT, c9 TEXT, c10 TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create wide table: %v", err)
+	}
+
+	var wideRows []map[string]interface{}
+	for i := 0; i < 60; i++ {
+		row := make(map[string]interface{})
+		for j := 1; j <= 10; j++ {
+			row[fmt.Sprintf("c%d", j)] = fmt.Sprintf("val_%d_%d", i, j)
+		}
+		wideRows = append(wideRows, row)
+	}
+
+	wideRes, err := drv.BatchInsert(ctx, "", "wide_table", wideRows)
+	if err != nil {
+		t.Fatalf("failed chunked batch insert: %v", err)
+	}
+	if wideRes.AffectedRows != 60 {
+		t.Fatalf("expected 60 affected rows from chunked insert, got %d", wideRes.AffectedRows)
+	}
+
+	qWide, err := drv.QueryTableData(ctx, types.QueryOptions{Table: "wide_table", Limit: 100})
+	if err != nil {
+		t.Fatalf("failed to query wide table: %v", err)
+	}
+	if len(qWide.Rows) != 60 {
+		t.Fatalf("expected 60 rows in wide table, got %d", len(qWide.Rows))
+	}
+
+	// C. Transaction rollback on error (unique constraint violation)
+	dupRows := []map[string]interface{}{
+		{"email": "dup@example.com", "name": "Dup 1", "role": "user"},
+		{"email": "dup@example.com", "name": "Dup 2", "role": "user"}, // conflict!
+	}
+	_, err = drv.BatchInsert(ctx, "", "members", dupRows)
+	if err == nil {
+		t.Fatalf("expected error on duplicate email batch insert, got nil")
+	}
+
+	// Verify "dup@example.com" was not partially committed
+	qDup, err := drv.QueryTableData(ctx, types.QueryOptions{
+		Table: "members",
+		Filters: []types.Filter{
+			{Column: "email", Operator: "=", Value: "dup@example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to query dup: %v", err)
+	}
+	if len(qDup.Rows) != 0 {
+		t.Fatalf("expected 0 rows after rollback, got %d", len(qDup.Rows))
+	}
+
+	// D. Validation errors
+	_, err = drv.BatchInsert(ctx, "", "members", nil)
+	if err == nil {
+		t.Fatalf("expected error on nil rows, got nil")
+	}
+	_, err = drv.BatchInsert(ctx, "", "members", []map[string]interface{}{})
+	if err == nil {
+		t.Fatalf("expected error on empty rows, got nil")
+	}
+}

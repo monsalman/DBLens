@@ -76,6 +76,12 @@ type MutationResult struct {
 	GeneratedSQL string `json:"generatedSQL"`
 }
 
+type BatchInsertRequest struct {
+	Schema string                   `json:"schema"`
+	Table  string                   `json:"table"`
+	Rows   []map[string]interface{} `json:"rows"`
+}
+
 type ERDTable struct {
 	Name    string       `json:"name"`
 	Schema  string       `json:"schema"`
@@ -93,6 +99,7 @@ type Driver interface {
 	QueryTableData(ctx context.Context, opts QueryOptions) (*QueryResult, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
+	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)
 	Ping(ctx context.Context) error
 	Close() error

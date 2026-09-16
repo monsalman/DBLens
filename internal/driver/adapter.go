@@ -21,5 +21,6 @@ const (
 
 type Mutation = types.Mutation
 type MutationResult = types.MutationResult
+type BatchInsertRequest = types.BatchInsertRequest
 type ERDTable = types.ERDTable
 type Driver = types.Driver
