@@ -823,4 +823,149 @@ func TestGetTableDetails(t *testing.T) {
 	}
 }
 
+func TestExecuteQueryHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_query_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE items (id INT, name TEXT);")
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, "INSERT INTO items (id, name) VALUES (1, 'item1'), (2, 'item2');")
+	if err != nil {
+		t.Fatalf("failed to insert sample items: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	type queryResponse struct {
+		Data struct {
+			Columns      []string        `json:"columns"`
+			Rows         [][]interface{} `json:"rows"`
+			Elapsed      int64           `json:"elapsed"`
+			AffectedRows int64           `json:"affectedRows"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+
+	// 1. Valid SELECT query with {"query": "SELECT * FROM items ORDER BY id ASC;"}
+	{
+		body := `{"query": "SELECT * FROM items ORDER BY id ASC;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on valid query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if resp.Error != nil {
+			t.Fatalf("expected nil error in response, got: %s", *resp.Error)
+		}
+
+		if len(resp.Data.Columns) != 2 || resp.Data.Columns[0] != "id" || resp.Data.Columns[1] != "name" {
+			t.Fatalf("expected columns ['id', 'name'], got: %v", resp.Data.Columns)
+		}
+
+		if len(resp.Data.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got: %d", len(resp.Data.Rows))
+		}
+
+		// Row 1: id=1, name="item1"
+		row1Name, ok := resp.Data.Rows[0][1].(string)
+		if !ok || row1Name != "item1" {
+			t.Errorf("expected row 1 name 'item1', got: %v", resp.Data.Rows[0][1])
+		}
+
+		// Row 2: id=2, name="item2"
+		row2Name, ok := resp.Data.Rows[1][1].(string)
+		if !ok || row2Name != "item2" {
+			t.Errorf("expected row 2 name 'item2', got: %v", resp.Data.Rows[1][1])
+		}
+	}
+
+	// 2. Syntax / Database error: non-existent table
+	{
+		body := `{"query": "SELECT * FROM non_existent_table_xyz;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 Internal Server Error for invalid query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+
+		if resp.Error == nil || *resp.Error == "" {
+			t.Fatalf("expected non-empty error in response, got: %v", resp.Error)
+		}
+	}
+
+	// 3. Empty query: {"query": ""}
+	{
+		body := `{"query": ""}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for empty query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+
+		if resp.Error == nil || *resp.Error == "" {
+			t.Fatalf("expected non-empty error for empty query, got: %v", resp.Error)
+		}
+	}
+
+	// 4. Backwards compatibility: {"sql": "SELECT COUNT(*) FROM items;"}
+	{
+		body := `{"sql": "SELECT COUNT(*) FROM items;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for 'sql' field query, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+
 
