@@ -34,6 +34,33 @@ export interface ERDForeignKey {
   refColumn: string
 }
 
+export interface TableForeignKey {
+  name?: string
+  column: string
+  refTable: string
+  refColumn: string
+  onUpdate?: string
+  onDelete?: string
+}
+
+export interface IndexMeta {
+  name: string
+  columns: string[]
+  isUnique: boolean
+  isPrimary: boolean
+  type?: string
+}
+
+export interface TableDetailResponse {
+  name?: string
+  schema?: string
+  dialect?: string
+  columns: ColumnMeta[]
+  fks?: TableForeignKey[]
+  indexes?: IndexMeta[]
+  ddl?: string
+}
+
 export interface ColumnMeta {
   name: string
   type: string
@@ -304,7 +331,7 @@ export const api = {
     table: string,
     schema: string = 'public',
     profiles?: ConnectionConfig[]
-  ): Promise<{ columns: ColumnMeta[]; fks?: any[]; indexes?: string[] }> {
+  ): Promise<TableDetailResponse> {
     const dsn = this._getDSN(connId, profiles)
     try {
       const r = await fetch(
@@ -317,6 +344,26 @@ export const api = {
     } catch {
       return { columns: [] }
     }
+  },
+
+  async getTableDDL(
+    connId: string,
+    table: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ table: string; schema?: string; dialect?: string; ddl: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/ddl${schemaParam}`,
+      { headers: this._headers(dsn) }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to generate DDL')
+    }
+    const json = await r.json()
+    return json.data ?? json
   },
 
   async getSchema(connId: string, schemaName?: string, profiles?: ConnectionConfig[]): Promise<SchemaMeta> {
