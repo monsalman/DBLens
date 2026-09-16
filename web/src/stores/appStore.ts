@@ -47,6 +47,10 @@ interface AppState {
   }
   openDryRunModal: (title: string, sql: string, onConfirm: () => void) => void
   closeDryRunModal: () => void
+
+  // Command Palette
+  isCommandPaletteOpen: boolean
+  setCommandPaletteOpen: (open: boolean) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -152,6 +156,9 @@ export const useAppStore = create<AppState>()(
             onConfirm: () => {},
           },
         }),
+
+      isCommandPaletteOpen: false,
+      setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
     }),
     {
       name: 'dblens-storage',
