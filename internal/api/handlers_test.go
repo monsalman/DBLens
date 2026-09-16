@@ -14,6 +14,7 @@ import (
 
 	"github.com/dblens/dblens/internal/api"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/driver"
 )
 
 func TestMaskDSN(t *testing.T) {
@@ -624,4 +625,202 @@ func TestCommandPaletteMetadataEndpoints(t *testing.T) {
 		t.Errorf("expected palette_items_view in metadata response")
 	}
 }
+
+func TestGetTableDDL(t *testing.T) {
+	dbFile := "/tmp/dblens_api_ddl_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY,
+			sku TEXT NOT NULL UNIQUE,
+			price REAL DEFAULT 0.0
+		);
+		CREATE INDEX idx_products_price ON products(price);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/tables/products/ddl?schema=main", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get table ddl, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res struct {
+		Data struct {
+			Table   string `json:"table"`
+			Schema  string `json:"schema"`
+			Dialect string `json:"dialect"`
+			DDL     string `json:"ddl"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode ddl response: %v", err)
+	}
+
+	if res.Data.Table != "products" {
+		t.Errorf("expected table 'products', got %q", res.Data.Table)
+	}
+	if res.Data.Dialect != "sqlite" {
+		t.Errorf("expected dialect 'sqlite', got %q", res.Data.Dialect)
+	}
+	if !strings.Contains(res.Data.DDL, "CREATE TABLE products") && !strings.Contains(res.Data.DDL, "CREATE TABLE `products`") {
+		t.Errorf("expected CREATE TABLE in DDL, got: %s", res.Data.DDL)
+	}
+	if !strings.Contains(res.Data.DDL, "idx_products_price") {
+		t.Errorf("expected idx_products_price in DDL, got: %s", res.Data.DDL)
+	}
+}
+
+func TestGetTableDetails(t *testing.T) {
+	dbFile := "/tmp/dblens_api_table_details_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE categories (
+			id INTEGER PRIMARY KEY,
+			title TEXT NOT NULL
+		);
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY,
+			cat_id INTEGER,
+			sku TEXT NOT NULL,
+			price REAL DEFAULT 9.99,
+			CONSTRAINT fk_cat FOREIGN KEY (cat_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL
+		);
+		CREATE UNIQUE INDEX idx_items_sku ON items(sku);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create test tables: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/tables/items?schema=main", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get table details, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res struct {
+		Data    driver.TableDetail `json:"data"`
+		Error   *string            `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode table details response: %v", err)
+	}
+
+	detail := res.Data
+	if detail.Name != "items" {
+		t.Errorf("expected table 'items', got %q", detail.Name)
+	}
+	if detail.Dialect != "sqlite" {
+		t.Errorf("expected dialect 'sqlite', got %q", detail.Dialect)
+	}
+
+	// Verify columns
+	if len(detail.Columns) != 4 {
+		t.Fatalf("expected 4 columns, got %d", len(detail.Columns))
+	}
+	colMap := make(map[string]driver.ColumnMeta)
+	for _, c := range detail.Columns {
+		colMap[c.Name] = c
+	}
+	if !colMap["id"].IsPrimary {
+		t.Errorf("expected id to be primary key")
+	}
+	if !colMap["cat_id"].IsForeignKey {
+		t.Errorf("expected cat_id to be foreign key")
+	}
+	if colMap["sku"].IsNullable {
+		t.Errorf("expected sku to be NOT NULL")
+	}
+	if colMap["price"].Default == nil || !strings.Contains(*colMap["price"].Default, "9.99") {
+		t.Errorf("expected price default 9.99, got %+v", colMap["price"].Default)
+	}
+
+	// Verify FKs
+	if len(detail.FKs) == 0 {
+		t.Fatalf("expected at least 1 FK, got 0")
+	}
+	fk := detail.FKs[0]
+	if fk.Column != "cat_id" || fk.RefTable != "categories" || fk.RefColumn != "id" {
+		t.Errorf("unexpected FK mapping: %+v", fk)
+	}
+	if fk.OnUpdate != "CASCADE" || fk.OnDelete != "SET NULL" {
+		t.Errorf("unexpected FK action: update=%s delete=%s", fk.OnUpdate, fk.OnDelete)
+	}
+
+	// Verify Indexes
+	foundSkuIdx := false
+	for _, idx := range detail.Indexes {
+		if idx.Name == "idx_items_sku" {
+			foundSkuIdx = true
+			if !idx.IsUnique {
+				t.Errorf("expected idx_items_sku to be unique")
+			}
+		}
+	}
+	if !foundSkuIdx {
+		t.Errorf("idx_items_sku index not found in table details")
+	}
+
+	// Verify DDL
+	if !strings.Contains(detail.DDL, "CREATE TABLE items") && !strings.Contains(detail.DDL, "CREATE TABLE `items`") {
+		t.Errorf("expected CREATE TABLE in detail.DDL, got: %s", detail.DDL)
+	}
+
+	// Verify control character sanitization (400 Bad Request)
+	badReq := httptest.NewRequest("GET", "/api/connections/default/tables/items%00injection?schema=main", nil)
+	badReq.Header.Set("X-DBLENS-DSN", dsn)
+	badRec := httptest.NewRecorder()
+	router.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request on table with null byte, got %d", badRec.Code)
+	}
+
+	badDdlReq := httptest.NewRequest("GET", "/api/connections/default/tables/items/ddl?schema=main%0Ainjected", nil)
+	badDdlReq.Header.Set("X-DBLENS-DSN", dsn)
+	badDdlRec := httptest.NewRecorder()
+	router.ServeHTTP(badDdlRec, badDdlReq)
+	if badDdlRec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request on ddl schema with newline, got %d", badDdlRec.Code)
+	}
+}
+
 
