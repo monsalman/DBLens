@@ -255,7 +255,8 @@ func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
 }
 
 type ExecuteQueryRequest struct {
-	SQL string `json:"sql"`
+	SQL   string `json:"sql"`
+	Query string `json:"query"`
 }
 
 func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
@@ -271,12 +272,17 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SQL == "" {
+	sql := req.SQL
+	if sql == "" {
+		sql = req.Query
+	}
+
+	if sql == "" {
 		sendError(w, http.StatusBadRequest, "sql field is required")
 		return
 	}
 
-	res, err := entry.Driver.ExecuteQuery(r.Context(), req.SQL)
+	res, err := entry.Driver.ExecuteQuery(r.Context(), sql)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
