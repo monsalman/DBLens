@@ -75,6 +75,51 @@ export interface ColumnMeta {
   default?: string | null
 }
 
+export interface RenameColumnSpec {
+  from: string
+  to: string
+}
+
+export interface AlterColumnSpec {
+  name: string
+  type?: string
+  nullable?: boolean
+  default?: string | null
+  dropDefault?: boolean
+}
+
+export interface AlterTablePayload {
+  schema?: string
+  table?: string
+  addedColumns?: ColumnMeta[]
+  droppedColumns?: string[]
+  renamedColumns?: RenameColumnSpec[]
+  alteredColumns?: AlterColumnSpec[]
+  addedIndexes?: IndexMeta[]
+  droppedIndexes?: string[]
+  addedForeignKeys?: TableForeignKey[]
+  droppedForeignKeys?: string[]
+  statements?: string[]
+  sql?: string
+}
+
+export interface AlterTablePreviewResponse {
+  table: string
+  schema?: string
+  dialect: string
+  statements: string[]
+  sql: string
+}
+
+export interface AlterTableApplyResponse {
+  table: string
+  schema?: string
+  statementsExecuted: number
+  elapsedMs: number
+  statements: string[]
+  message: string
+}
+
 export interface ERDTable {
   name: string
   schema: string
@@ -409,6 +454,56 @@ export const api = {
     if (!r.ok) {
       const err = await r.json().catch(() => ({}))
       throw new Error(err.error || 'Failed to generate DDL')
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async alterTablePreview(
+    connId: string,
+    table: string,
+    payload: AlterTablePayload,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AlterTablePreviewResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter-preview${schemaParam}`,
+      {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify(payload),
+      }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to generate alter table preview')
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async alterTableApply(
+    connId: string,
+    table: string,
+    payload: AlterTablePayload,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AlterTableApplyResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter${schemaParam}`,
+      {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify(payload),
+      }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to apply alter table changes')
     }
     const json = await r.json()
     return json.data ?? json

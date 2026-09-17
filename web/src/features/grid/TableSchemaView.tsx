@@ -8,9 +8,11 @@ import {
   ArrowRight,
   CheckCircle2,
   XCircle,
+  Wrench,
 } from 'lucide-react'
 import { api, type TableDetailResponse } from '../../lib/api'
 import { DdlModal } from './DdlModal'
+import { TableDesignerModal } from './TableDesignerModal'
 
 interface TableSchemaViewProps {
   connId: string
@@ -33,6 +35,7 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SchemaSubTab>('columns')
   const [ddlModalOpen, setDdlModalOpen] = useState(false)
+  const [designerModalOpen, setDesignerModalOpen] = useState(false)
   const [ddlLoading, setDdlLoading] = useState(false)
   const [ddlError, setDdlError] = useState<string | null>(null)
   const [ddlData, setDdlData] = useState<{ ddl: string; dialect?: string } | null>(null)
@@ -41,6 +44,7 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
     setDdlData(null)
     setDdlError(null)
     setDdlModalOpen(false)
+    setDesignerModalOpen(false)
   }, [connId, schema, table])
 
   const columns = detail?.columns ?? []
@@ -147,6 +151,15 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
           >
             <Code2 className="w-3.5 h-3.5" />
             <span>Generate DDL</span>
+          </button>
+
+          <button
+            onClick={() => setDesignerModalOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90 text-xs font-mono font-medium transition-colors shadow-xs"
+            title="Visual Table Designer & Alter Table"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Table Designer</span>
           </button>
         </div>
       </div>
@@ -378,6 +391,17 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
         dialect={ddlData?.dialect}
         loading={ddlLoading}
         error={ddlError}
+      />
+
+      {/* Visual Table Designer Modal */}
+      <TableDesignerModal
+        isOpen={designerModalOpen}
+        onClose={() => setDesignerModalOpen(false)}
+        connId={connId}
+        table={table}
+        schema={schema}
+        detail={detail}
+        onRefresh={onRefresh}
       />
     </div>
   )
