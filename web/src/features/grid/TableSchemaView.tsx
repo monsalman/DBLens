@@ -9,8 +9,10 @@ import {
   CheckCircle2,
   XCircle,
   Wrench,
+  GitCompare,
 } from 'lucide-react'
 import { api, type TableDetailResponse } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
 import { DdlModal } from './DdlModal'
 import { TableDesignerModal } from './TableDesignerModal'
 
@@ -71,6 +73,15 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
     } finally {
       setDdlLoading(false)
     }
+  }
+
+  const handleCompareTable = () => {
+    useAppStore.getState().setDiffPreload({
+      sourceConnId: connId,
+      sourceSchema: schema || 'public',
+      sourceTable: table,
+    })
+    useAppStore.getState().setActiveTab('diff')
   }
 
   return (
@@ -143,6 +154,15 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
           )}
+
+          <button
+            onClick={handleCompareTable}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--surface)] text-[var(--fg)] hover:bg-[var(--hover)] text-xs font-mono font-medium transition-colors cursor-pointer"
+            title="Compare Table Schema in Diff Tool"
+          >
+            <GitCompare className="w-3.5 h-3.5 text-[var(--accent)]" />
+            <span>Compare Table</span>
+          </button>
 
           <button
             onClick={handleOpenDDL}

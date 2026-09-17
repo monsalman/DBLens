@@ -120,6 +120,93 @@ export interface AlterTableApplyResponse {
   message: string
 }
 
+export type DiffStatus = 'ADDED' | 'REMOVED' | 'MODIFIED' | 'IDENTICAL'
+
+export interface ColumnDiff {
+  name: string
+  status: DiffStatus
+  sourceType?: string
+  targetType?: string
+  sourceNullable?: boolean
+  targetNullable?: boolean
+  sourceDefault?: string | null
+  targetDefault?: string | null
+  sourcePrimary?: boolean
+  targetPrimary?: boolean
+  changes?: string[]
+}
+
+export interface IndexDiff {
+  name: string
+  status: DiffStatus
+  columns: string[]
+  isUnique: boolean
+  type?: string
+}
+
+export interface FKDiff {
+  name: string
+  status: DiffStatus
+  column: string
+  refTable: string
+  refColumn: string
+  onUpdate?: string
+  onDelete?: string
+}
+
+export interface TableDiff {
+  name: string
+  schema?: string
+  status: DiffStatus
+  columns: ColumnDiff[]
+  indexes: IndexDiff[]
+  foreignKeys: FKDiff[]
+  migrationSql: string[]
+  sql?: string
+}
+
+export interface SchemaDiffResult {
+  sourceSchema: string
+  targetSchema: string
+  sourceDialect?: string
+  targetDialect: string
+  totalTables: number
+  addedCount: number
+  removedCount: number
+  modifiedCount: number
+  identicalCount: number
+  tables: TableDiff[]
+  migrationSql: string[]
+  sql: string
+}
+
+export interface DiffEndpointSpec {
+  connId?: string
+  schema?: string
+  table?: string
+  dsn?: string
+}
+
+export interface SchemaDiffRequest {
+  source: DiffEndpointSpec
+  target: DiffEndpointSpec
+  targetDsn?: string
+  sourceDsn?: string
+}
+
+export interface SchemaDiffApplyRequest {
+  statements: string[]
+  targetDsn?: string
+  readOnly?: boolean
+}
+
+export interface SchemaDiffApplyResponse {
+  statementsExecuted: number
+  elapsedMs: number
+  statements: string[]
+  message: string
+}
+
 export interface ERDTable {
   name: string
   schema: string
@@ -855,6 +942,69 @@ export const api = {
         if (j?.error) msg = j.error
       } catch {}
       throw new Error(msg || 'Import SQL failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async compareSchema(
+    connId: string,
+    req: SchemaDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaDiffResult> {
+    const srcDsn = req.sourceDsn || req.source.dsn || this._getDSN(req.source.connId || connId, profiles)
+    const tgtDsn = req.targetDsn || req.target.dsn || (req.target.connId ? this._getDSN(req.target.connId, profiles) : srcDsn)
+    const payload: SchemaDiffRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const headers = this._headers(srcDsn)
+    const res = await fetch(`/api/connections/${connId}/diff`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Schema comparison failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applySchemaDiff(
+    connId: string,
+    req: SchemaDiffApplyRequest,
+    profiles?: ConnectionConfig[],
+    readOnly?: boolean
+  ): Promise<SchemaDiffApplyResponse> {
+    const dsn = req.targetDsn || this._getDSN(connId, profiles)
+    const isReadOnly = readOnly ?? req.readOnly ?? profiles?.find(p => p.id === connId)?.readOnly ?? false
+    const headers: Record<string, string> = {
+      ...(this._headers(dsn) as Record<string, string>),
+    }
+    if (isReadOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    const res = await fetch(`/api/connections/${connId}/diff/apply`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...req, readOnly: isReadOnly }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Apply migration failed')
     }
     const json = await res.json()
     return json.data ?? json

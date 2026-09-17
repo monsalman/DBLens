@@ -10,8 +10,8 @@ interface Props {
   onAdd: () => void
   onEdit: (conn: ConnectionConfig) => void
   onDeleted: (id: string) => void
-  activeTab: 'table' | 'sql' | 'erd'
-  onTabChange: (tab: 'table' | 'sql' | 'erd') => void
+  activeTab: 'table' | 'sql' | 'erd' | 'diff'
+  onTabChange: (tab: 'table' | 'sql' | 'erd' | 'diff') => void
   selectedSchema: string
   onSchemaChange: (schema: string) => void
   selectedTable: string | null
@@ -110,6 +110,7 @@ export const Header: React.FC<Props> = ({
             { id: 'table' as const, label: 'Tables' },
             { id: 'sql' as const, label: 'SQL Editor' },
             { id: 'erd' as const, label: 'ERD' },
+            { id: 'diff' as const, label: 'Schema Diff' },
           ].map(tab => (
             <button key={tab.id} onClick={() => onTabChange(tab.id)}
               className={`px-2.5 py-1 text-[11px] rounded transition-colors ${

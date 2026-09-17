@@ -15,6 +15,7 @@ import {
   Layers,
   Server,
   CornerDownLeft,
+  GitCompare,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -23,7 +24,7 @@ import { useAppStore } from '../stores/appStore'
 export interface CommandPaletteProps {
   connections: ConnectionConfig[]
   activeConnId: string | null
-  activeTab: 'table' | 'sql' | 'erd'
+  activeTab: 'table' | 'sql' | 'erd' | 'diff'
   selectedSchema: string
   selectedTable: string | null
   isDark: boolean
@@ -31,7 +32,7 @@ export interface CommandPaletteProps {
   onSelectTable: (table: string) => void
   onSelectSchema: (schema: string) => void
   onSelectDatabase?: (db: string) => void
-  onTabChange: (tab: 'table' | 'sql' | 'erd') => void
+  onTabChange: (tab: 'table' | 'sql' | 'erd' | 'diff') => void
   onToggleTheme: () => void
   onNewConnection: () => void
   onDisconnect: () => void
@@ -211,6 +212,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['erd', 'schema', 'diagram', 'graph', 'relations'],
       onSelect: () => {
         onTabChange('erd')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:diff',
+      title: 'Go to Schema Diff / Sync',
+      subtitle: 'Compare schemas, tables, and generate migration SQL',
+      category: 'Actions',
+      icon: GitCompare,
+      badge: 'DIFF',
+      keywords: ['diff', 'schema', 'compare', 'sync', 'migration'],
+      onSelect: () => {
+        onTabChange('diff')
         closePalette()
       },
     })

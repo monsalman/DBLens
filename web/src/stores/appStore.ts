@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ConnectionConfig, QueryHistoryItem } from '../lib/api'
 
-export type ActiveTab = 'table' | 'sql' | 'erd'
+export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff'
 
 export interface SqlTab {
   id: string
@@ -59,6 +59,8 @@ interface AppState {
   setSelectedSchema: (schema: string) => void
   selectedTable: string | null
   setSelectedTable: (table: string | null) => void
+  diffPreload: { sourceConnId?: string; sourceSchema?: string; sourceTable?: string } | null
+  setDiffPreload: (preload: { sourceConnId?: string; sourceSchema?: string; sourceTable?: string } | null) => void
 
   // SQL Console History
   queryHistory: QueryHistoryItem[]
@@ -142,6 +144,8 @@ export const useAppStore = create<AppState>()(
       setSelectedSchema: (selectedSchema) => set({ selectedSchema, selectedTable: null }),
       selectedTable: null,
       setSelectedTable: (selectedTable) => set({ selectedTable }),
+      diffPreload: null,
+      setDiffPreload: (diffPreload) => set({ diffPreload }),
 
       queryHistory: [
         {
