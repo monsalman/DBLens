@@ -967,5 +967,127 @@ func TestExecuteQueryHandler(t *testing.T) {
 	}
 }
 
+func TestExplainQueryHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_explain_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INT);")
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE INDEX idx_age ON users(age);")
+	if err != nil {
+		t.Fatalf("failed to create index: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	type explainResponse struct {
+		Data *driver.ExplainResult `json:"data"`
+		Error *string              `json:"error"`
+	}
+
+	// 1. Valid EXPLAIN query on /connections/default/explain
+	{
+		body := `{"query": "SELECT * FROM users WHERE age > 20;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on valid explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp explainResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if resp.Error != nil {
+			t.Fatalf("expected nil error, got: %s", *resp.Error)
+		}
+		if resp.Data == nil {
+			t.Fatalf("expected non-nil data in explain response")
+		}
+		if resp.Data.Dialect != "sqlite" {
+			t.Errorf("expected dialect sqlite, got: %s", resp.Data.Dialect)
+		}
+		if resp.Data.Root == nil {
+			t.Fatalf("expected non-nil root plan node")
+		}
+		if resp.Data.Raw == "" {
+			t.Errorf("expected non-empty raw explain output")
+		}
+	}
+
+	// 2. Valid EXPLAIN query on /connections/default/databases/main/explain
+	{
+		body := `{"sql": "SELECT * FROM users ORDER BY name;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/databases/main/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on database explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp explainResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp.Data == nil || resp.Data.Root == nil {
+			t.Fatalf("expected valid explain plan data")
+		}
+	}
+
+	// 3. Empty query returns 400
+	{
+		body := `{"sql": "   "}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for empty explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 4. Invalid SQL query returns 500
+	{
+		body := `{"sql": "SELECT * FROM non_existent_table_xyz;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 for invalid query explain, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+
 
 
