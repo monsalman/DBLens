@@ -317,7 +317,7 @@ export const api = {
   },
 
   _getDSN(connId: string, profiles?: ConnectionConfig[]): string {
-    const allProfiles = profiles ?? api.getProfiles()
+    const allProfiles = profiles && profiles.length > 0 ? profiles : api.getProfiles()
     return allProfiles.find(p => p.id === connId)?.dsn ?? ''
   },
 

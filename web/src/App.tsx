@@ -80,11 +80,16 @@ export function App() {
   useEffect(() => {
     const localProfiles = api.getProfiles()
     setConnections(localProfiles)
+    useAppStore.getState().setConnections(localProfiles)
     if (localProfiles.length > 0 && !activeConnId) {
       setActiveConnId(localProfiles[0].id)
       useAppStore.getState().setActiveConnectionId(localProfiles[0].id)
     }
   }, [])
+
+  useEffect(() => {
+    useAppStore.getState().setConnections(connections)
+  }, [connections])
 
   useEffect(() => {
     if (activeConnId) {
