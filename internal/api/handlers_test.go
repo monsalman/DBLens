@@ -5,15 +5,18 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dblens/dblens/internal/api"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 )
 
@@ -1350,6 +1353,351 @@ func TestAlterTablePreviewAndApply(t *testing.T) {
 		t.Fatalf("expected error querying rolled-back column 'dup_col', but it exists (rollback failed)")
 	}
 }
+
+func TestSchemaDiffAndApply(t *testing.T) {
+	ctx := context.Background()
+	srcDbFile := filepath.Join(t.TempDir(), "src.db")
+	tgtDbFile := filepath.Join(t.TempDir(), "tgt.db")
+	srcDSN := "sqlite://" + srcDbFile
+	tgtDSN := "sqlite://" + tgtDbFile
+
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	srcEntry, err := mgr.GetByDSN(srcDSN)
+	if err != nil {
+		t.Fatalf("failed to open src db: %v", err)
+	}
+	tgtEntry, err := mgr.GetByDSN(tgtDSN)
+	if err != nil {
+		t.Fatalf("failed to open tgt db: %v", err)
+	}
+
+	// Setup schemas:
+	// src has authors (id, name, bio) and books (id, title)
+	// tgt has authors (id, name) and old_logs (id)
+	_, err = srcEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, bio TEXT);")
+	if err != nil {
+		t.Fatalf("src setup failed: %v", err)
+	}
+	_, err = srcEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT);")
+	if err != nil {
+		t.Fatalf("src setup failed: %v", err)
+	}
+
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE old_logs (id INTEGER PRIMARY KEY);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+
+	// 1. Test single table diff (authors)
+	tableDiffPayload := fmt.Sprintf(`{
+		"source": { "connId": "src", "schema": "main", "table": "authors", "dsn": "%s" },
+		"target": { "connId": "tgt", "schema": "main", "table": "authors", "dsn": "%s" }
+	}`, srcDSN, tgtDSN)
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewBufferString(tableDiffPayload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("table diff status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var tableDiffResp struct {
+		Data diff.SchemaDiffResult `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &tableDiffResp); err != nil {
+		t.Fatalf("failed to unmarshal table diff response: %v", err)
+	}
+
+	if tableDiffResp.Data.TotalTables != 1 {
+		t.Fatalf("expected 1 table in single table diff, got %d", tableDiffResp.Data.TotalTables)
+	}
+	if tableDiffResp.Data.ModifiedCount != 1 {
+		t.Fatalf("expected 1 modified table, got %d", tableDiffResp.Data.ModifiedCount)
+	}
+	if len(tableDiffResp.Data.MigrationSQL) == 0 {
+		t.Fatalf("expected migration SQL for authors table diff")
+	}
+
+	// 2. Test full schema diff
+	schemaDiffPayload := fmt.Sprintf(`{
+		"source": { "connId": "src", "schema": "main", "dsn": "%s" },
+		"target": { "connId": "tgt", "schema": "main", "dsn": "%s" }
+	}`, srcDSN, tgtDSN)
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewBufferString(schemaDiffPayload))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("schema diff status = %d, body: %s", w2.Code, w2.Body.String())
+	}
+
+	var schemaDiffResp struct {
+		Data diff.SchemaDiffResult `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &schemaDiffResp); err != nil {
+		t.Fatalf("failed to unmarshal schema diff response: %v", err)
+	}
+
+	// books is added, old_logs is removed, authors is modified
+	if schemaDiffResp.Data.AddedCount != 1 {
+		t.Errorf("expected 1 added table (books), got %d", schemaDiffResp.Data.AddedCount)
+	}
+	if schemaDiffResp.Data.RemovedCount != 1 {
+		t.Errorf("expected 1 removed table (old_logs), got %d", schemaDiffResp.Data.RemovedCount)
+	}
+	if schemaDiffResp.Data.ModifiedCount != 1 {
+		t.Errorf("expected 1 modified table (authors), got %d", schemaDiffResp.Data.ModifiedCount)
+	}
+
+	// 3. Test apply diff to target
+	applyPayload, _ := json.Marshal(map[string]interface{}{
+		"statements": schemaDiffResp.Data.MigrationSQL,
+		"targetDsn":  tgtDSN,
+	})
+
+	req3 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(applyPayload))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("apply diff status = %d, body: %s", w3.Code, w3.Body.String())
+	}
+
+	// Verify target now has books and authors has bio
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "SELECT id, title FROM books")
+	if err != nil {
+		t.Fatalf("books table not found in target after migration: %v", err)
+	}
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "SELECT bio FROM authors")
+	if err != nil {
+		t.Fatalf("bio column not found on authors in target after migration: %v", err)
+	}
+}
+
+func TestApplyDiffCommentsAndErrorHandling(t *testing.T) {
+	ctx := context.Background()
+	tgtDbFile := filepath.Join(t.TempDir(), "tgt_apply.db")
+	tgtDSN := "sqlite://" + tgtDbFile
+
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	tgtEntry, err := mgr.GetByDSN(tgtDSN)
+	if err != nil {
+		t.Fatalf("failed to open tgt db: %v", err)
+	}
+
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+
+	// 1. Statements with empty lines and comments (-- ...)
+	payloadWithComments, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- First comment line",
+			"",
+			"   ",
+			"-- Another comment\n-- Second comment line",
+			"ALTER TABLE users ADD COLUMN name TEXT;",
+			"-- Trailing comment",
+			"ALTER TABLE users ADD COLUMN email TEXT;",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadWithComments))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			StatementsExecuted int      `json:"statementsExecuted"`
+			Statements         []string `json:"statements"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.Data.StatementsExecuted != 2 {
+		t.Fatalf("expected 2 statements executed (comments and empty lines ignored), got %d", resp.Data.StatementsExecuted)
+	}
+	if len(resp.Data.Statements) != 2 {
+		t.Fatalf("expected 2 recorded statements, got %d", len(resp.Data.Statements))
+	}
+
+	// 2. All statements are comments or empty
+	payloadOnlyComments, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- Just a comment",
+			"   ",
+			"-- Another comment",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadOnlyComments))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for only comments, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp2 struct {
+		Data struct {
+			StatementsExecuted int `json:"statementsExecuted"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	if resp2.Data.StatementsExecuted != 0 {
+		t.Fatalf("expected 0 statements executed, got %d", resp2.Data.StatementsExecuted)
+	}
+
+	// 3. Statement failure reports statement index and error
+	payloadWithError, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- comment before",
+			"ALTER TABLE users ADD COLUMN age INTEGER;",
+			"INVALID SQL SYNTAX HERE;",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req3 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadWithError))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusInternalServerError && w3.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 or 500 on statement error, got %d: %s", w3.Code, w3.Body.String())
+	}
+	bodyStr := w3.Body.String()
+	if !strings.Contains(bodyStr, "statement 2") {
+		t.Fatalf("expected error indicating statement 2 failed, got: %s", bodyStr)
+	}
+}
+
+func TestDiffSchemasControlChars(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	tests := []struct {
+		name string
+		req  map[string]interface{}
+	}{
+		{
+			name: "control char in source table",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users\x00inject", "schema": "public"},
+				"target": map[string]string{"table": "users", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in source schema",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "pub\nlic"},
+				"target": map[string]string{"table": "users", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in target table",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "public"},
+				"target": map[string]string{"table": "users\rinject", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in target schema",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "public"},
+				"target": map[string]string{"table": "users", "schema": "pub\x01lic"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := json.Marshal(tc.req)
+			req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 Bad Request, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "control characters") {
+				t.Fatalf("expected error message to mention control characters, got: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestApplyDiffReadOnlyProtection(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Rejection via X-DBLENS-READONLY header
+	payload, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{"ALTER TABLE users ADD COLUMN age INTEGER;"},
+		"targetDsn":  "sqlite:///tmp/test_readonly.db",
+	})
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden with X-DBLENS-READONLY header, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Target connection is read-only") {
+		t.Fatalf("expected error 'Target connection is read-only', got: %s", w.Body.String())
+	}
+
+	// 2. Rejection via readOnly: true in body
+	payloadRO, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{"ALTER TABLE users ADD COLUMN age INTEGER;"},
+		"targetDsn":  "sqlite:///tmp/test_readonly.db",
+		"readOnly":   true,
+	})
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadRO))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden with readOnly: true in body, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), "Target connection is read-only") {
+		t.Fatalf("expected error 'Target connection is read-only', got: %s", w2.Body.String())
+	}
+}
+
 
 
 

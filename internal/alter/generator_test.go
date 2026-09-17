@@ -285,6 +285,40 @@ func TestSQLInjectionRejectionInDefaultValues(t *testing.T) {
 	}
 }
 
+func TestPostgresDefaultValueTypeCastsAndSequences(t *testing.T) {
+	req := types.AlterTableRequest{
+		Table: "users",
+		AddedColumns: []types.ColumnMeta{
+			{Name: "status", Type: "VARCHAR(50)", Default: ptr("'active'::character varying")},
+			{Name: "id", Type: "BIGINT", Default: ptr("nextval('users_id_seq'::regclass)")},
+			{Name: "code", Type: "TEXT", Default: ptr("'DEF'::text")},
+			{Name: "seq", Type: "INTEGER", Default: ptr("nextval('my_seq')")},
+		},
+		AlteredColumns: []types.AlterColumnSpec{
+			{Name: "role", Default: ptr("'guest'::character varying")},
+		},
+	}
+
+	_, sql, err := alter.GenerateAlterDDL("postgres", req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedSubstrings := []string{
+		"DEFAULT 'active'::character varying",
+		"DEFAULT nextval('users_id_seq'::regclass)",
+		"DEFAULT 'DEF'::text",
+		"DEFAULT nextval('my_seq')",
+		"ALTER TABLE \"users\" ALTER COLUMN \"role\" SET DEFAULT 'guest'::character varying",
+	}
+
+	for _, sub := range expectedSubstrings {
+		if !strings.Contains(sql, sub) {
+			t.Errorf("expected SQL to contain %q, but got:\n%s", sub, sql)
+		}
+	}
+}
+
 func TestSQLiteUnsupportedOperationsRejected(t *testing.T) {
 	// 1. Altered columns
 	altReq := types.AlterTableRequest{
