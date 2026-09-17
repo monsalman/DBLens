@@ -11,7 +11,9 @@ import (
 
 	"github.com/dblens/dblens/internal/alter"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
+	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -1190,5 +1192,313 @@ func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
 		"statementsExecuted": executedCount,
 		"affectedRows":       totalAffected,
 		"message":            fmt.Sprintf("Successfully executed %d SQL statements", executedCount),
+	})
+}
+
+type DiffEndpointSpec struct {
+	ConnID string `json:"connId,omitempty"`
+	Schema string `json:"schema,omitempty"`
+	Table  string `json:"table,omitempty"`
+	DSN    string `json:"dsn,omitempty"`
+}
+
+type SchemaDiffRequest struct {
+	Source    DiffEndpointSpec `json:"source"`
+	Target    DiffEndpointSpec `json:"target"`
+	TargetDSN string           `json:"targetDsn,omitempty"`
+	SourceDSN string           `json:"sourceDsn,omitempty"`
+}
+
+type SchemaDiffApplyRequest struct {
+	Statements []string `json:"statements"`
+	TargetDSN  string   `json:"targetDsn,omitempty"`
+	ReadOnly   bool     `json:"readOnly,omitempty"`
+}
+
+func (h *Handler) resolveDriverWithFallback(r *http.Request, explicitDSN, connID string) (*connection.PoolEntry, error) {
+	explicitDSN = strings.TrimSpace(explicitDSN)
+	if explicitDSN != "" {
+		return h.mgr.GetByDSN(explicitDSN)
+	}
+
+	connID = strings.TrimSpace(connID)
+	if connID != "" {
+		if globalDSN, ok := h.mgr.GetGlobalDSNByID(connID); ok {
+			return h.mgr.GetByDSN(globalDSN)
+		}
+	}
+
+	urlConnID := chi.URLParam(r, "connId")
+	hdrDSN := strings.TrimSpace(r.Header.Get("X-DBLENS-DSN"))
+	if (connID == "" || connID == urlConnID) && hdrDSN != "" {
+		return h.mgr.GetByDSN(hdrDSN)
+	}
+	if hdrDSN != "" {
+		return h.mgr.GetByDSN(hdrDSN)
+	}
+
+	if connID != "" {
+		return nil, fmt.Errorf("could not resolve connection profile for id: %s", connID)
+	}
+
+	return h.resolveDriver(r)
+}
+
+func defaultSchemaForDriver(d types.Driver) string {
+	switch alter.NormalizeDialect(d.Dialect()) {
+	case "postgres":
+		return "public"
+	case "sqlite":
+		return "main"
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) DiffSchemas(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	var req SchemaDiffRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if hasControlChars(req.Source.Schema) || hasControlChars(req.Source.Table) ||
+		hasControlChars(req.Target.Schema) || hasControlChars(req.Target.Table) {
+		sendError(w, http.StatusBadRequest, "table or schema name contains invalid control characters")
+		return
+	}
+
+	// Resolve Source Driver
+	srcDSN := req.SourceDSN
+	if srcDSN == "" {
+		srcDSN = req.Source.DSN
+	}
+	srcEntry, err := h.resolveDriverWithFallback(r, srcDSN, req.Source.ConnID)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "source database connection failed: "+err.Error())
+		return
+	}
+
+	// Resolve Target Driver
+	tgtDSN := req.TargetDSN
+	if tgtDSN == "" {
+		tgtDSN = req.Target.DSN
+	}
+	var tgtEntry *connection.PoolEntry
+	if tgtDSN != "" || (req.Target.ConnID != "" && req.Target.ConnID != req.Source.ConnID) {
+		tgtEntry, err = h.resolveDriverWithFallback(r, tgtDSN, req.Target.ConnID)
+		if err != nil {
+			sendError(w, http.StatusBadRequest, "target database connection failed: "+err.Error())
+			return
+		}
+	} else {
+		tgtEntry = srcEntry
+	}
+
+	sourceSchema := strings.TrimSpace(req.Source.Schema)
+	if sourceSchema == "" {
+		sourceSchema = defaultSchemaForDriver(srcEntry.Driver)
+	}
+
+	targetSchema := strings.TrimSpace(req.Target.Schema)
+	if targetSchema == "" {
+		if sourceSchema != "" && alter.NormalizeDialect(tgtEntry.Driver.Dialect()) == alter.NormalizeDialect(srcEntry.Driver.Dialect()) {
+			targetSchema = sourceSchema
+		} else {
+			targetSchema = defaultSchemaForDriver(tgtEntry.Driver)
+		}
+	}
+
+	sourceTable := strings.TrimSpace(req.Source.Table)
+	targetTable := strings.TrimSpace(req.Target.Table)
+
+	// Single table comparison
+	if sourceTable != "" && targetTable != "" {
+		srcDetail, err := srcEntry.Driver.InspectTableDetails(r.Context(), sourceSchema, sourceTable)
+		if err != nil {
+			sendError(w, http.StatusBadRequest, fmt.Sprintf("failed to inspect source table %s: %s", sourceTable, err.Error()))
+			return
+		}
+
+		tgtDetail, _ := tgtEntry.Driver.InspectTableDetails(r.Context(), targetSchema, targetTable)
+
+		tableDiff := diff.CompareTables(srcDetail, tgtDetail, tgtEntry.Driver.Dialect())
+		tableDiff.Name = targetTable
+		tableDiff.Schema = targetSchema
+
+		res := diff.SchemaDiffResult{
+			SourceSchema:  sourceSchema,
+			TargetSchema:  targetSchema,
+			SourceDialect: srcEntry.Driver.Dialect(),
+			TargetDialect: tgtEntry.Driver.Dialect(),
+			TotalTables:   1,
+			Tables:        []diff.TableDiff{tableDiff},
+			MigrationSQL:  tableDiff.MigrationSQL,
+			SQL:           tableDiff.SQL,
+		}
+		switch tableDiff.Status {
+		case diff.DiffAdded:
+			res.AddedCount = 1
+		case diff.DiffRemoved:
+			res.RemovedCount = 1
+		case diff.DiffModified:
+			res.ModifiedCount = 1
+		case diff.DiffIdentical:
+			res.IdenticalCount = 1
+		}
+		sendJSON(w, http.StatusOK, res)
+		return
+	}
+
+	// Full schema comparison
+	srcMetaList, err := srcEntry.Driver.InspectTables(r.Context(), sourceSchema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "failed to inspect source tables: "+err.Error())
+		return
+	}
+
+	srcTables := make(map[string]*types.TableDetail, len(srcMetaList))
+	for _, meta := range srcMetaList {
+		if meta.Type == "view" {
+			continue
+		}
+		detail, err := srcEntry.Driver.InspectTableDetails(r.Context(), sourceSchema, meta.Name)
+		if err == nil && detail != nil {
+			srcTables[meta.Name] = detail
+		}
+	}
+
+	tgtMetaList, err := tgtEntry.Driver.InspectTables(r.Context(), targetSchema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, "failed to inspect target tables: "+err.Error())
+		return
+	}
+
+	tgtTables := make(map[string]*types.TableDetail, len(tgtMetaList))
+	for _, meta := range tgtMetaList {
+		if meta.Type == "view" {
+			continue
+		}
+		detail, err := tgtEntry.Driver.InspectTableDetails(r.Context(), targetSchema, meta.Name)
+		if err == nil && detail != nil {
+			tgtTables[meta.Name] = detail
+		}
+	}
+
+	result := diff.CompareSchemas(srcTables, tgtTables, tgtEntry.Driver.Dialect(), sourceSchema, targetSchema)
+	result.SourceDialect = srcEntry.Driver.Dialect()
+	sendJSON(w, http.StatusOK, result)
+}
+
+func isCommentOrEmpty(s string) bool {
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		l := strings.TrimSpace(line)
+		if l != "" && !strings.HasPrefix(l, "--") && !strings.HasPrefix(l, "/*") && !strings.HasPrefix(l, "*") && !strings.HasSuffix(l, "*/") {
+			return false
+		}
+	}
+	return true
+}
+
+func trimLeadingComments(s string) string {
+	lines := strings.Split(s, "\n")
+	start := 0
+	for start < len(lines) {
+		l := strings.TrimSpace(lines[start])
+		if l == "" || strings.HasPrefix(l, "--") {
+			start++
+		} else {
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start:], "\n"))
+}
+
+func (h *Handler) ApplyDiff(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+		sendError(w, http.StatusForbidden, "Target connection is read-only")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	var req SchemaDiffApplyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.ReadOnly {
+		sendError(w, http.StatusForbidden, "Target connection is read-only")
+		return
+	}
+
+	var executable []string
+	for _, stmt := range req.Statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || isCommentOrEmpty(stmt) {
+			continue
+		}
+		trimmed := trimLeadingComments(stmt)
+		if trimmed != "" {
+			executable = append(executable, trimmed)
+		}
+	}
+
+	if len(executable) == 0 {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"statementsExecuted": 0,
+			"elapsedMs":          0,
+			"statements":         []string{},
+			"message":            "No statements to execute",
+		})
+		return
+	}
+
+	tgtEntry, err := h.resolveDriverWithFallback(r, req.TargetDSN, chi.URLParam(r, "connId"))
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "could not resolve target database: "+err.Error())
+		return
+	}
+
+	dialect := alter.NormalizeDialect(tgtEntry.Driver.Dialect())
+	useTx := dialect == "postgres" || dialect == "sqlite"
+
+	if useTx {
+		if _, err := tgtEntry.Driver.ExecuteQuery(r.Context(), "BEGIN"); err != nil {
+			sendError(w, http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+			return
+		}
+	}
+
+	start := time.Now()
+	var executed []string
+	for i, stmt := range executable {
+		_, err := tgtEntry.Driver.ExecuteQuery(r.Context(), stmt)
+		if err != nil {
+			if useTx {
+				_, _ = tgtEntry.Driver.ExecuteQuery(r.Context(), "ROLLBACK")
+			}
+			sendError(w, http.StatusInternalServerError, fmt.Sprintf("error executing statement %d: %s: %s", i+1, stmt, err.Error()))
+			return
+		}
+		executed = append(executed, stmt)
+	}
+
+	if useTx {
+		if _, err := tgtEntry.Driver.ExecuteQuery(r.Context(), "COMMIT"); err != nil {
+			_, _ = tgtEntry.Driver.ExecuteQuery(r.Context(), "ROLLBACK")
+			sendError(w, http.StatusInternalServerError, "failed to commit transaction: "+err.Error())
+			return
+		}
+	}
+
+	elapsed := time.Since(start)
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"statementsExecuted": len(executed),
+		"elapsedMs":          elapsed.Milliseconds(),
+		"statements":         executed,
+		"message":            fmt.Sprintf("Successfully executed %d migration statements", len(executed)),
 	})
 }

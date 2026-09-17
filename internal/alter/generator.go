@@ -68,7 +68,7 @@ func quoteQualifiedIdent(ident string, defaultSchema string, quoteFn func(string
 	return quoteFn(ident)
 }
 
-func validateDataType(dt string) error {
+func ValidateDataType(dt string) error {
 	dt = strings.TrimSpace(dt)
 	if dt == "" {
 		return errors.New("data type cannot be empty")
@@ -85,7 +85,7 @@ func validateDataType(dt string) error {
 	return nil
 }
 
-func validateFKAction(action string) (string, error) {
+func ValidateFKAction(action string) (string, error) {
 	action = strings.ToUpper(strings.TrimSpace(action))
 	if action == "" {
 		return "", nil
@@ -96,7 +96,7 @@ func validateFKAction(action string) (string, error) {
 	return action, nil
 }
 
-func formatDefaultValue(val string) (string, error) {
+func FormatDefaultValue(val string) (string, error) {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return "", nil
@@ -109,6 +109,11 @@ func formatDefaultValue(val string) (string, error) {
 	if upper == "NULL" || upper == "TRUE" || upper == "FALSE" ||
 		upper == "CURRENT_TIMESTAMP" || upper == "CURRENT_DATE" ||
 		upper == "CURRENT_TIME" || upper == "NOW()" {
+		return val, nil
+	}
+
+	// PostgreSQL type casts (e.g. 'active'::character varying) or sequence nextval(...) expressions
+	if strings.Contains(val, "::") || strings.HasPrefix(strings.ToLower(val), "nextval(") {
 		return val, nil
 	}
 
@@ -234,7 +239,7 @@ func generatePostgresDDL(req types.AlterTableRequest) ([]string, error) {
 		qCol := quoteIdentPostgres(colName)
 
 		if colType := strings.TrimSpace(alt.GetType()); colType != "" {
-			if err := validateDataType(colType); err != nil {
+			if err := ValidateDataType(colType); err != nil {
 				return nil, err
 			}
 			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s", tbl, qCol, colType))
@@ -249,7 +254,7 @@ func generatePostgresDDL(req types.AlterTableRequest) ([]string, error) {
 		if alt.DropDefault {
 			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", tbl, qCol))
 		} else if def := alt.GetDefault(); def != nil && *def != "" {
-			formattedDef, err := formatDefaultValue(*def)
+			formattedDef, err := FormatDefaultValue(*def)
 			if err != nil {
 				return nil, err
 			}
@@ -270,12 +275,12 @@ func generatePostgresDDL(req types.AlterTableRequest) ([]string, error) {
 		if cType == "" {
 			cType = "TEXT"
 		}
-		if err := validateDataType(cType); err != nil {
+		if err := ValidateDataType(cType); err != nil {
 			return nil, err
 		}
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tbl, quoteIdentPostgres(cName), cType)
 		if col.Default != nil && strings.TrimSpace(*col.Default) != "" {
-			formattedDef, err := formatDefaultValue(*col.Default)
+			formattedDef, err := FormatDefaultValue(*col.Default)
 			if err != nil {
 				return nil, err
 			}
@@ -301,11 +306,11 @@ func generatePostgresDDL(req types.AlterTableRequest) ([]string, error) {
 		}
 		refTableRef := quoteQualifiedIdent(fk.RefTable, req.Schema, quoteIdentPostgres)
 
-		onUpdate, err := validateFKAction(fk.OnUpdate)
+		onUpdate, err := ValidateFKAction(fk.OnUpdate)
 		if err != nil {
 			return nil, err
 		}
-		onDelete, err := validateFKAction(fk.OnDelete)
+		onDelete, err := ValidateFKAction(fk.OnDelete)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +399,7 @@ func generateMySQLDDL(req types.AlterTableRequest) ([]string, error) {
 		qCol := quoteIdentMySQL(colName)
 		colType := strings.TrimSpace(alt.GetType())
 		if colType != "" {
-			if err := validateDataType(colType); err != nil {
+			if err := ValidateDataType(colType); err != nil {
 				return nil, err
 			}
 			stmt := fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s", tbl, qCol, colType)
@@ -408,7 +413,7 @@ func generateMySQLDDL(req types.AlterTableRequest) ([]string, error) {
 			if alt.DropDefault {
 				// handled after or as drop default
 			} else if def := alt.GetDefault(); def != nil && *def != "" {
-				formattedDef, err := formatDefaultValue(*def)
+				formattedDef, err := FormatDefaultValue(*def)
 				if err != nil {
 					return nil, err
 				}
@@ -419,7 +424,7 @@ func generateMySQLDDL(req types.AlterTableRequest) ([]string, error) {
 		if alt.DropDefault {
 			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", tbl, qCol))
 		} else if colType == "" && alt.GetDefault() != nil && *alt.GetDefault() != "" {
-			formattedDef, err := formatDefaultValue(*alt.GetDefault())
+			formattedDef, err := FormatDefaultValue(*alt.GetDefault())
 			if err != nil {
 				return nil, err
 			}
@@ -440,12 +445,12 @@ func generateMySQLDDL(req types.AlterTableRequest) ([]string, error) {
 		if cType == "" {
 			cType = "VARCHAR(255)"
 		}
-		if err := validateDataType(cType); err != nil {
+		if err := ValidateDataType(cType); err != nil {
 			return nil, err
 		}
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tbl, quoteIdentMySQL(cName), cType)
 		if col.Default != nil && strings.TrimSpace(*col.Default) != "" {
-			formattedDef, err := formatDefaultValue(*col.Default)
+			formattedDef, err := FormatDefaultValue(*col.Default)
 			if err != nil {
 				return nil, err
 			}
@@ -471,11 +476,11 @@ func generateMySQLDDL(req types.AlterTableRequest) ([]string, error) {
 		}
 		refTableRef := quoteQualifiedIdent(fk.RefTable, req.Schema, quoteIdentMySQL)
 
-		onUpdate, err := validateFKAction(fk.OnUpdate)
+		onUpdate, err := ValidateFKAction(fk.OnUpdate)
 		if err != nil {
 			return nil, err
 		}
-		onDelete, err := validateFKAction(fk.OnDelete)
+		onDelete, err := ValidateFKAction(fk.OnDelete)
 		if err != nil {
 			return nil, err
 		}
@@ -571,12 +576,12 @@ func generateSQLiteDDL(req types.AlterTableRequest) ([]string, error) {
 		if cType == "" {
 			cType = "TEXT"
 		}
-		if err := validateDataType(cType); err != nil {
+		if err := ValidateDataType(cType); err != nil {
 			return nil, err
 		}
 		stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tbl, quoteIdentSQLite(cName), cType)
 		if col.Default != nil && strings.TrimSpace(*col.Default) != "" {
-			formattedDef, err := formatDefaultValue(*col.Default)
+			formattedDef, err := FormatDefaultValue(*col.Default)
 			if err != nil {
 				return nil, err
 			}
