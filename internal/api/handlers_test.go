@@ -1088,6 +1088,86 @@ func TestExplainQueryHandler(t *testing.T) {
 	}
 }
 
+func TestAutocompleteSchemaEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_api_autocomplete_erd_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			email TEXT NOT NULL
+		);
+		CREATE TABLE orders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			total REAL NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create tables: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/erd", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /erd, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data  []driver.ERDTable `json:"data"`
+		Error *string           `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse json response: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error in response: %v", *resp.Error)
+	}
+
+	if len(resp.Data) < 2 {
+		t.Fatalf("expected at least 2 tables, got %d", len(resp.Data))
+	}
+
+	var foundUsers, foundOrders bool
+	for _, tbl := range resp.Data {
+		if tbl.Name == "users" {
+			foundUsers = true
+			if len(tbl.Columns) < 3 {
+				t.Fatalf("expected at least 3 columns for users, got %d", len(tbl.Columns))
+			}
+		}
+		if tbl.Name == "orders" {
+			foundOrders = true
+			if len(tbl.Columns) < 3 {
+				t.Fatalf("expected at least 3 columns for orders, got %d", len(tbl.Columns))
+			}
+		}
+	}
+
+	if !foundUsers || !foundOrders {
+		t.Fatalf("expected to find both users and orders tables, foundUsers=%v, foundOrders=%v", foundUsers, foundOrders)
+	}
+}
+
 
 
 
