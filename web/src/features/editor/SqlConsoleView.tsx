@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import CodeMirror, { keymap, Prec } from '@uiw/react-codemirror'
-import { sql } from '@codemirror/lang-sql'
 import { oneDark } from '@codemirror/theme-one-dark'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Play,
   Loader2,
@@ -21,11 +21,14 @@ import {
   Download,
   FolderPlus,
   ListTree,
+  Sparkles,
+  RefreshCw,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { ExplainPlanView } from './ExplainPlanView'
+import { createSqlExtension } from '../../lib/sqlAutocomplete'
 
 interface Props {
   connId: string
@@ -43,6 +46,7 @@ function formatRelativeTime(timestamp: number): string {
 
 export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const {
+    connections,
     queryHistory,
     addQueryHistory,
     clearQueryHistory,
@@ -59,6 +63,27 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     openDryRunModal,
     selectedSchema,
   } = useAppStore()
+
+  const qc = useQueryClient()
+  const effectiveConnections = useMemo(
+    () => (connections && connections.length > 0 ? connections : api.getProfiles()),
+    [connections]
+  )
+  const currentConn = useMemo(
+    () => effectiveConnections.find((c) => c.id === connId),
+    [effectiveConnections, connId]
+  )
+  const currentDialect = currentConn?.dialect || currentConn?.driver
+
+  const {
+    data: erdTables,
+    isLoading: isSchemaLoading,
+    isFetching: isSchemaFetching,
+  } = useQuery({
+    queryKey: ['schema-autocomplete', connId],
+    queryFn: () => api.getERDData(connId, effectiveConnections),
+    staleTime: 60000,
+  })
 
   // Tabs management
   const tabs = useMemo(() => sqlTabs[connId] || [], [sqlTabs, connId])
@@ -290,8 +315,9 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   })
 
   const extensions = useMemo(() => {
+    const baseExtensions = createSqlExtension(currentDialect, erdTables, selectedSchema)
     return [
-      sql(),
+      ...baseExtensions,
       Prec.highest(
         keymap.of([
           {
@@ -318,7 +344,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         ])
       ),
     ]
-  }, [])
+  }, [currentDialect, erdTables, selectedSchema])
 
   // Export handlers
   const handleExportCsv = () => {
@@ -519,6 +545,38 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                   </span>
                 )}
               </button>
+
+              {/* Schema Refresh Button */}
+              <button
+                id="dblens-refresh-schema-btn"
+                onClick={() => qc.invalidateQueries({ queryKey: ['schema-autocomplete', connId] })}
+                disabled={isSchemaFetching}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border border-transparent text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors disabled:opacity-50"
+                title="Refresh Schema IntelliSense (Ctrl+Space to complete)"
+                aria-label="Refresh Schema IntelliSense"
+              >
+                <RefreshCw
+                  className={`w-3 h-3 text-emerald-400 ${
+                    isSchemaFetching ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>Refresh Schema</span>
+              </button>
+
+              {/* IntelliSense Indicator */}
+              <div
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)] select-none"
+                title={`IntelliSense schema autocomplete active: ${
+                  erdTables?.length || 0
+                } tables cached. Manual trigger: Ctrl+Space.`}
+              >
+                <Sparkles className="w-3 h-3 text-amber-400" />
+                <span className="font-mono text-[10px]">
+                  {isSchemaLoading
+                    ? 'IntelliSense loading...'
+                    : `IntelliSense: ${erdTables?.length || 0} tables`}
+                </span>
+              </div>
             </div>
 
             <button
