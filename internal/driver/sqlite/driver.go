@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/explain"
 	_ "modernc.org/sqlite"
 )
 
@@ -89,18 +90,20 @@ func (s *SQLiteDriver) InspectTableDetails(ctx context.Context, schema, table st
 	detail := &types.TableDetail{
 		Name:    table,
 		Schema:  "main",
+		Dialect: "sqlite",
 		Columns: []types.ColumnMeta{},
 		FKs:     []types.ForeignKey{},
-		Indexes: []string{},
+		Indexes: []types.IndexMeta{},
 	}
 
-	pragmaQuery := fmt.Sprintf("PRAGMA table_info(`%s`);", table)
+	pragmaQuery := fmt.Sprintf("PRAGMA table_info(%s);", quoteIdent(table))
 	rows, err := s.db.QueryContext(ctxTimeout, pragmaQuery)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	var pkCols []string
 	for rows.Next() {
 		var cid int
 		var name, dType string
@@ -112,17 +115,25 @@ func (s *SQLiteDriver) InspectTableDetails(ctx context.Context, schema, table st
 		}
 		col := types.ColumnMeta{
 			Name:       name,
+			Type:       dType,
 			DataType:   dType,
 			IsNullable: (notNull == 0),
 			IsPrimary:  (pk > 0),
+		}
+		if pk > 0 {
+			pkCols = append(pkCols, name)
 		}
 		if dfltVal.Valid {
 			col.Default = &dfltVal.String
 		}
 		detail.Columns = append(detail.Columns, col)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
 
-	fkPragma := fmt.Sprintf("PRAGMA foreign_key_list(`%s`);", table)
+	fkPragma := fmt.Sprintf("PRAGMA foreign_key_list(%s);", quoteIdent(table))
 	fkRows, err := s.db.QueryContext(ctxTimeout, fkPragma)
 	if err == nil {
 		defer fkRows.Close()
@@ -131,29 +142,132 @@ func (s *SQLiteDriver) InspectTableDetails(ctx context.Context, schema, table st
 			var refTable, fromCol, toCol, onUpdate, onDelete, match string
 			if err := fkRows.Scan(&id, &seq, &refTable, &fromCol, &toCol, &onUpdate, &onDelete, &match); err == nil {
 				detail.FKs = append(detail.FKs, types.ForeignKey{
+					Name:      fmt.Sprintf("fk_%s_%d", table, id),
 					Column:    fromCol,
 					RefTable:  refTable,
 					RefColumn: toCol,
+					OnUpdate:  onUpdate,
+					OnDelete:  onDelete,
 				})
+			}
+		}
+		fkRows.Close()
+
+		fkCols := make(map[string]bool)
+		for _, fk := range detail.FKs {
+			fkCols[fk.Column] = true
+		}
+		for i := range detail.Columns {
+			if fkCols[detail.Columns[i].Name] {
+				detail.Columns[i].IsForeignKey = true
 			}
 		}
 	}
 
-	idxPragma := fmt.Sprintf("PRAGMA index_list(`%s`);", table)
+	type rawIndex struct {
+		name   string
+		unique int
+		origin string
+	}
+	var rawIndexes []rawIndex
+
+	idxPragma := fmt.Sprintf("PRAGMA index_list(%s);", quoteIdent(table))
 	idxRows, err := s.db.QueryContext(ctxTimeout, idxPragma)
 	if err == nil {
 		defer idxRows.Close()
 		for idxRows.Next() {
 			var seq int
 			var idxName string
-			var unique, origin, partial int
+			var unique int
+			var origin string
+			var partial int
 			if err := idxRows.Scan(&seq, &idxName, &unique, &origin, &partial); err == nil {
-				detail.Indexes = append(detail.Indexes, idxName)
+				rawIndexes = append(rawIndexes, rawIndex{name: idxName, unique: unique, origin: origin})
 			}
+		}
+		idxRows.Close()
+	}
+
+	for _, raw := range rawIndexes {
+		var cols []string
+		infoPragma := fmt.Sprintf("PRAGMA index_info(%s);", quoteIdent(raw.name))
+		infoRows, iErr := s.db.QueryContext(ctxTimeout, infoPragma)
+		if iErr == nil {
+			for infoRows.Next() {
+				var seqno, cid int
+				var colName string
+				if err := infoRows.Scan(&seqno, &cid, &colName); err == nil {
+					cols = append(cols, colName)
+				}
+			}
+			infoRows.Close()
+		}
+		detail.Indexes = append(detail.Indexes, types.IndexMeta{
+			Name:      raw.name,
+			Columns:   cols,
+			IsUnique:  raw.unique == 1,
+			IsPrimary: raw.origin == "pk",
+			Type:      "BTREE",
+		})
+	}
+
+	if len(pkCols) > 0 {
+		hasPKIndex := false
+		for _, idx := range detail.Indexes {
+			if idx.IsPrimary {
+				hasPKIndex = true
+				break
+			}
+		}
+		if !hasPKIndex {
+			detail.Indexes = append([]types.IndexMeta{{
+				Name:      fmt.Sprintf("pk_%s", table),
+				Columns:   pkCols,
+				IsUnique:  true,
+				IsPrimary: true,
+				Type:      "BTREE",
+			}}, detail.Indexes...)
 		}
 	}
 
+	if ddl, err := s.GenerateTableDDL(ctx, schema, table); err == nil {
+		detail.DDL = ddl
+	}
+
 	return detail, nil
+}
+
+func (s *SQLiteDriver) GenerateTableDDL(ctx context.Context, schema, table string) (string, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	query := `SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('table', 'index', 'view') AND sql IS NOT NULL ORDER BY CASE WHEN type = 'table' THEN 0 WHEN type = 'view' THEN 1 ELSE 2 END;`
+	rows, err := s.db.QueryContext(ctxTimeout, query, table)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var stmts []string
+	for rows.Next() {
+		var sqlText string
+		if err := rows.Scan(&sqlText); err != nil {
+			return "", err
+		}
+		trimmed := strings.TrimSpace(sqlText)
+		if trimmed != "" {
+			trimmed = strings.TrimRight(trimmed, ";") + ";"
+			stmts = append(stmts, trimmed)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(stmts) == 0 {
+		return "", fmt.Errorf("table not found: %s", table)
+	}
+
+	return strings.Join(stmts, "\n\n"), nil
 }
 
 func quoteIdent(s string) string {
@@ -549,3 +663,88 @@ func (s *SQLiteDriver) GetERDData(ctx context.Context) ([]types.ERDTable, error)
 	}
 	return erd, nil
 }
+
+func (s *SQLiteDriver) ExplainQuery(ctx context.Context, rawSql string, opts types.ExplainOptions) (*types.ExplainResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(rawSql)
+	trimmed = strings.TrimRight(trimmed, ";")
+	if trimmed == "" {
+		return nil, fmt.Errorf("query cannot be empty")
+	}
+
+	explainSQL := fmt.Sprintf("EXPLAIN QUERY PLAN %s;", trimmed)
+	rows, err := s.db.QueryContext(ctxTimeout, explainSQL)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite explain error: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("sqlite explain columns error: %w", err)
+	}
+
+	var parsedRows []explain.SQLiteRow
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+
+		if len(cols) == 4 {
+			if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+				return nil, err
+			}
+		} else if len(cols) == 3 {
+			if err := rows.Scan(&id, &parent, &detail); err != nil {
+				return nil, err
+			}
+		} else {
+			vals := make([]interface{}, len(cols))
+			ptrs := make([]interface{}, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				return nil, err
+			}
+			if len(vals) > 0 {
+				id = toSQLiteInt(vals[0])
+			}
+			if len(vals) > 1 {
+				parent = toSQLiteInt(vals[1])
+			}
+			if len(vals) > 2 {
+				detail = fmt.Sprintf("%v", vals[len(vals)-1])
+			}
+		}
+
+		parsedRows = append(parsedRows, explain.SQLiteRow{
+			ID:      id,
+			Parent:  parent,
+			NotUsed: notused,
+			Detail:  detail,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return explain.ParseSQLite(parsedRows)
+}
+
+func toSQLiteInt(v interface{}) int {
+	switch val := v.(type) {
+	case int64:
+		return int(val)
+	case int:
+		return val
+	case float64:
+		return int(val)
+	default:
+		return 0
+	}
+}
+
+

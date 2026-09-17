@@ -1,10 +1,11 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
 
 interface Props {
   connections: ConnectionConfig[]
-  activeConnId: string
+  activeConnId: string | null
   onSwitch: (id: string) => void
   onAdd: () => void
   onEdit: (conn: ConnectionConfig) => void
@@ -17,9 +18,31 @@ interface Props {
   onSelectTable: (table: string | null) => void
   isDark: boolean
   onToggleTheme: () => void
+  onOpenCommandPalette?: () => void
 }
 
-export const Header: React.FC<Props> = ({ connections, activeConnId, onSwitch, onAdd, onEdit, onDeleted, activeTab, onTabChange, isDark, onToggleTheme }) => {
+export const Header: React.FC<Props> = ({
+  connections,
+  activeConnId,
+  onSwitch,
+  onAdd,
+  onEdit,
+  onDeleted,
+  activeTab,
+  onTabChange,
+  isDark,
+  onToggleTheme,
+  onOpenCommandPalette,
+}) => {
+  const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen)
+
+  const handleOpenPalette = () => {
+    if (onOpenCommandPalette) {
+      onOpenCommandPalette()
+    } else {
+      setCommandPaletteOpen(true)
+    }
+  }
   async function handleDelete(c: ConnectionConfig, e: React.MouseEvent) {
     e.stopPropagation()
     if (window.confirm('Delete connection profile?')) {
@@ -64,6 +87,20 @@ export const Header: React.FC<Props> = ({ connections, activeConnId, onSwitch, o
           </button>
         </div>
       </div>
+
+      {/* Search / Command Palette Quick Button */}
+      <button
+        type="button"
+        onClick={handleOpenPalette}
+        className="flex items-center gap-2 px-2.5 py-1 text-xs text-[var(--muted)] hover:text-[var(--fg)] bg-[var(--surface)] hover:bg-[var(--hover)] border border-[var(--border)] rounded-md transition-colors cursor-pointer group"
+        title="Command Palette (Cmd+K / Ctrl+K)"
+      >
+        <Search className="w-3.5 h-3.5 text-[var(--muted)] group-hover:text-[var(--fg)] transition-colors" />
+        <span className="hidden sm:inline text-[11px]">Search or run command...</span>
+        <kbd className="font-mono text-[10px] text-[var(--muted)] bg-[var(--hover)] border border-[var(--border)] px-1.5 py-0.2 rounded group-hover:text-[var(--fg)] transition-colors">
+          ⌘K
+        </kbd>
+      </button>
 
       {/* Tab nav & Theme Toggle */}
       <div className="flex items-center gap-2">

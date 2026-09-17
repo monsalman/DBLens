@@ -10,6 +10,7 @@ import { SchemaErdView } from './features/erd/SchemaErdView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
+import { CommandPalette } from './components/CommandPalette'
 import { useAppStore } from './stores/appStore'
 import { Monitor, Moon, Sun, Database, Zap, Shield, GitBranch } from 'lucide-react'
 
@@ -53,6 +54,28 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'table'|'sql'|'erd'>('table')
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const handleRefresh = useCallback(() => {
+    queryClient.invalidateQueries()
+    setRefreshKey(k => k + 1)
+  }, [])
+
+  const handleSelectDatabase = useCallback(async (db: string) => {
+    if (!activeConnId) return
+    try {
+      await api.selectDatabase(activeConnId, db, connections)
+      handleRefresh()
+    } catch (err) {
+      console.error('Failed to select database', err)
+    }
+  }, [activeConnId, connections, handleRefresh])
+
+  const handleDisconnect = useCallback(() => {
+    setActiveConnId(null)
+    setSelectedTable(null)
+    useAppStore.getState().setActiveConnectionId('' as any)
+  }, [])
 
   useEffect(() => {
     const localProfiles = api.getProfiles()
@@ -168,6 +191,23 @@ export function App() {
               setConnections(prev => prev.map(c => c.id === updatedConn.id ? updatedConn : c))
             }}
           />
+
+          <CommandPalette
+            connections={connections}
+            activeConnId={null}
+            activeTab={activeTab}
+            selectedSchema={selectedSchema}
+            selectedTable={selectedTable}
+            isDark={isDark}
+            onSwitchConnection={(id) => { setActiveConnId(id); setSelectedTable(null); }}
+            onSelectTable={setSelectedTable}
+            onSelectSchema={setSelectedSchema}
+            onTabChange={setActiveTab}
+            onToggleTheme={toggleTheme}
+            onNewConnection={() => { setEditingConfig(null); setShowAddModal(true); }}
+            onDisconnect={handleDisconnect}
+            onRefresh={handleRefresh}
+          />
         </div>
       </QueryClientProvider>
     )
@@ -178,7 +218,7 @@ export function App() {
       <div className="h-screen w-screen overflow-hidden select-none transition-colors duration-200">
         <Header 
           connections={connections} 
-          activeConnId={activeConnId!} 
+          activeConnId={activeConnId} 
           onSwitch={(id) => { setActiveConnId(id); setSelectedTable(null); }}
           onAdd={() => { setEditingConfig(null); setShowAddModal(true); }}
           onEdit={(conn) => { setEditingConfig(conn); setShowAddModal(true); }}
@@ -191,11 +231,13 @@ export function App() {
           onSelectTable={setSelectedTable}
           isDark={isDark}
           onToggleTheme={toggleTheme}
+          onOpenCommandPalette={() => useAppStore.getState().setCommandPaletteOpen(true)}
         />
         <div className="flex-1 flex overflow-hidden h-[calc(100vh-40px)]">
           <Sidebar 
+            key={`${activeConnId}:${refreshKey}`}
             connections={connections} 
-            activeConnId={activeConnId!} 
+            activeConnId={activeConnId || ''} 
             selectedSchema={selectedSchema}
             onSelectSchema={setSelectedSchema}
             selectedTable={selectedTable}
@@ -205,9 +247,23 @@ export function App() {
             }}
           />
           <main className="flex-1 flex flex-col overflow-hidden relative bg-[var(--bg)] text-[var(--fg)]">
-            {activeTab === 'table' && <TableGridView key={`${activeConnId}:${selectedSchema}:${selectedTable || ''}`} connId={activeConnId!} schema={selectedSchema} table={selectedTable || ''} />}
-            {activeTab === 'sql' && <SqlConsoleView connId={activeConnId!} />}
-            {activeTab === 'erd' && <SchemaErdView connId={activeConnId!} schema={selectedSchema} />}
+            {!activeConnId ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-[var(--muted)] gap-3 p-6 text-center">
+                <Database className="w-10 h-10 opacity-30" />
+                <div>
+                  <p className="text-sm font-medium text-[var(--fg)]">No connection active</p>
+                  <p className="text-xs text-[var(--muted)] mt-1">
+                    Select a connection above or press <kbd className="font-mono bg-[var(--hover)] border border-[var(--border)] px-1.5 py-0.5 rounded text-[11px]">⌘K</kbd> to search
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {activeTab === 'table' && <TableGridView key={`${activeConnId}:${selectedSchema}:${selectedTable || ''}:${refreshKey}`} connId={activeConnId} schema={selectedSchema} table={selectedTable || ''} />}
+                {activeTab === 'sql' && <SqlConsoleView connId={activeConnId} />}
+                {activeTab === 'erd' && <SchemaErdView connId={activeConnId} schema={selectedSchema} />}
+              </>
+            )}
           </main>
         </div>
       </div>
@@ -222,6 +278,26 @@ export function App() {
         onUpdated={(updatedConn) => {
           setConnections(prev => prev.map(c => c.id === updatedConn.id ? updatedConn : c))
         }}
+      />
+      <CommandPalette
+        connections={connections}
+        activeConnId={activeConnId}
+        activeTab={activeTab}
+        selectedSchema={selectedSchema}
+        selectedTable={selectedTable}
+        isDark={isDark}
+        onSwitchConnection={(id) => { setActiveConnId(id); setSelectedTable(null); }}
+        onSelectTable={(table) => {
+          setSelectedTable(table)
+          if (activeTab !== 'table') setActiveTab('table')
+        }}
+        onSelectSchema={setSelectedSchema}
+        onSelectDatabase={handleSelectDatabase}
+        onTabChange={setActiveTab}
+        onToggleTheme={toggleTheme}
+        onNewConnection={() => { setEditingConfig(null); setShowAddModal(true); }}
+        onDisconnect={handleDisconnect}
+        onRefresh={handleRefresh}
       />
       <PeekDrawer />
       <DryRunModal />

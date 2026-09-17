@@ -7,6 +7,7 @@ import { useAppStore } from '../../stores/appStore'
 import { AddRowModal } from './AddRowModal'
 import { MockDataModal } from './MockDataModal'
 import { ImportModal } from './ImportModal'
+import { TableSchemaView } from './TableSchemaView'
 
 interface Props {
   connId: string
@@ -33,6 +34,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [showImportModal, setShowImportModal] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
@@ -55,6 +57,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSearchTerm('')
     setSelectedCol('')
     setEditingCell(null)
+    setViewMode('data')
   }, [table, schema, connId])
 
   // Focus edit input when entering edit mode
@@ -264,126 +267,161 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
       )}
       {/* Toolbar */}
       <div className="h-10 border-b border-[var(--border)] px-3 flex items-center gap-3 shrink-0">
-        {/* Search & Column Picker */}
-        <div className="flex items-center gap-1.5 flex-1 max-w-sm">
-          {metaCols.length > 0 && (
-            <select
-              value={filterCol}
-              onChange={(e) => {
-                setSelectedCol(e.target.value)
-                setPageIndex(0)
-              }}
-              title="Search Column"
-              className="text-xs py-1 px-2 bg-[var(--surface)] text-[var(--fg)] border border-[var(--border)] rounded font-mono max-w-[130px] shrink-0 truncate focus:outline-none"
-            >
-              {metaCols.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name} {c.isPrimaryKey || c.isPrimary ? '(PK)' : ''}
-                </option>
-              ))}
-            </select>
-          )}
-          <div className="relative flex-1">
-            <Search className="w-3 h-3 text-[var(--muted)] absolute left-2 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={e => {
-                setSearchTerm(e.target.value)
-                setPageIndex(0)
-              }}
-              placeholder={filterCol ? `Filter ${table} by ${filterCol}...` : `Filter ${table}...`}
-              className="form-input pl-7 pr-2 py-0.5 text-xs w-full"
-            />
-          </div>
+        {/* View Mode Switcher */}
+        <div className="flex items-center bg-[var(--surface)] border border-[var(--border)] rounded p-0.5 shrink-0 font-mono text-xs">
+          <button
+            onClick={() => setViewMode('data')}
+            className={`px-2.5 py-0.5 rounded transition-colors ${
+              viewMode === 'data'
+                ? 'bg-[var(--accent)] text-white font-medium shadow-xs'
+                : 'text-[var(--muted)] hover:text-[var(--fg)]'
+            }`}
+          >
+            Data
+          </button>
+          <button
+            onClick={() => setViewMode('schema')}
+            className={`px-2.5 py-0.5 rounded transition-colors ${
+              viewMode === 'schema'
+                ? 'bg-[var(--accent)] text-white font-medium shadow-xs'
+                : 'text-[var(--muted)] hover:text-[var(--fg)]'
+            }`}
+          >
+            Schema
+          </button>
         </div>
-        
-        <span className="text-[11px] text-[var(--muted)] font-mono">{metaCols.length} cols</span>
-        
-        <span className="text-[11px] text-[var(--muted)]">{totalCount} rows</span>
-        
-        {/* Actions */}
-        <div className="flex items-center gap-1.5 ml-auto">
-          {Object.values(selectedRows).some(Boolean) && (
-            <button onClick={handleDelete} className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-red-400 hover:bg-red-950/20">
-              <Trash2 className="w-3 h-3" /> <span>{Object.values(selectedRows).filter(Boolean).length}</span>
-            </button>
-          )}
 
-          {/* Add Row */}
-          <button
-            onClick={() => { setAddError(null); setShowAddModal(true) }}
-            title="Add Row"
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Mock Data */}
-          <button
-            onClick={() => { setMockError(null); setShowMockModal(true) }}
-            title="Generate Mock Data"
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Import Data */}
-          <button
-            onClick={() => setShowImportModal(true)}
-            title="Import Data (CSV / SQL)"
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] font-mono"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Import</span>
-          </button>
-          
-          <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
-          
-          {/* Export Dropdown */}
-          <div className="relative" ref={exportMenuRef}>
-            <button
-              onClick={() => setShowExportMenu(prev => !prev)}
-              disabled={exportLoading}
-              title="Export Full Table"
-              className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors disabled:opacity-50"
-            >
-              <Download className={`w-3.5 h-3.5 ${exportLoading ? 'animate-bounce' : ''}`} />
-              <span>Export</span>
-              <ChevronDown className="w-3 h-3" />
-            </button>
-            {showExportMenu && (
-              <div className="absolute right-0 mt-1 w-36 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
-                <button
-                  onClick={() => handleExport('csv')}
-                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+        {viewMode === 'data' ? (
+          <>
+            {/* Search & Column Picker */}
+            <div className="flex items-center gap-1.5 flex-1 max-w-sm">
+              {metaCols.length > 0 && (
+                <select
+                  value={filterCol}
+                  onChange={(e) => {
+                    setSelectedCol(e.target.value)
+                    setPageIndex(0)
+                  }}
+                  title="Search Column"
+                  className="text-xs py-1 px-2 bg-[var(--surface)] text-[var(--fg)] border border-[var(--border)] rounded font-mono max-w-[130px] shrink-0 truncate focus:outline-none"
                 >
-                  <span>Export CSV</span>
-                  <span className="text-[10px] text-[var(--muted)]">.csv</span>
-                </button>
-                <button
-                  onClick={() => handleExport('json')}
-                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
-                >
-                  <span>Export JSON</span>
-                  <span className="text-[10px] text-[var(--muted)]">.json</span>
-                </button>
-                <button
-                  onClick={() => handleExport('sql')}
-                  className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
-                >
-                  <span>Export SQL</span>
-                  <span className="text-[10px] text-[var(--muted)]">.sql</span>
-                </button>
+                  {metaCols.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name} {c.isPrimaryKey || c.isPrimary ? '(PK)' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="relative flex-1">
+                <Search className="w-3 h-3 text-[var(--muted)] absolute left-2 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={e => {
+                    setSearchTerm(e.target.value)
+                    setPageIndex(0)
+                  }}
+                  placeholder={filterCol ? `Filter ${table} by ${filterCol}...` : `Filter ${table}...`}
+                  className="form-input pl-7 pr-2 py-0.5 text-xs w-full"
+                />
               </div>
-            )}
+            </div>
+            
+            <span className="text-[11px] text-[var(--muted)] font-mono">{metaCols.length} cols</span>
+            
+            <span className="text-[11px] text-[var(--muted)]">{totalCount} rows</span>
+            
+            {/* Actions */}
+            <div className="flex items-center gap-1.5 ml-auto">
+              {Object.values(selectedRows).some(Boolean) && (
+                <button onClick={handleDelete} className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-red-400 hover:bg-red-950/20">
+                  <Trash2 className="w-3 h-3" /> <span>{Object.values(selectedRows).filter(Boolean).length}</span>
+                </button>
+              )}
+
+              {/* Add Row */}
+              <button
+                onClick={() => { setAddError(null); setShowAddModal(true) }}
+                title="Add Row"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Mock Data */}
+              <button
+                onClick={() => { setMockError(null); setShowMockModal(true) }}
+                title="Generate Mock Data"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Import Data */}
+              <button
+                onClick={() => setShowImportModal(true)}
+                title="Import Data (CSV / SQL)"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] font-mono"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Import</span>
+              </button>
+              
+              <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              </button>
+              
+              {/* Export Dropdown */}
+              <div className="relative" ref={exportMenuRef}>
+                <button
+                  onClick={() => setShowExportMenu(prev => !prev)}
+                  disabled={exportLoading}
+                  title="Export Full Table"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors disabled:opacity-50"
+                >
+                  <Download className={`w-3.5 h-3.5 ${exportLoading ? 'animate-bounce' : ''}`} />
+                  <span>Export</span>
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {showExportMenu && (
+                  <div className="absolute right-0 mt-1 w-36 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                    <button
+                      onClick={() => handleExport('csv')}
+                      className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                    >
+                      <span>Export CSV</span>
+                      <span className="text-[10px] text-[var(--muted)]">.csv</span>
+                    </button>
+                    <button
+                      onClick={() => handleExport('json')}
+                      className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                    >
+                      <span>Export JSON</span>
+                      <span className="text-[10px] text-[var(--muted)]">.json</span>
+                    </button>
+                    <button
+                      onClick={() => handleExport('sql')}
+                      className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
+                    >
+                      <span>Export SQL</span>
+                      <span className="text-[10px] text-[var(--muted)]">.sql</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="text-xs font-mono text-[var(--muted)] flex items-center gap-2">
+            <span>Table: <span className="text-[var(--fg)] font-semibold">{table}</span></span>
+            {schema && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface)] border border-[var(--border)]">{schema}</span>}
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Data Grid */}
+      {viewMode === 'data' ? (
+        <>
+          {/* Data Grid */}
       <div className="flex-1 overflow-auto">
         <table className="w-full text-left border-collapse">
           <thead className="sticky top-0 bg-[var(--bg)] z-10">
@@ -516,6 +554,17 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             className="px-2 py-0.5 rounded hover:bg-[var(--hover)] disabled:opacity-30">&gt;</button>
         </div>
       </div>
+        </>
+      ) : (
+        <TableSchemaView
+          connId={connId}
+          table={table}
+          schema={schema}
+          detail={cols}
+          isLoading={colsLoading}
+          onRefresh={() => qc.invalidateQueries({ queryKey: ['columns', connId, schema, table] })}
+        />
+      )}
 
       {/* Add Row Modal */}
       {showAddModal && (

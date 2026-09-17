@@ -183,6 +183,11 @@ func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
 	tableName := chi.URLParam(r, "table")
 	schema := r.URL.Query().Get("schema")
 
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -195,6 +200,35 @@ func (h *Handler) GetTableDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendJSON(w, http.StatusOK, details)
+}
+
+func (h *Handler) GetTableDDL(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "table")
+	schema := r.URL.Query().Get("schema")
+
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ddl, err := entry.Driver.GenerateTableDDL(r.Context(), schema, tableName)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"table":   tableName,
+		"schema":  schema,
+		"dialect": entry.Driver.Dialect(),
+		"ddl":     ddl,
+	})
 }
 
 func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +255,8 @@ func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
 }
 
 type ExecuteQueryRequest struct {
-	SQL string `json:"sql"`
+	SQL   string `json:"sql"`
+	Query string `json:"query"`
 }
 
 func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
@@ -237,16 +272,78 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SQL == "" {
+	sql := req.SQL
+	if sql == "" {
+		sql = req.Query
+	}
+
+	if sql == "" {
 		sendError(w, http.StatusBadRequest, "sql field is required")
 		return
 	}
 
-	res, err := entry.Driver.ExecuteQuery(r.Context(), req.SQL)
+	res, err := entry.Driver.ExecuteQuery(r.Context(), sql)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sendJSON(w, http.StatusOK, res)
+}
+
+type ExplainQueryRequest struct {
+	SQL     string `json:"sql"`
+	Query   string `json:"query"`
+	Analyze *bool  `json:"analyze"`
+	Schema  string `json:"schema"`
+}
+
+func (h *Handler) ExplainQuery(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req ExplainQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	sql := strings.TrimSpace(req.SQL)
+	if sql == "" {
+		sql = strings.TrimSpace(req.Query)
+	}
+	if sql == "" {
+		sendError(w, http.StatusBadRequest, "sql field is required")
+		return
+	}
+
+	dbParam := strings.TrimSpace(chi.URLParam(r, "db"))
+	if dbParam != "" && entry.Driver.Dialect() != "sqlite" {
+		if err := entry.Driver.SelectDatabase(r.Context(), dbParam); err != nil {
+			sendError(w, http.StatusBadRequest, "Failed to select database: "+err.Error())
+			return
+		}
+	}
+
+	analyze := true
+	if req.Analyze != nil {
+		analyze = *req.Analyze
+	}
+
+	opts := driver.ExplainOptions{
+		Analyze: analyze,
+		Schema:  req.Schema,
+	}
+
+	res, err := entry.Driver.ExplainQuery(r.Context(), sql, opts)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	sendJSON(w, http.StatusOK, res)
 }
 

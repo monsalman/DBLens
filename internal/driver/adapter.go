@@ -6,6 +6,7 @@ import (
 
 type ColumnMeta = types.ColumnMeta
 type ForeignKey = types.ForeignKey
+type IndexMeta = types.IndexMeta
 type TableMeta = types.TableMeta
 type TableDetail = types.TableDetail
 type QueryOptions = types.QueryOptions
@@ -24,3 +25,7 @@ type MutationResult = types.MutationResult
 type BatchInsertRequest = types.BatchInsertRequest
 type ERDTable = types.ERDTable
 type Driver = types.Driver
+type ExplainOptions = types.ExplainOptions
+type PlanNode = types.PlanNode
+type ExplainSummary = types.ExplainSummary
+type ExplainResult = types.ExplainResult

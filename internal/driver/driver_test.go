@@ -704,3 +704,175 @@ func TestDriverBatchInsert(t *testing.T) {
 		t.Fatalf("expected error on empty rows, got nil")
 	}
 }
+
+func TestSQLiteInspectTableDetailsAndDDL(t *testing.T) {
+	dbFile := "/tmp/dblens_inspect_ddl_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	drv, err := driver.NewDriver("sqlite://" + dbFile)
+	if err != nil {
+		t.Fatalf("failed to init sqlite driver: %v", err)
+	}
+	defer drv.Close()
+
+	ctx := context.Background()
+
+	setupSQL := `
+		CREATE TABLE parents (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL
+		);
+
+		CREATE TABLE children (
+			id INTEGER PRIMARY KEY,
+			parent_id INTEGER,
+			code TEXT NOT NULL,
+			email TEXT,
+			CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL
+		);
+
+		CREATE UNIQUE INDEX idx_children_code ON children(code);
+		CREATE INDEX idx_children_email ON children(email);
+	`
+	for _, stmt := range strings.Split(setupSQL, ";") {
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed != "" {
+			if _, err := drv.ExecuteQuery(ctx, trimmed); err != nil {
+				t.Fatalf("failed setup sql: %v (stmt: %s)", err, trimmed)
+			}
+		}
+	}
+
+	details, err := drv.InspectTableDetails(ctx, "main", "children")
+	if err != nil {
+		t.Fatalf("InspectTableDetails failed: %v", err)
+	}
+
+	if details.Name != "children" {
+		t.Errorf("expected table name 'children', got %q", details.Name)
+	}
+	if details.Dialect != "sqlite" {
+		t.Errorf("expected dialect 'sqlite', got %q", details.Dialect)
+	}
+
+	// 0. Verify Columns
+	if len(details.Columns) != 4 {
+		t.Fatalf("expected 4 columns, got %d", len(details.Columns))
+	}
+	colMap := make(map[string]types.ColumnMeta)
+	for _, c := range details.Columns {
+		colMap[c.Name] = c
+	}
+	if !colMap["id"].IsPrimary {
+		t.Errorf("expected id to be primary key")
+	}
+	if colMap["id"].Type != "INTEGER" {
+		t.Errorf("expected id type INTEGER, got %q", colMap["id"].Type)
+	}
+	if !colMap["parent_id"].IsForeignKey {
+		t.Errorf("expected parent_id to be foreign key")
+	}
+	if colMap["code"].IsNullable {
+		t.Errorf("expected code to be NOT NULL (isNullable=false)")
+	}
+
+	// 1. Verify FKs with actions
+	if len(details.FKs) == 0 {
+		t.Fatalf("expected at least 1 FK, got 0")
+	}
+	fk := details.FKs[0]
+	if fk.Column != "parent_id" || fk.RefTable != "parents" || fk.RefColumn != "id" {
+		t.Errorf("unexpected FK mapping: %+v", fk)
+	}
+	if fk.OnUpdate != "CASCADE" {
+		t.Errorf("expected OnUpdate 'CASCADE', got %q", fk.OnUpdate)
+	}
+	if fk.OnDelete != "SET NULL" {
+		t.Errorf("expected OnDelete 'SET NULL', got %q", fk.OnDelete)
+	}
+	if fk.Name == "" {
+		t.Errorf("expected non-empty FK name")
+	}
+
+	// 2. Verify Indexes (IndexMeta)
+	if len(details.Indexes) < 3 { // PK + idx_children_code + idx_children_email
+		t.Fatalf("expected at least 3 indexes, got %d", len(details.Indexes))
+	}
+
+	foundCodeIdx := false
+	foundEmailIdx := false
+	foundPKIdx := false
+
+	for _, idx := range details.Indexes {
+		if idx.Name == "idx_children_code" {
+			foundCodeIdx = true
+			if !idx.IsUnique {
+				t.Errorf("expected idx_children_code to be unique")
+			}
+			if len(idx.Columns) != 1 || idx.Columns[0] != "code" {
+				t.Errorf("expected idx_children_code on ['code'], got %v", idx.Columns)
+			}
+		}
+		if idx.Name == "idx_children_email" {
+			foundEmailIdx = true
+			if idx.IsUnique {
+				t.Errorf("expected idx_children_email to be non-unique")
+			}
+			if len(idx.Columns) != 1 || idx.Columns[0] != "email" {
+				t.Errorf("expected idx_children_email on ['email'], got %v", idx.Columns)
+			}
+		}
+		if idx.IsPrimary {
+			foundPKIdx = true
+		}
+	}
+
+	if !foundCodeIdx {
+		t.Errorf("idx_children_code not found in indexes")
+	}
+	if !foundEmailIdx {
+		t.Errorf("idx_children_email not found in indexes")
+	}
+	if !foundPKIdx {
+		t.Errorf("primary key index not found in indexes")
+	}
+
+	// 3. Verify GenerateTableDDL
+	ddl, err := drv.GenerateTableDDL(ctx, "main", "children")
+	if err != nil {
+		t.Fatalf("GenerateTableDDL failed: %v", err)
+	}
+	if !strings.Contains(ddl, "CREATE TABLE children") && !strings.Contains(ddl, "CREATE TABLE `children`") {
+		t.Errorf("expected CREATE TABLE in DDL, got: %s", ddl)
+	}
+	if !strings.Contains(ddl, "idx_children_code") {
+		t.Errorf("expected idx_children_code in DDL, got: %s", ddl)
+	}
+	if !strings.Contains(ddl, "idx_children_email") {
+		t.Errorf("expected idx_children_email in DDL, got: %s", ddl)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(ddl), ";") {
+		t.Errorf("expected DDL to end with semicolon, got: %s", ddl)
+	}
+
+	// 4. Verify table with backticks / quotes does not trigger SQL injection or syntax error
+	escapedSetup := "CREATE TABLE `weird``table` (id INTEGER PRIMARY KEY, title TEXT);"
+	if _, err := drv.ExecuteQuery(ctx, escapedSetup); err != nil {
+		t.Fatalf("failed to create table with backtick: %v", err)
+	}
+	weirdDetails, err := drv.InspectTableDetails(ctx, "main", "weird`table")
+	if err != nil {
+		t.Fatalf("InspectTableDetails on table with backtick failed: %v", err)
+	}
+	if len(weirdDetails.Columns) != 2 {
+		t.Errorf("expected 2 columns for weird`table, got %d", len(weirdDetails.Columns))
+	}
+	weirdDDL, err := drv.GenerateTableDDL(ctx, "main", "weird`table")
+	if err != nil {
+		t.Fatalf("GenerateTableDDL on table with backtick failed: %v", err)
+	}
+	if !strings.Contains(weirdDDL, "weird`table") && !strings.Contains(weirdDDL, "weird``table") {
+		t.Errorf("expected DDL to contain table name, got: %s", weirdDDL)
+	}
+}

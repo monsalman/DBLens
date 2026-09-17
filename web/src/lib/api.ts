@@ -34,6 +34,33 @@ export interface ERDForeignKey {
   refColumn: string
 }
 
+export interface TableForeignKey {
+  name?: string
+  column: string
+  refTable: string
+  refColumn: string
+  onUpdate?: string
+  onDelete?: string
+}
+
+export interface IndexMeta {
+  name: string
+  columns: string[]
+  isUnique: boolean
+  isPrimary: boolean
+  type?: string
+}
+
+export interface TableDetailResponse {
+  name?: string
+  schema?: string
+  dialect?: string
+  columns: ColumnMeta[]
+  fks?: TableForeignKey[]
+  indexes?: IndexMeta[]
+  ddl?: string
+}
+
 export interface ColumnMeta {
   name: string
   type: string
@@ -102,6 +129,54 @@ export interface TestConnectionResult {
   success: boolean
   message: string
   dialect?: string
+}
+
+export interface PlanNode {
+  nodeType: string
+  relationName?: string
+  schema?: string
+  alias?: string
+  indexName?: string
+  cost?: number
+  startupCost?: number
+  totalCost?: number
+  rows?: number
+  planRows?: number
+  planWidth?: number
+  actualTime?: number
+  actualStartupTime?: number
+  actualTotalTime?: number
+  actualRows?: number
+  actualLoops?: number
+  filter?: string
+  indexCond?: string
+  hashCond?: string
+  joinType?: string
+  isExpensive?: boolean
+  warnings?: string[]
+  children?: PlanNode[]
+  extra?: Record<string, any>
+}
+
+export interface ExplainSummary {
+  totalCost?: number
+  planningTime?: number
+  executionTime?: number
+}
+
+export interface ExplainResult {
+  dialect: 'postgres' | 'mysql' | 'sqlite' | string
+  root: PlanNode
+  summary: ExplainSummary
+  raw: string
+  format: 'json' | 'text'
+  error?: string
+}
+
+export interface ExplainOptions {
+  analyze?: boolean
+  schema?: string
+  database?: string
 }
 
 // ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
@@ -304,7 +379,7 @@ export const api = {
     table: string,
     schema: string = 'public',
     profiles?: ConnectionConfig[]
-  ): Promise<{ columns: ColumnMeta[]; fks?: any[]; indexes?: string[] }> {
+  ): Promise<TableDetailResponse> {
     const dsn = this._getDSN(connId, profiles)
     try {
       const r = await fetch(
@@ -317,6 +392,26 @@ export const api = {
     } catch {
       return { columns: [] }
     }
+  },
+
+  async getTableDDL(
+    connId: string,
+    table: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ table: string; schema?: string; dialect?: string; ddl: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/ddl${schemaParam}`,
+      { headers: this._headers(dsn) }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to generate DDL')
+    }
+    const json = await r.json()
+    return json.data ?? json
   },
 
   async getSchema(connId: string, schemaName?: string, profiles?: ConnectionConfig[]): Promise<SchemaMeta> {
@@ -427,6 +522,75 @@ export const api = {
         rows: [],
         durationMs: Math.round(performance.now() - start),
         error: err?.message || 'Query failed',
+      }
+    }
+  },
+
+  async explainQuery(
+    connId: string,
+    queryOrDb: string,
+    queryOrOpts?: string | ExplainOptions,
+    maybeOpts?: ExplainOptions,
+    profiles?: ConnectionConfig[]
+  ): Promise<ExplainResult> {
+    const dsn = this._getDSN(connId, profiles)
+    let sql: string
+    let dbName: string | undefined
+    let options: ExplainOptions | undefined
+
+    if (typeof queryOrOpts === 'string') {
+      dbName = queryOrDb
+      sql = queryOrOpts
+      options = maybeOpts
+    } else {
+      sql = queryOrDb
+      options = queryOrOpts
+      dbName = options?.database
+    }
+
+    const endpoint = dbName
+      ? `/api/connections/${connId}/databases/${encodeURIComponent(dbName)}/explain`
+      : `/api/connections/${connId}/explain`
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify({
+          sql,
+          analyze: options?.analyze ?? true,
+          schema: options?.schema,
+        }),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        let errMsg = text
+        try {
+          const parsed = JSON.parse(text)
+          if (parsed.error) errMsg = parsed.error
+        } catch {}
+        return {
+          dialect: 'sqlite',
+          root: { nodeType: 'ERROR' },
+          summary: {},
+          raw: errMsg,
+          format: 'text',
+          error: errMsg || 'Explain failed',
+        }
+      }
+
+      const json = await res.json()
+      const data = json.data ?? json
+      return data
+    } catch (err: any) {
+      return {
+        dialect: 'sqlite',
+        root: { nodeType: 'ERROR' },
+        summary: {},
+        raw: err?.message || 'Network error',
+        format: 'text',
+        error: err?.message || 'Failed to explain query',
       }
     }
   },

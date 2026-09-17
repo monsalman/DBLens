@@ -14,6 +14,7 @@ import (
 
 	"github.com/dblens/dblens/internal/api"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/driver"
 )
 
 func TestMaskDSN(t *testing.T) {
@@ -533,3 +534,560 @@ func TestSplitSQLStatements(t *testing.T) {
 		t.Errorf("stmt 4 should preserve doubled quotes, got: %s", stmts[4])
 	}
 }
+
+func TestCommandPaletteMetadataEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_palette_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE palette_items (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL
+		);
+		CREATE VIEW palette_items_view AS SELECT id, name FROM palette_items;
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table and view: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Test Schemas Endpoint
+	reqSchemas := httptest.NewRequest("GET", "/api/connections/default/schemas", nil)
+	reqSchemas.Header.Set("X-DBLENS-DSN", dsn)
+	recSchemas := httptest.NewRecorder()
+	router.ServeHTTP(recSchemas, reqSchemas)
+
+	if recSchemas.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get schemas, got %d: %s", recSchemas.Code, recSchemas.Body.String())
+	}
+
+	var resSchemas struct {
+		Data  []string `json:"data"`
+		Error *string  `json:"error"`
+	}
+	if err := json.Unmarshal(recSchemas.Body.Bytes(), &resSchemas); err != nil {
+		t.Fatalf("failed to decode schemas response: %v", err)
+	}
+	if len(resSchemas.Data) == 0 {
+		t.Errorf("expected at least 1 schema, got %d", len(resSchemas.Data))
+	}
+
+	// 2. Test Tables & Views Endpoint
+	reqTables := httptest.NewRequest("GET", "/api/connections/default/tables", nil)
+	reqTables.Header.Set("X-DBLENS-DSN", dsn)
+	recTables := httptest.NewRecorder()
+	router.ServeHTTP(recTables, reqTables)
+
+	if recTables.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get tables, got %d: %s", recTables.Code, recTables.Body.String())
+	}
+
+	var resTables struct {
+		Data  []map[string]interface{} `json:"data"`
+		Error *string                  `json:"error"`
+	}
+	if err := json.Unmarshal(recTables.Body.Bytes(), &resTables); err != nil {
+		t.Fatalf("failed to decode tables response: %v", err)
+	}
+	if len(resTables.Data) < 2 {
+		t.Fatalf("expected at least 2 tables/views, got %d", len(resTables.Data))
+	}
+
+	foundTable := false
+	foundView := false
+	for _, tbl := range resTables.Data {
+		name, _ := tbl["name"].(string)
+		tblType, _ := tbl["type"].(string)
+		if name == "palette_items" && tblType == "table" {
+			foundTable = true
+		}
+		if name == "palette_items_view" && tblType == "view" {
+			foundView = true
+		}
+	}
+
+	if !foundTable {
+		t.Errorf("expected palette_items table in metadata response")
+	}
+	if !foundView {
+		t.Errorf("expected palette_items_view in metadata response")
+	}
+}
+
+func TestGetTableDDL(t *testing.T) {
+	dbFile := "/tmp/dblens_api_ddl_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY,
+			sku TEXT NOT NULL UNIQUE,
+			price REAL DEFAULT 0.0
+		);
+		CREATE INDEX idx_products_price ON products(price);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/tables/products/ddl?schema=main", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get table ddl, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res struct {
+		Data struct {
+			Table   string `json:"table"`
+			Schema  string `json:"schema"`
+			Dialect string `json:"dialect"`
+			DDL     string `json:"ddl"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode ddl response: %v", err)
+	}
+
+	if res.Data.Table != "products" {
+		t.Errorf("expected table 'products', got %q", res.Data.Table)
+	}
+	if res.Data.Dialect != "sqlite" {
+		t.Errorf("expected dialect 'sqlite', got %q", res.Data.Dialect)
+	}
+	if !strings.Contains(res.Data.DDL, "CREATE TABLE products") && !strings.Contains(res.Data.DDL, "CREATE TABLE `products`") {
+		t.Errorf("expected CREATE TABLE in DDL, got: %s", res.Data.DDL)
+	}
+	if !strings.Contains(res.Data.DDL, "idx_products_price") {
+		t.Errorf("expected idx_products_price in DDL, got: %s", res.Data.DDL)
+	}
+}
+
+func TestGetTableDetails(t *testing.T) {
+	dbFile := "/tmp/dblens_api_table_details_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE categories (
+			id INTEGER PRIMARY KEY,
+			title TEXT NOT NULL
+		);
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY,
+			cat_id INTEGER,
+			sku TEXT NOT NULL,
+			price REAL DEFAULT 9.99,
+			CONSTRAINT fk_cat FOREIGN KEY (cat_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL
+		);
+		CREATE UNIQUE INDEX idx_items_sku ON items(sku);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create test tables: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/tables/items?schema=main", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on get table details, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var res struct {
+		Data    driver.TableDetail `json:"data"`
+		Error   *string            `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode table details response: %v", err)
+	}
+
+	detail := res.Data
+	if detail.Name != "items" {
+		t.Errorf("expected table 'items', got %q", detail.Name)
+	}
+	if detail.Dialect != "sqlite" {
+		t.Errorf("expected dialect 'sqlite', got %q", detail.Dialect)
+	}
+
+	// Verify columns
+	if len(detail.Columns) != 4 {
+		t.Fatalf("expected 4 columns, got %d", len(detail.Columns))
+	}
+	colMap := make(map[string]driver.ColumnMeta)
+	for _, c := range detail.Columns {
+		colMap[c.Name] = c
+	}
+	if !colMap["id"].IsPrimary {
+		t.Errorf("expected id to be primary key")
+	}
+	if !colMap["cat_id"].IsForeignKey {
+		t.Errorf("expected cat_id to be foreign key")
+	}
+	if colMap["sku"].IsNullable {
+		t.Errorf("expected sku to be NOT NULL")
+	}
+	if colMap["price"].Default == nil || !strings.Contains(*colMap["price"].Default, "9.99") {
+		t.Errorf("expected price default 9.99, got %+v", colMap["price"].Default)
+	}
+
+	// Verify FKs
+	if len(detail.FKs) == 0 {
+		t.Fatalf("expected at least 1 FK, got 0")
+	}
+	fk := detail.FKs[0]
+	if fk.Column != "cat_id" || fk.RefTable != "categories" || fk.RefColumn != "id" {
+		t.Errorf("unexpected FK mapping: %+v", fk)
+	}
+	if fk.OnUpdate != "CASCADE" || fk.OnDelete != "SET NULL" {
+		t.Errorf("unexpected FK action: update=%s delete=%s", fk.OnUpdate, fk.OnDelete)
+	}
+
+	// Verify Indexes
+	foundSkuIdx := false
+	for _, idx := range detail.Indexes {
+		if idx.Name == "idx_items_sku" {
+			foundSkuIdx = true
+			if !idx.IsUnique {
+				t.Errorf("expected idx_items_sku to be unique")
+			}
+		}
+	}
+	if !foundSkuIdx {
+		t.Errorf("idx_items_sku index not found in table details")
+	}
+
+	// Verify DDL
+	if !strings.Contains(detail.DDL, "CREATE TABLE items") && !strings.Contains(detail.DDL, "CREATE TABLE `items`") {
+		t.Errorf("expected CREATE TABLE in detail.DDL, got: %s", detail.DDL)
+	}
+
+	// Verify control character sanitization (400 Bad Request)
+	badReq := httptest.NewRequest("GET", "/api/connections/default/tables/items%00injection?schema=main", nil)
+	badReq.Header.Set("X-DBLENS-DSN", dsn)
+	badRec := httptest.NewRecorder()
+	router.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request on table with null byte, got %d", badRec.Code)
+	}
+
+	badDdlReq := httptest.NewRequest("GET", "/api/connections/default/tables/items/ddl?schema=main%0Ainjected", nil)
+	badDdlReq.Header.Set("X-DBLENS-DSN", dsn)
+	badDdlRec := httptest.NewRecorder()
+	router.ServeHTTP(badDdlRec, badDdlReq)
+	if badDdlRec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request on ddl schema with newline, got %d", badDdlRec.Code)
+	}
+}
+
+func TestExecuteQueryHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_query_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE items (id INT, name TEXT);")
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, "INSERT INTO items (id, name) VALUES (1, 'item1'), (2, 'item2');")
+	if err != nil {
+		t.Fatalf("failed to insert sample items: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	type queryResponse struct {
+		Data struct {
+			Columns      []string        `json:"columns"`
+			Rows         [][]interface{} `json:"rows"`
+			Elapsed      int64           `json:"elapsed"`
+			AffectedRows int64           `json:"affectedRows"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+
+	// 1. Valid SELECT query with {"query": "SELECT * FROM items ORDER BY id ASC;"}
+	{
+		body := `{"query": "SELECT * FROM items ORDER BY id ASC;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on valid query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if resp.Error != nil {
+			t.Fatalf("expected nil error in response, got: %s", *resp.Error)
+		}
+
+		if len(resp.Data.Columns) != 2 || resp.Data.Columns[0] != "id" || resp.Data.Columns[1] != "name" {
+			t.Fatalf("expected columns ['id', 'name'], got: %v", resp.Data.Columns)
+		}
+
+		if len(resp.Data.Rows) != 2 {
+			t.Fatalf("expected 2 rows, got: %d", len(resp.Data.Rows))
+		}
+
+		// Row 1: id=1, name="item1"
+		row1Name, ok := resp.Data.Rows[0][1].(string)
+		if !ok || row1Name != "item1" {
+			t.Errorf("expected row 1 name 'item1', got: %v", resp.Data.Rows[0][1])
+		}
+
+		// Row 2: id=2, name="item2"
+		row2Name, ok := resp.Data.Rows[1][1].(string)
+		if !ok || row2Name != "item2" {
+			t.Errorf("expected row 2 name 'item2', got: %v", resp.Data.Rows[1][1])
+		}
+	}
+
+	// 2. Syntax / Database error: non-existent table
+	{
+		body := `{"query": "SELECT * FROM non_existent_table_xyz;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 Internal Server Error for invalid query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+
+		if resp.Error == nil || *resp.Error == "" {
+			t.Fatalf("expected non-empty error in response, got: %v", resp.Error)
+		}
+	}
+
+	// 3. Empty query: {"query": ""}
+	{
+		body := `{"query": ""}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for empty query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+
+		if resp.Error == nil || *resp.Error == "" {
+			t.Fatalf("expected non-empty error for empty query, got: %v", resp.Error)
+		}
+	}
+
+	// 4. Backwards compatibility: {"sql": "SELECT COUNT(*) FROM items;"}
+	{
+		body := `{"sql": "SELECT COUNT(*) FROM items;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for 'sql' field query, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestExplainQueryHandler(t *testing.T) {
+	dbFile := "/tmp/dblens_api_explain_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INT);")
+	if err != nil {
+		t.Fatalf("failed to create test table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE INDEX idx_age ON users(age);")
+	if err != nil {
+		t.Fatalf("failed to create index: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	type explainResponse struct {
+		Data *driver.ExplainResult `json:"data"`
+		Error *string              `json:"error"`
+	}
+
+	// 1. Valid EXPLAIN query on /connections/default/explain
+	{
+		body := `{"query": "SELECT * FROM users WHERE age > 20;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on valid explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp explainResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if resp.Error != nil {
+			t.Fatalf("expected nil error, got: %s", *resp.Error)
+		}
+		if resp.Data == nil {
+			t.Fatalf("expected non-nil data in explain response")
+		}
+		if resp.Data.Dialect != "sqlite" {
+			t.Errorf("expected dialect sqlite, got: %s", resp.Data.Dialect)
+		}
+		if resp.Data.Root == nil {
+			t.Fatalf("expected non-nil root plan node")
+		}
+		if resp.Data.Raw == "" {
+			t.Errorf("expected non-empty raw explain output")
+		}
+	}
+
+	// 2. Valid EXPLAIN query on /connections/default/databases/main/explain
+	{
+		body := `{"sql": "SELECT * FROM users ORDER BY name;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/databases/main/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on database explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp explainResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp.Data == nil || resp.Data.Root == nil {
+			t.Fatalf("expected valid explain plan data")
+		}
+	}
+
+	// 3. Empty query returns 400
+	{
+		body := `{"sql": "   "}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for empty explain query, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 4. Invalid SQL query returns 500
+	{
+		body := `{"sql": "SELECT * FROM non_existent_table_xyz;"}`
+		req := httptest.NewRequest("POST", "/api/connections/default/explain", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 for invalid query explain, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+
+
+
