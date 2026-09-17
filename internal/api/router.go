@@ -60,6 +60,8 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/tables", h.GetTables)
 	api.Get("/connections/{connId}/tables/{table}", h.GetTableDetails)
 	api.Get("/connections/{connId}/tables/{table}/ddl", h.GetTableDDL)
+	api.Post("/connections/{connId}/tables/{table}/alter-preview", h.AlterTablePreview)
+	api.Post("/connections/{connId}/tables/{table}/alter", h.AlterTableApply)
 	api.Post("/connections/{connId}/tables/{table}/data", h.QueryTableData)
 	api.Post("/connections/{connId}/query", h.ExecuteQuery)
 	api.Post("/connections/{connId}/explain", h.ExplainQuery)

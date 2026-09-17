@@ -32,6 +32,74 @@ type IndexMeta struct {
 	Type      string   `json:"type"`
 }
 
+type RenameColumnSpec struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	OldName string `json:"oldName,omitempty"`
+	NewName string `json:"newName,omitempty"`
+}
+
+func (r RenameColumnSpec) Old() string {
+	if r.From != "" {
+		return r.From
+	}
+	return r.OldName
+}
+
+func (r RenameColumnSpec) New() string {
+	if r.To != "" {
+		return r.To
+	}
+	return r.NewName
+}
+
+type AlterColumnSpec struct {
+	Name         string  `json:"name"`
+	Type         string  `json:"type,omitempty"`
+	DataType     string  `json:"dataType,omitempty"`
+	Nullable     *bool   `json:"nullable,omitempty"`
+	IsNullable   *bool   `json:"isNullable,omitempty"`
+	Default      *string `json:"default,omitempty"`
+	DefaultValue *string `json:"defaultValue,omitempty"`
+	DropDefault  bool    `json:"dropDefault,omitempty"`
+}
+
+func (a AlterColumnSpec) GetType() string {
+	if a.Type != "" {
+		return a.Type
+	}
+	return a.DataType
+}
+
+func (a AlterColumnSpec) GetNullable() *bool {
+	if a.Nullable != nil {
+		return a.Nullable
+	}
+	return a.IsNullable
+}
+
+func (a AlterColumnSpec) GetDefault() *string {
+	if a.Default != nil {
+		return a.Default
+	}
+	return a.DefaultValue
+}
+
+type AlterTableRequest struct {
+	Schema             string             `json:"schema"`
+	Table              string             `json:"table"`
+	AddedColumns       []ColumnMeta       `json:"addedColumns,omitempty"`
+	DroppedColumns     []string           `json:"droppedColumns,omitempty"`
+	RenamedColumns     []RenameColumnSpec `json:"renamedColumns,omitempty"`
+	AlteredColumns     []AlterColumnSpec  `json:"alteredColumns,omitempty"`
+	AddedIndexes       []IndexMeta        `json:"addedIndexes,omitempty"`
+	DroppedIndexes     []string           `json:"droppedIndexes,omitempty"`
+	AddedForeignKeys   []ForeignKey       `json:"addedForeignKeys,omitempty"`
+	DroppedForeignKeys []string           `json:"droppedForeignKeys,omitempty"`
+	Statements         []string           `json:"statements,omitempty"`
+	SQL                string             `json:"sql,omitempty"`
+}
+
 type TableMeta struct {
 	Name   string `json:"name"`
 	Schema string `json:"schema"`

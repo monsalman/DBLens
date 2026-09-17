@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/alter"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/go-chi/chi/v5"
@@ -228,6 +229,160 @@ func (h *Handler) GetTableDDL(w http.ResponseWriter, r *http.Request) {
 		"schema":  schema,
 		"dialect": entry.Driver.Dialect(),
 		"ddl":     ddl,
+	})
+}
+
+func (h *Handler) AlterTablePreview(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "table")
+	schema := r.URL.Query().Get("schema")
+
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	var req driver.AlterTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Table != "" && req.Table != tableName {
+		sendError(w, http.StatusBadRequest, "table in request body does not match URL parameter")
+		return
+	}
+	req.Table = tableName
+
+	if req.Schema == "" {
+		req.Schema = schema
+	}
+	if hasControlChars(req.Table) || hasControlChars(req.Schema) {
+		sendError(w, http.StatusBadRequest, "table or schema contains invalid characters")
+		return
+	}
+
+	stmts, ddl, err := alter.GenerateAlterDDL(entry.Driver.Dialect(), req)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"table":      tableName,
+		"schema":     req.Schema,
+		"dialect":    alter.NormalizeDialect(entry.Driver.Dialect()),
+		"statements": stmts,
+		"sql":        ddl,
+	})
+}
+
+func (h *Handler) AlterTableApply(w http.ResponseWriter, r *http.Request) {
+	tableName := chi.URLParam(r, "table")
+	schema := r.URL.Query().Get("schema")
+
+	if hasControlChars(tableName) || hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "table or schema parameter contains invalid characters")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	var req driver.AlterTableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Table != "" && req.Table != tableName {
+		sendError(w, http.StatusBadRequest, "table in request body does not match URL parameter")
+		return
+	}
+	req.Table = tableName
+
+	if req.Schema == "" {
+		req.Schema = schema
+	}
+	if hasControlChars(req.Table) || hasControlChars(req.Schema) {
+		sendError(w, http.StatusBadRequest, "table or schema contains invalid characters")
+		return
+	}
+
+	statements, _, err := alter.GenerateAlterDDL(entry.Driver.Dialect(), req)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if len(statements) == 0 {
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"table":              tableName,
+			"schema":             req.Schema,
+			"statementsExecuted": 0,
+			"elapsedMs":          0,
+			"statements":         []string{},
+			"message":            "No statements to execute",
+		})
+		return
+	}
+
+	dialect := alter.NormalizeDialect(entry.Driver.Dialect())
+	useTx := dialect == "postgres" || dialect == "sqlite"
+
+	if useTx {
+		if _, err := entry.Driver.ExecuteQuery(r.Context(), "BEGIN"); err != nil {
+			sendError(w, http.StatusInternalServerError, "failed to begin transaction: "+err.Error())
+			return
+		}
+	}
+
+	start := time.Now()
+	var executedCount int
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		_, err := entry.Driver.ExecuteQuery(r.Context(), stmt)
+		if err != nil {
+			if useTx {
+				_, _ = entry.Driver.ExecuteQuery(r.Context(), "ROLLBACK")
+			}
+			sendError(w, http.StatusInternalServerError, fmt.Sprintf("error executing statement %d: %s: %s", executedCount+1, stmt, err.Error()))
+			return
+		}
+		executedCount++
+	}
+
+	if useTx {
+		if _, err := entry.Driver.ExecuteQuery(r.Context(), "COMMIT"); err != nil {
+			_, _ = entry.Driver.ExecuteQuery(r.Context(), "ROLLBACK")
+			sendError(w, http.StatusInternalServerError, "failed to commit transaction: "+err.Error())
+			return
+		}
+	}
+	elapsed := time.Since(start)
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"table":              tableName,
+		"schema":             req.Schema,
+		"statementsExecuted": executedCount,
+		"elapsedMs":          elapsed.Milliseconds(),
+		"statements":         statements,
+		"message":            fmt.Sprintf("Successfully executed %d DDL statement(s)", executedCount),
 	})
 }
 
