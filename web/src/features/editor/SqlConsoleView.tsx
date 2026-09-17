@@ -20,10 +20,12 @@ import {
   Search,
   Download,
   FolderPlus,
+  ListTree,
 } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { QueryResult } from '../../lib/api'
+import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
+import { ExplainPlanView } from './ExplainPlanView'
 
 interface Props {
   connId: string
@@ -55,6 +57,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     addBookmark,
     deleteBookmark,
     openDryRunModal,
+    selectedSchema,
   } = useAppStore()
 
   // Tabs management
@@ -77,9 +80,15 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   // Per-tab execution & results
   const [tabResults, setTabResults] = useState<Record<string, QueryResult>>({})
   const [tabExecuting, setTabExecuting] = useState<Record<string, boolean>>({})
+  const [tabExplainResults, setTabExplainResults] = useState<Record<string, ExplainResult>>({})
+  const [tabExplaining, setTabExplaining] = useState<Record<string, boolean>>({})
+  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain'>>({})
 
   const currentResult = currentTab ? tabResults[currentTab.id] ?? null : null
   const isExecuting = Boolean(currentTab && tabExecuting[currentTab.id])
+  const currentExplain = currentTab ? tabExplainResults[currentTab.id] ?? null : null
+  const isExplaining = Boolean(currentTab && tabExplaining[currentTab.id])
+  const activePane = currentTab ? tabActivePane[currentTab.id] ?? 'results' : 'results'
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -189,6 +198,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     const startTime = performance.now()
 
     try {
+      setTabActivePane((prev) => ({ ...prev, [tabId]: 'results' }))
       const res = await api.executeQuery(connId, query)
       const durationMs = Math.round(res.durationMs || (performance.now() - startTime))
       const rowCount = res.rows?.length ?? res.affectedRows ?? 0
@@ -240,9 +250,43 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     await executeRun(tabId, query)
   }
 
+  const handleExplain = async (overrideSql?: string) => {
+    if (!currentTab) return
+    const tabId = currentTab.id
+    const query = (overrideSql ?? currentTab.query).trim()
+    if (!query || tabExplaining[tabId]) return
+
+    setTabExplaining((prev) => ({ ...prev, [tabId]: true }))
+    setTabActivePane((prev) => ({ ...prev, [tabId]: 'explain' }))
+
+    try {
+      const res = await api.explainQuery(connId, query, { schema: selectedSchema })
+      setTabExplainResults((prev) => ({ ...prev, [tabId]: res }))
+    } catch (err: any) {
+      setTabExplainResults((prev) => ({
+        ...prev,
+        [tabId]: {
+          dialect: 'sqlite',
+          root: { nodeType: 'Error' },
+          summary: {},
+          raw: err?.message || 'Explain failed',
+          format: 'text',
+          error: err?.message || 'Explain failed',
+        },
+      }))
+    } finally {
+      setTabExplaining((prev) => ({ ...prev, [tabId]: false }))
+    }
+  }
+
   const runRef = useRef(handleRun)
   useEffect(() => {
     runRef.current = handleRun
+  })
+
+  const explainRef = useRef(handleExplain)
+  useEffect(() => {
+    explainRef.current = handleExplain
   })
 
   const extensions = useMemo(() => {
@@ -254,6 +298,20 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
             key: 'Mod-Enter',
             run: () => {
               runRef.current()
+              return true
+            },
+          },
+          {
+            key: 'Mod-Alt-Enter',
+            run: () => {
+              explainRef.current()
+              return true
+            },
+          },
+          {
+            key: 'Shift-Mod-Enter',
+            run: () => {
+              explainRef.current()
               return true
             },
           },
@@ -464,6 +522,22 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
             </div>
 
             <button
+              id="dblens-explain-btn"
+              onClick={() => handleExplain()}
+              disabled={isExplaining || isExecuting || !currentTab?.query.trim()}
+              className="flex items-center gap-1.5 text-xs px-3 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-[var(--fg)] border border-[var(--border)] disabled:opacity-40 transition-colors"
+              title="Explain Query Execution Plan (Mod-Alt-Enter)"
+              aria-label="Explain Query Execution Plan (Mod-Alt-Enter)"
+            >
+              {isExplaining ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+              ) : (
+                <ListTree className="w-3.5 h-3.5 text-indigo-400" />
+              )}
+              <span>{isExplaining ? 'Explaining...' : 'Explain Plan'}</span>
+            </button>
+
+            <button
               id="dblens-run-query-btn"
               onClick={() => handleRun()}
               disabled={isExecuting || !currentTab?.query.trim()}
@@ -479,8 +553,92 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           </div>
         </div>
 
+        {/* Results / Explain Tab Switcher Bar */}
+        {(currentResult || currentExplain || isExplaining) && (
+          <div className="h-8 border-b border-[var(--border)] px-3 flex items-center justify-between bg-[var(--surface)]/70 shrink-0 text-xs select-none">
+            <div className="flex items-center gap-1" role="tablist" aria-label="Query Output Views">
+              <button
+                role="tab"
+                aria-selected={activePane === 'results'}
+                onClick={() =>
+                  setTabActivePane((prev) => ({
+                    ...prev,
+                    [currentTab?.id || '']: 'results',
+                  }))
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs transition-colors ${
+                  activePane === 'results'
+                    ? 'bg-[var(--bg)] text-[var(--fg)] font-semibold shadow-xs border border-[var(--border)]'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                }`}
+              >
+                <Rows className="w-3 h-3 text-blue-400" />
+                <span>Results</span>
+                {currentResult && !currentResult.error && (
+                  <span className="text-[10px] text-[var(--muted)] font-mono">
+                    ({currentResult.rows?.length ?? currentResult.affectedRows ?? 0})
+                  </span>
+                )}
+              </button>
+
+              <button
+                role="tab"
+                aria-selected={activePane === 'explain'}
+                onClick={() =>
+                  setTabActivePane((prev) => ({
+                    ...prev,
+                    [currentTab?.id || '']: 'explain',
+                  }))
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs transition-colors ${
+                  activePane === 'explain'
+                    ? 'bg-[var(--bg)] text-[var(--fg)] font-semibold shadow-xs border border-[var(--border)]'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                }`}
+              >
+                <ListTree className="w-3 h-3 text-indigo-400" />
+                <span>Execution Plan</span>
+                {currentExplain?.summary?.totalCost !== undefined && currentExplain.summary.totalCost > 0 && (
+                  <span className="text-[10px] text-amber-400 font-mono">
+                    (cost: {Math.round(currentExplain.summary.totalCost)})
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] text-[var(--muted)] font-mono">
+              {activePane === 'results' && currentResult && (
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {currentResult.durationMs}ms
+                </span>
+              )}
+              {activePane === 'explain' && currentExplain?.summary?.executionTime !== undefined && (
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <Clock className="w-3 h-3" />
+                  {currentExplain.summary.executionTime.toFixed(2)}ms
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Explain Plan Pane */}
+        {activePane === 'explain' && (currentExplain || isExplaining) && (
+          <ExplainPlanView
+            plan={currentExplain}
+            isExplaining={isExplaining}
+            onClose={() =>
+              setTabActivePane((prev) => ({
+                ...prev,
+                [currentTab?.id || '']: 'results',
+              }))
+            }
+          />
+        )}
+
         {/* Results Pane */}
-        {currentResult && (
+        {activePane === 'results' && currentResult && (
           <div className="flex-1 flex flex-col min-h-0 overflow-auto">
             {currentResult.error ? (
               <div className="p-4 flex items-start gap-2">

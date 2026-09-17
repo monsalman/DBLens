@@ -131,6 +131,54 @@ export interface TestConnectionResult {
   dialect?: string
 }
 
+export interface PlanNode {
+  nodeType: string
+  relationName?: string
+  schema?: string
+  alias?: string
+  indexName?: string
+  cost?: number
+  startupCost?: number
+  totalCost?: number
+  rows?: number
+  planRows?: number
+  planWidth?: number
+  actualTime?: number
+  actualStartupTime?: number
+  actualTotalTime?: number
+  actualRows?: number
+  actualLoops?: number
+  filter?: string
+  indexCond?: string
+  hashCond?: string
+  joinType?: string
+  isExpensive?: boolean
+  warnings?: string[]
+  children?: PlanNode[]
+  extra?: Record<string, any>
+}
+
+export interface ExplainSummary {
+  totalCost?: number
+  planningTime?: number
+  executionTime?: number
+}
+
+export interface ExplainResult {
+  dialect: 'postgres' | 'mysql' | 'sqlite' | string
+  root: PlanNode
+  summary: ExplainSummary
+  raw: string
+  format: 'json' | 'text'
+  error?: string
+}
+
+export interface ExplainOptions {
+  analyze?: boolean
+  schema?: string
+  database?: string
+}
+
 // ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
 
 export const api = {
@@ -474,6 +522,75 @@ export const api = {
         rows: [],
         durationMs: Math.round(performance.now() - start),
         error: err?.message || 'Query failed',
+      }
+    }
+  },
+
+  async explainQuery(
+    connId: string,
+    queryOrDb: string,
+    queryOrOpts?: string | ExplainOptions,
+    maybeOpts?: ExplainOptions,
+    profiles?: ConnectionConfig[]
+  ): Promise<ExplainResult> {
+    const dsn = this._getDSN(connId, profiles)
+    let sql: string
+    let dbName: string | undefined
+    let options: ExplainOptions | undefined
+
+    if (typeof queryOrOpts === 'string') {
+      dbName = queryOrDb
+      sql = queryOrOpts
+      options = maybeOpts
+    } else {
+      sql = queryOrDb
+      options = queryOrOpts
+      dbName = options?.database
+    }
+
+    const endpoint = dbName
+      ? `/api/connections/${connId}/databases/${encodeURIComponent(dbName)}/explain`
+      : `/api/connections/${connId}/explain`
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify({
+          sql,
+          analyze: options?.analyze ?? true,
+          schema: options?.schema,
+        }),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        let errMsg = text
+        try {
+          const parsed = JSON.parse(text)
+          if (parsed.error) errMsg = parsed.error
+        } catch {}
+        return {
+          dialect: 'sqlite',
+          root: { nodeType: 'ERROR' },
+          summary: {},
+          raw: errMsg,
+          format: 'text',
+          error: errMsg || 'Explain failed',
+        }
+      }
+
+      const json = await res.json()
+      const data = json.data ?? json
+      return data
+    } catch (err: any) {
+      return {
+        dialect: 'sqlite',
+        root: { nodeType: 'ERROR' },
+        summary: {},
+        raw: err?.message || 'Network error',
+        format: 'text',
+        error: err?.message || 'Failed to explain query',
       }
     }
   },
