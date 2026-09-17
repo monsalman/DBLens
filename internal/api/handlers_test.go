@@ -1168,6 +1168,190 @@ func TestAutocompleteSchemaEndpoints(t *testing.T) {
 	}
 }
 
+func TestAlterTablePreviewAndApply(t *testing.T) {
+	dbFile := "/tmp/dblens_api_alter_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE widgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			legacy_name TEXT NOT NULL,
+			removable_col TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Preview alter table
+	previewPayload := `{
+		"schema": "",
+		"table": "widgets",
+		"addedColumns": [
+			{"name": "description", "type": "TEXT", "isNullable": true}
+		],
+		"renamedColumns": [
+			{"from": "legacy_name", "to": "name"}
+		],
+		"droppedColumns": [
+			"removable_col"
+		],
+		"addedIndexes": [
+			{"name": "idx_widgets_desc", "columns": ["description"], "isUnique": false}
+		]
+	}`
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter-preview", bytes.NewBufferString(previewPayload))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var previewResp struct {
+		Data struct {
+			Statements []string `json:"statements"`
+			SQL        string   `json:"sql"`
+			Dialect    string   `json:"dialect"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &previewResp); err != nil {
+		t.Fatalf("failed to unmarshal preview response: %v", err)
+	}
+
+	if len(previewResp.Data.Statements) != 4 {
+		t.Fatalf("expected 4 preview statements, got %d", len(previewResp.Data.Statements))
+	}
+	if !strings.Contains(previewResp.Data.SQL, `ALTER TABLE "widgets" ADD COLUMN "description" TEXT`) {
+		t.Errorf("preview SQL missing add column: %s", previewResp.Data.SQL)
+	}
+
+	// 2. Apply alter table
+	applyReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(previewPayload))
+	applyReq.Header.Set("X-DBLENS-DSN", dsn)
+	applyReq.Header.Set("Content-Type", "application/json")
+	applyW := httptest.NewRecorder()
+	router.ServeHTTP(applyW, applyReq)
+
+	if applyW.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, want %d, body: %s", applyW.Code, http.StatusOK, applyW.Body.String())
+	}
+
+	var applyResp struct {
+		Data struct {
+			StatementsExecuted int `json:"statementsExecuted"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(applyW.Body.Bytes(), &applyResp); err != nil {
+		t.Fatalf("failed to unmarshal apply response: %v", err)
+	}
+
+	if applyResp.Data.StatementsExecuted != 4 {
+		t.Fatalf("expected 4 statements executed, got %d", applyResp.Data.StatementsExecuted)
+	}
+
+	// 3. Verify changes in table by inserting into new schema
+	_, err = entry.Driver.ExecuteQuery(ctx, `INSERT INTO widgets (name, description) VALUES ('Gadget', 'A cool gadget');`)
+	if err != nil {
+		t.Fatalf("failed to insert into altered table: %v", err)
+	}
+
+	// 4. Test error conditions: control characters
+	badReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets%00injection/alter-preview", bytes.NewBufferString(previewPayload))
+	badReq.Header.Set("X-DBLENS-DSN", dsn)
+	badW := httptest.NewRecorder()
+	router.ServeHTTP(badW, badReq)
+	if badW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for control chars in table name, got %d", badW.Code)
+	}
+
+	// 5. Test table mismatch in request body
+	mismatchPayload := `{"table": "other_table", "addedColumns": [{"name": "extra", "type": "TEXT"}]}`
+	mismatchReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(mismatchPayload))
+	mismatchReq.Header.Set("X-DBLENS-DSN", dsn)
+	mismatchReq.Header.Set("Content-Type", "application/json")
+	mismatchW := httptest.NewRecorder()
+	router.ServeHTTP(mismatchW, mismatchReq)
+	if mismatchW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for table mismatch, got %d", mismatchW.Code)
+	}
+	if !strings.Contains(mismatchW.Body.String(), "table in request body does not match URL parameter") {
+		t.Errorf("expected table mismatch error message, got: %s", mismatchW.Body.String())
+	}
+
+	// 6. Test control characters in request body table/schema
+	crBody := `{"table": "widgets\ninjection"}`
+	crReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(crBody))
+	crReq.Header.Set("X-DBLENS-DSN", dsn)
+	crReq.Header.Set("Content-Type", "application/json")
+	crW := httptest.NewRecorder()
+	router.ServeHTTP(crW, crReq)
+	if crW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for control chars in body table, got %d", crW.Code)
+	}
+
+	// 7. Verify arbitrary req.Statements and req.SQL are ignored/not executed
+	backdoorPayload := `{"statements": ["DROP TABLE widgets"], "sql": "DROP TABLE widgets"}`
+	backdoorReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(backdoorPayload))
+	backdoorReq.Header.Set("X-DBLENS-DSN", dsn)
+	backdoorReq.Header.Set("Content-Type", "application/json")
+	backdoorW := httptest.NewRecorder()
+	router.ServeHTTP(backdoorW, backdoorReq)
+	if backdoorW.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for empty structured alter, got %d", backdoorW.Code)
+	}
+	// Verify widgets table was NOT dropped
+	qr, err := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM widgets")
+	if err != nil || len(qr.Rows) == 0 {
+		t.Fatalf("backdoor statements executed: widgets table dropped or inaccessible: %v", err)
+	}
+
+	// 8. Test transactional rollback on failure in SQLite
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE tx_test (id INT);")
+	if err != nil {
+		t.Fatalf("failed to create tx_test table: %v", err)
+	}
+	// Attempt to add duplicate column "dup_col" twice in same request
+	failPayload := `{
+		"addedColumns": [
+			{"name": "dup_col", "type": "TEXT"},
+			{"name": "dup_col", "type": "TEXT"}
+		]
+	}`
+	failReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/tx_test/alter", bytes.NewBufferString(failPayload))
+	failReq.Header.Set("X-DBLENS-DSN", dsn)
+	failReq.Header.Set("Content-Type", "application/json")
+	failW := httptest.NewRecorder()
+	router.ServeHTTP(failW, failReq)
+	if failW.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on statement execution error, got %d", failW.Code)
+	}
+	// Verify rollback: dup_col should NOT exist on tx_test because transaction rolled back
+	_, err = entry.Driver.ExecuteQuery(ctx, "SELECT dup_col FROM tx_test")
+	if err == nil {
+		t.Fatalf("expected error querying rolled-back column 'dup_col', but it exists (rollback failed)")
+	}
+}
+
+
 
 
 
