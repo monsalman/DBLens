@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -870,3 +871,65 @@ func (p *PostgresDriver) GetERDData(ctx context.Context) ([]types.ERDTable, erro
 	}
 	return erd, nil
 }
+
+func (p *PostgresDriver) ExplainQuery(ctx context.Context, rawSql string, opts types.ExplainOptions) (*types.ExplainResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(rawSql)
+	trimmed = strings.TrimRight(trimmed, ";")
+	if trimmed == "" {
+		return nil, fmt.Errorf("query cannot be empty")
+	}
+
+	conn, err := p.db.Conn(ctxTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("postgres explain conn error: %w", err)
+	}
+	defer conn.Close()
+
+	if opts.Schema != "" {
+		if strings.ContainsAny(opts.Schema, ";\x00\r\n") {
+			return nil, fmt.Errorf("invalid schema name: %s", opts.Schema)
+		}
+		quotedSchema := `"` + strings.ReplaceAll(opts.Schema, `"`, `""`) + `"`
+		_, _ = conn.ExecContext(ctxTimeout, fmt.Sprintf(`SET search_path TO %s, public;`, quotedSchema))
+		defer func() {
+			_, _ = conn.ExecContext(context.Background(), `RESET search_path;`)
+		}()
+	}
+
+	// Safety: never run EXPLAIN ANALYZE on mutating statements
+	analyze := opts.Analyze
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(upper, "INSERT") ||
+		strings.HasPrefix(upper, "UPDATE") ||
+		strings.HasPrefix(upper, "DELETE") ||
+		strings.HasPrefix(upper, "DROP") ||
+		strings.HasPrefix(upper, "TRUNCATE") ||
+		strings.HasPrefix(upper, "ALTER") ||
+		strings.HasPrefix(upper, "CREATE") {
+		analyze = false
+	}
+
+	var explainSQL string
+	if analyze {
+		explainSQL = fmt.Sprintf("EXPLAIN (ANALYZE, COSTS, VERBOSE, BUFFERS, FORMAT JSON) %s;", trimmed)
+	} else {
+		explainSQL = fmt.Sprintf("EXPLAIN (COSTS, VERBOSE, FORMAT JSON) %s;", trimmed)
+	}
+
+	var jsonOutput string
+	err = conn.QueryRowContext(ctxTimeout, explainSQL).Scan(&jsonOutput)
+	if err != nil {
+		// Fallback to EXPLAIN (FORMAT JSON) without analyze if analyze failed
+		fallbackSQL := fmt.Sprintf("EXPLAIN (FORMAT JSON) %s;", trimmed)
+		errFallback := conn.QueryRowContext(ctxTimeout, fallbackSQL).Scan(&jsonOutput)
+		if errFallback != nil {
+			return nil, fmt.Errorf("postgres explain error: %w", err)
+		}
+	}
+
+	return explain.ParsePostgres(jsonOutput)
+}
+

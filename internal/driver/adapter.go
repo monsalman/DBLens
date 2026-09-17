@@ -25,3 +25,7 @@ type MutationResult = types.MutationResult
 type BatchInsertRequest = types.BatchInsertRequest
 type ERDTable = types.ERDTable
 type Driver = types.Driver
+type ExplainOptions = types.ExplainOptions
+type PlanNode = types.PlanNode
+type ExplainSummary = types.ExplainSummary
+type ExplainResult = types.ExplainResult

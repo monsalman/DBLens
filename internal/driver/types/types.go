@@ -119,6 +119,7 @@ type Driver interface {
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)
+	ExplainQuery(ctx context.Context, sql string, opts ExplainOptions) (*ExplainResult, error)
 	Ping(ctx context.Context) error
 	Close() error
 }

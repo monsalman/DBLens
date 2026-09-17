@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/explain"
 	_ "modernc.org/sqlite"
 )
 
@@ -662,3 +663,88 @@ func (s *SQLiteDriver) GetERDData(ctx context.Context) ([]types.ERDTable, error)
 	}
 	return erd, nil
 }
+
+func (s *SQLiteDriver) ExplainQuery(ctx context.Context, rawSql string, opts types.ExplainOptions) (*types.ExplainResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(rawSql)
+	trimmed = strings.TrimRight(trimmed, ";")
+	if trimmed == "" {
+		return nil, fmt.Errorf("query cannot be empty")
+	}
+
+	explainSQL := fmt.Sprintf("EXPLAIN QUERY PLAN %s;", trimmed)
+	rows, err := s.db.QueryContext(ctxTimeout, explainSQL)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite explain error: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("sqlite explain columns error: %w", err)
+	}
+
+	var parsedRows []explain.SQLiteRow
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+
+		if len(cols) == 4 {
+			if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+				return nil, err
+			}
+		} else if len(cols) == 3 {
+			if err := rows.Scan(&id, &parent, &detail); err != nil {
+				return nil, err
+			}
+		} else {
+			vals := make([]interface{}, len(cols))
+			ptrs := make([]interface{}, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				return nil, err
+			}
+			if len(vals) > 0 {
+				id = toSQLiteInt(vals[0])
+			}
+			if len(vals) > 1 {
+				parent = toSQLiteInt(vals[1])
+			}
+			if len(vals) > 2 {
+				detail = fmt.Sprintf("%v", vals[len(vals)-1])
+			}
+		}
+
+		parsedRows = append(parsedRows, explain.SQLiteRow{
+			ID:      id,
+			Parent:  parent,
+			NotUsed: notused,
+			Detail:  detail,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return explain.ParseSQLite(parsedRows)
+}
+
+func toSQLiteInt(v interface{}) int {
+	switch val := v.(type) {
+	case int64:
+		return int(val)
+	case int:
+		return val
+	case float64:
+		return int(val)
+	default:
+		return 0
+	}
+}
+
+

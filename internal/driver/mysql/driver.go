@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -691,3 +692,24 @@ func (m *MySQLDriver) GetERDData(ctx context.Context) ([]types.ERDTable, error) 
 	}
 	return erd, nil
 }
+
+func (m *MySQLDriver) ExplainQuery(ctx context.Context, rawSql string, opts types.ExplainOptions) (*types.ExplainResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(rawSql)
+	trimmed = strings.TrimRight(trimmed, ";")
+	if trimmed == "" {
+		return nil, fmt.Errorf("query cannot be empty")
+	}
+
+	explainSQL := fmt.Sprintf("EXPLAIN FORMAT=JSON %s;", trimmed)
+	var jsonOutput string
+	err := m.db.QueryRowContext(ctxTimeout, explainSQL).Scan(&jsonOutput)
+	if err != nil {
+		return nil, fmt.Errorf("mysql explain error: %w", err)
+	}
+
+	return explain.ParseMySQL(jsonOutput)
+}
+
