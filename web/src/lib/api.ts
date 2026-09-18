@@ -323,6 +323,52 @@ export interface ProcessInfo {
   command?: string
 }
 
+export interface TableStorageStat {
+  schema: string
+  table: string
+  totalBytes: number
+  dataBytes: number
+  indexBytes: number
+  totalSize: string
+  dataSize: string
+  indexSize: string
+  rowCount: number
+  deadTuples: number
+  freeBytes?: number
+  remediationSql?: string
+}
+
+export interface UnusedIndexStat {
+  schema: string
+  table: string
+  index: string
+  sizeBytes: number
+  size: string
+  scans: number
+  remediationSql?: string
+}
+
+export interface RemediationAction {
+  id: string
+  title: string
+  description: string
+  severity: 'critical' | 'warning' | 'info'
+  category: 'cache' | 'bloat' | 'unused_index' | 'maintenance'
+  sql: string
+}
+
+export interface HealthReport {
+  cacheHitRatio: number
+  databaseSizeBytes: number
+  databaseSize: string
+  totalTables: number
+  totalIndexes: number
+  deadTuples: number
+  tables: TableStorageStat[]
+  unusedIndexes: UnusedIndexStat[]
+  recommendations: RemediationAction[]
+}
+
 // ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
 
 export const api = {
@@ -1070,6 +1116,27 @@ export const api = {
         if (j?.error) msg = j.error
       } catch {}
       throw new Error(msg || 'Failed to kill process')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getHealth(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<HealthReport> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/health`, {
+      headers: this._headers(dsn),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to fetch database health report')
     }
     const json = await res.json()
     return json.data ?? json

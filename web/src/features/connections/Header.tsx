@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 
@@ -112,14 +112,21 @@ export const Header: React.FC<Props> = ({
             { id: 'erd' as const, label: 'ERD' },
             { id: 'diff' as const, label: 'Schema Diff' },
             { id: 'processes' as const, label: 'Processes' },
-          ].map(tab => (
-            <button key={tab.id} onClick={() => onTabChange(tab.id)}
-              className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
-                activeTab === tab.id
-                  ? 'text-[var(--fg)] bg-[var(--active)] font-medium'
-                  : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-              }`}>{tab.label}</button>
-          ))}
+            { id: 'advisor' as const, label: 'Advisor', icon: ShieldCheck },
+          ].map(tab => {
+            const Icon = (tab as any).icon
+            return (
+              <button key={tab.id} onClick={() => onTabChange(tab.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded transition-colors ${
+                  activeTab === tab.id
+                    ? 'text-[var(--fg)] bg-[var(--active)] font-medium'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+                }`}>
+                {Icon && <Icon className="w-3.5 h-3.5" />}
+                {tab.label}
+              </button>
+            )
+          })}
         </div>
 
         {/* Dark/Light Toggle */}

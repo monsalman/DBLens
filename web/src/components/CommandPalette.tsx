@@ -17,6 +17,7 @@ import {
   CornerDownLeft,
   GitCompare,
   Activity,
+  ShieldCheck,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -241,6 +242,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['process', 'processes', 'activity', 'kill', 'query', 'queries', 'monitor'],
       onSelect: () => {
         onTabChange('processes')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:advisor',
+      title: 'Go to Database Health & Performance Advisor',
+      subtitle: 'Analyze cache hit ratio, bloat, unused indexes, and run remediation',
+      category: 'Actions',
+      icon: ShieldCheck,
+      badge: 'ADVISOR',
+      keywords: ['advisor', 'health', 'performance', 'cache', 'bloat', 'vacuum', 'indexes', 'optimize'],
+      onSelect: () => {
+        onTabChange('advisor')
         closePalette()
       },
     })
