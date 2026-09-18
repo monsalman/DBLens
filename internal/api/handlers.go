@@ -413,8 +413,9 @@ func (h *Handler) QueryTableData(w http.ResponseWriter, r *http.Request) {
 }
 
 type ExecuteQueryRequest struct {
-	SQL   string `json:"sql"`
-	Query string `json:"query"`
+	SQL    string                 `json:"sql"`
+	Query  string                 `json:"query"`
+	Params map[string]interface{} `json:"params"`
 }
 
 func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
@@ -440,7 +441,7 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := entry.Driver.ExecuteQuery(r.Context(), sql)
+	res, err := entry.Driver.ExecuteQueryWithParams(r.Context(), sql, req.Params)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return

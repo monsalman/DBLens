@@ -263,6 +263,7 @@ type Driver interface {
 	QueryTableData(ctx context.Context, opts QueryOptions) (*QueryResult, error)
 	QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
+	ExecuteQueryWithParams(ctx context.Context, sql string, params map[string]interface{}) (*QueryResult, error)
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/driver/params"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/explain"
 	_ "modernc.org/sqlite"
@@ -411,15 +412,30 @@ func (s *SQLiteDriver) QueryTableStream(ctx context.Context, schema, table strin
 }
 
 func (s *SQLiteDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
+	return s.ExecuteQueryWithParams(ctx, rawSql, nil)
+}
+
+func (s *SQLiteDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-	upper := strings.ToUpper(trimmed)
+
+	compiledSql := trimmed
+	var args []interface{}
+	var err error
+	if queryParams != nil || strings.Contains(trimmed, ":") || strings.Contains(trimmed, "{{") {
+		compiledSql, args, err = params.CompileNamedParams(s.Dialect(), trimmed, queryParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	upper := strings.ToUpper(compiledSql)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "PRAGMA") {
-		rows, err := s.db.QueryContext(ctxTimeout, trimmed)
+		rows, err := s.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -456,7 +472,7 @@ func (s *SQLiteDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.
 		}, nil
 	}
 
-	res, err := s.db.ExecContext(ctxTimeout, trimmed)
+	res, err := s.db.ExecContext(ctxTimeout, compiledSql, args...)
 	if err != nil {
 		return nil, err
 	}

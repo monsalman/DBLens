@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/driver/params"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -641,15 +642,30 @@ func (p *PostgresDriver) QueryTableStream(ctx context.Context, schema, table str
 }
 
 func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
+	return p.ExecuteQueryWithParams(ctx, rawSql, nil)
+}
+
+func (p *PostgresDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-	upper := strings.ToUpper(trimmed)
+
+	compiledSql := trimmed
+	var args []interface{}
+	var err error
+	if queryParams != nil || strings.Contains(trimmed, ":") || strings.Contains(trimmed, "{{") {
+		compiledSql, args, err = params.CompileNamedParams(p.Dialect(), trimmed, queryParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	upper := strings.ToUpper(compiledSql)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "WITH") {
-		rows, err := p.db.QueryContext(ctxTimeout, trimmed)
+		rows, err := p.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -686,7 +702,7 @@ func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*type
 		}, nil
 	}
 
-	res, err := p.db.ExecContext(ctxTimeout, trimmed)
+	res, err := p.db.ExecContext(ctxTimeout, compiledSql, args...)
 	if err != nil {
 		return nil, err
 	}

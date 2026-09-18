@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/driver/params"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/go-sql-driver/mysql"
@@ -472,15 +473,30 @@ func (m *MySQLDriver) QueryTableStream(ctx context.Context, schema, table string
 }
 
 func (m *MySQLDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
+	return m.ExecuteQueryWithParams(ctx, rawSql, nil)
+}
+
+func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-	upper := strings.ToUpper(trimmed)
+
+	compiledSql := trimmed
+	var args []interface{}
+	var err error
+	if queryParams != nil || strings.Contains(trimmed, ":") || strings.Contains(trimmed, "{{") {
+		compiledSql, args, err = params.CompileNamedParams(m.Dialect(), trimmed, queryParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	upper := strings.ToUpper(compiledSql)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") {
-		rows, err := m.db.QueryContext(ctxTimeout, trimmed)
+		rows, err := m.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -517,7 +533,7 @@ func (m *MySQLDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.Q
 		}, nil
 	}
 
-	res, err := m.db.ExecContext(ctxTimeout, trimmed)
+	res, err := m.db.ExecContext(ctxTimeout, compiledSql, args...)
 	if err != nil {
 		return nil, err
 	}
