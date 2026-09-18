@@ -968,6 +968,73 @@ func TestExecuteQueryHandler(t *testing.T) {
 			t.Fatalf("expected 200 OK for 'sql' field query, got %d: %s", rec.Code, rec.Body.String())
 		}
 	}
+
+	// 5. Parameterized query execution with :param and {{param}}
+	{
+		body := `{"sql": "SELECT * FROM items WHERE id = :id", "params": {"id": 1}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for parameterized query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(resp.Data.Rows) != 1 {
+			t.Fatalf("expected 1 row for id=1, got %d", len(resp.Data.Rows))
+		}
+		if resp.Data.Rows[0][1] != "item1" {
+			t.Errorf("expected item1, got %v", resp.Data.Rows[0][1])
+		}
+	}
+
+	// 6. Parameterized query with double brace {{var}}
+	{
+		body := `{"sql": "SELECT * FROM items WHERE name = {{ target_name }}", "params": {"target_name": "item2"}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for double-brace parameterized query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(resp.Data.Rows) != 1 {
+			t.Fatalf("expected 1 row for item2, got %d", len(resp.Data.Rows))
+		}
+		if resp.Data.Rows[0][1] != "item2" {
+			t.Errorf("expected item2, got %v", resp.Data.Rows[0][1])
+		}
+	}
+
+	// 7. Missing parameter returns error
+	{
+		body := `{"sql": "SELECT * FROM items WHERE id = :missing_id", "params": {}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 on missing parameter, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestExplainQueryHandler(t *testing.T) {
