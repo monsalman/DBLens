@@ -23,11 +23,13 @@ import {
   ListTree,
   Sparkles,
   RefreshCw,
+  BarChart3,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { ExplainPlanView } from './ExplainPlanView'
+import { SqlChartStudio } from './SqlChartStudio'
 import { createSqlExtension } from '../../lib/sqlAutocomplete'
 
 interface Props {
@@ -107,7 +109,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [tabExecuting, setTabExecuting] = useState<Record<string, boolean>>({})
   const [tabExplainResults, setTabExplainResults] = useState<Record<string, ExplainResult>>({})
   const [tabExplaining, setTabExplaining] = useState<Record<string, boolean>>({})
-  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain'>>({})
+  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain' | 'chart'>>({})
 
   const currentResult = currentTab ? tabResults[currentTab.id] ?? null : null
   const isExecuting = Boolean(currentTab && tabExecuting[currentTab.id])
@@ -662,10 +664,34 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                   </span>
                 )}
               </button>
+
+              <button
+                role="tab"
+                aria-selected={activePane === 'chart'}
+                onClick={() =>
+                  setTabActivePane((prev) => ({
+                    ...prev,
+                    [currentTab?.id || '']: 'chart',
+                  }))
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs transition-colors ${
+                  activePane === 'chart'
+                    ? 'bg-[var(--bg)] text-[var(--fg)] font-semibold shadow-xs border border-[var(--border)]'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                }`}
+              >
+                <BarChart3 className="w-3 h-3 text-emerald-400" />
+                <span>Charts</span>
+                {currentResult && !currentResult.error && (currentResult.rows?.length ?? 0) > 0 && (
+                  <span className="text-[10px] text-[var(--muted)] font-mono">
+                    ({currentResult.rows?.length})
+                  </span>
+                )}
+              </button>
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-[var(--muted)] font-mono">
-              {activePane === 'results' && currentResult && (
+              {(activePane === 'results' || activePane === 'chart') && currentResult && (
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {currentResult.durationMs}ms
@@ -794,6 +820,11 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               </div>
             )}
           </div>
+        )}
+
+        {/* Chart Studio Pane */}
+        {activePane === 'chart' && (
+          <SqlChartStudio result={currentResult} />
         )}
       </div>
 
