@@ -1787,6 +1787,65 @@ func TestGetProcessesAndKillProcess(t *testing.T) {
 	}
 }
 
+func TestGetDatabaseHealth(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	dbFile := filepath.Join(t.TempDir(), "health_test.db")
+	dsn := "sqlite://" + dbFile
+
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to get connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, `INSERT INTO users (name) VALUES ('Alice'), ('Bob');`)
+	if err != nil {
+		t.Fatalf("failed to insert data: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "http://example.com/api/connections/default/health", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data driver.HealthReport `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Data.TotalTables != 1 {
+		t.Fatalf("expected 1 table, got %d", resp.Data.TotalTables)
+	}
+	if len(resp.Data.Tables) != 1 || resp.Data.Tables[0].Table != "users" {
+		t.Fatalf("expected table 'users', got %+v", resp.Data.Tables)
+	}
+	if resp.Data.Tables[0].RowCount != 2 {
+		t.Fatalf("expected rowCount 2, got %d", resp.Data.Tables[0].RowCount)
+	}
+	if len(resp.Data.Recommendations) == 0 {
+		t.Fatalf("expected at least 1 recommendation, got 0")
+	}
+}
+
+
 
 
 

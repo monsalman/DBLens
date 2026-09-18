@@ -80,3 +80,47 @@ func TestSQLiteGetERDDataCardinality(t *testing.T) {
 		t.Fatalf("expected both orders and profiles to be in ERD data, foundOrders=%v, foundProfiles=%v", foundOrders, foundProfiles)
 	}
 }
+
+func TestSQLiteInspectHealth(t *testing.T) {
+	dbFile := "/tmp/dblens_sqlite_health_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	drv, err := sqlite.New(dsn)
+	if err != nil {
+		t.Fatalf("failed to create sqlite driver: %v", err)
+	}
+	defer drv.Close()
+
+	ctx := context.Background()
+	_, err = drv.ExecuteQuery(ctx, `
+		CREATE TABLE metrics (
+			id INTEGER PRIMARY KEY,
+			val TEXT
+		);
+		INSERT INTO metrics (val) VALUES ('a'), ('b'), ('c');
+	`)
+	if err != nil {
+		t.Fatalf("failed to initialize db: %v", err)
+	}
+
+	report, err := drv.InspectHealth(ctx)
+	if err != nil {
+		t.Fatalf("InspectHealth failed: %v", err)
+	}
+
+	if report.TotalTables != 1 {
+		t.Fatalf("expected 1 table, got %d", report.TotalTables)
+	}
+	if report.DatabaseSizeBytes <= 0 {
+		t.Fatalf("expected positive database size bytes, got %d", report.DatabaseSizeBytes)
+	}
+	if report.CacheHitRatio < 0 || report.CacheHitRatio > 100 {
+		t.Fatalf("expected cache hit ratio between 0 and 100, got %f", report.CacheHitRatio)
+	}
+	if len(report.Recommendations) == 0 {
+		t.Fatalf("expected recommendations, got 0")
+	}
+}
+
