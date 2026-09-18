@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -816,5 +817,202 @@ func (m *MySQLDriver) KillProcess(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	report := &types.HealthReport{
+		Tables:          []types.TableStorageStat{},
+		UnusedIndexes:   []types.UnusedIndexStat{},
+		Recommendations: []types.RemediationAction{},
+		CacheHitRatio:   100.0,
+	}
+
+	// 1. Cache hit ratio: Innodb_buffer_pool_reads vs Innodb_buffer_pool_read_requests
+	statusRows, err := m.db.QueryContext(ctxTimeout, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_read%'")
+	if err != nil {
+		statusRows, err = m.db.QueryContext(ctxTimeout, "SHOW STATUS LIKE 'Innodb_buffer_pool_read%'")
+	}
+	if err == nil {
+		defer statusRows.Close()
+		var reads, readRequests int64
+		for statusRows.Next() {
+			var varName, varVal string
+			if err := statusRows.Scan(&varName, &varVal); err == nil {
+				if strings.EqualFold(varName, "Innodb_buffer_pool_reads") {
+					reads, _ = strconv.ParseInt(varVal, 10, 64)
+				} else if strings.EqualFold(varName, "Innodb_buffer_pool_read_requests") {
+					readRequests, _ = strconv.ParseInt(varVal, 10, 64)
+				}
+			}
+		}
+		if readRequests > 0 {
+			ratio := (1.0 - (float64(reads) / float64(readRequests))) * 100.0
+			if ratio < 0 {
+				ratio = 0
+			}
+			if ratio > 100 {
+				ratio = 100
+			}
+			report.CacheHitRatio = math.Round(ratio*10) / 10
+		}
+	}
+
+	// 2. Table sizes & DATA_FREE from information_schema.TABLES
+	tablesQuery := `
+		SELECT
+			COALESCE(TABLE_SCHEMA, ''),
+			COALESCE(TABLE_NAME, ''),
+			COALESCE(DATA_LENGTH + INDEX_LENGTH + DATA_FREE, 0) AS total_bytes,
+			COALESCE(DATA_LENGTH, 0) AS data_bytes,
+			COALESCE(INDEX_LENGTH, 0) AS index_bytes,
+			COALESCE(TABLE_ROWS, 0) AS row_count,
+			COALESCE(DATA_FREE, 0) AS free_bytes
+		FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_TYPE = 'BASE TABLE'
+		ORDER BY total_bytes DESC;
+	`
+	rows, err := m.db.QueryContext(ctxTimeout, tablesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query mysql table stats: %w", err)
+	}
+	defer rows.Close()
+
+	var totalDbBytes, totalDeadBytes int64
+	for rows.Next() {
+		var stat types.TableStorageStat
+		if err := rows.Scan(
+			&stat.Schema,
+			&stat.Table,
+			&stat.TotalBytes,
+			&stat.DataBytes,
+			&stat.IndexBytes,
+			&stat.RowCount,
+			&stat.FreeBytes,
+		); err != nil {
+			return nil, err
+		}
+		stat.TotalSize = types.FormatBytes(stat.TotalBytes)
+		stat.DataSize = types.FormatBytes(stat.DataBytes)
+		stat.IndexSize = types.FormatBytes(stat.IndexBytes)
+		stat.DeadTuples = stat.FreeBytes
+		stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE `%s`.`%s`;", stat.Schema, stat.Table)
+
+		totalDbBytes += stat.TotalBytes
+		totalDeadBytes += stat.FreeBytes
+		report.Tables = append(report.Tables, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	report.TotalTables = len(report.Tables)
+	report.DatabaseSizeBytes = totalDbBytes
+	report.DatabaseSize = types.FormatBytes(totalDbBytes)
+	report.DeadTuples = totalDeadBytes
+
+	// 3. Unused indexes from sys schema (if available)
+	sysQuery := `
+		SELECT
+			COALESCE(object_schema, ''),
+			COALESCE(object_name, ''),
+			COALESCE(index_name, '')
+		FROM sys.schema_unused_indexes
+		WHERE object_schema = DATABASE();
+	`
+	if sysRows, err := m.db.QueryContext(ctxTimeout, sysQuery); err == nil {
+		defer sysRows.Close()
+		for sysRows.Next() {
+			var uidx types.UnusedIndexStat
+			if err := sysRows.Scan(&uidx.Schema, &uidx.Table, &uidx.Index); err == nil {
+				uidx.Size = "N/A"
+				uidx.Scans = 0
+				uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP INDEX `%s`;", uidx.Schema, uidx.Table, uidx.Index)
+				report.UnusedIndexes = append(report.UnusedIndexes, uidx)
+			}
+		}
+	}
+
+	// Total indexes
+	var totalIndexes int
+	_ = m.db.QueryRowContext(ctxTimeout, `
+		SELECT count(*)
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE();
+	`).Scan(&totalIndexes)
+	report.TotalIndexes = totalIndexes
+
+	// 4. Recommendations
+	recID := 1
+	if report.CacheHitRatio < 80.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Low Buffer Pool Hit Ratio (< 80%)",
+			Description: fmt.Sprintf("InnoDB buffer pool hit ratio is %.1f%%. Many reads are fetching pages from disk. Consider increasing innodb_buffer_pool_size.", report.CacheHitRatio),
+			Severity:    "critical",
+			Category:    "cache",
+			SQL:         "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';",
+		})
+		recID++
+	} else if report.CacheHitRatio < 95.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Buffer Pool Hit Ratio Below Target (< 95%)",
+			Description: fmt.Sprintf("InnoDB buffer pool hit ratio is %.1f%%. Run ANALYZE TABLE or check if innodb_buffer_pool_size should be increased.", report.CacheHitRatio),
+			Severity:    "warning",
+			Category:    "cache",
+			SQL:         "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';",
+		})
+		recID++
+	}
+
+	for _, tbl := range report.Tables {
+		if tbl.FreeBytes > 0 {
+			severity := "info"
+			if tbl.FreeBytes > 50*1024*1024 {
+				severity = "warning"
+			}
+			report.Recommendations = append(report.Recommendations, types.RemediationAction{
+				ID:          fmt.Sprintf("rec-%d", recID),
+				Title:       fmt.Sprintf("Optimize Table `%s`.`%s`", tbl.Schema, tbl.Table),
+				Description: fmt.Sprintf("Table `%s`.`%s` has %s of free/fragmented space (DATA_FREE). OPTIMIZE TABLE reorganizes storage and defragments index data.", tbl.Schema, tbl.Table, types.FormatBytes(tbl.FreeBytes)),
+				Severity:    severity,
+				Category:    "bloat",
+				SQL:         fmt.Sprintf("OPTIMIZE TABLE `%s`.`%s`;", tbl.Schema, tbl.Table),
+			})
+			recID++
+		}
+
+		// Also suggest ANALYZE TABLE if row count > 1000
+		if tbl.RowCount > 1000 {
+			report.Recommendations = append(report.Recommendations, types.RemediationAction{
+				ID:          fmt.Sprintf("rec-%d", recID),
+				Title:       fmt.Sprintf("Analyze Table `%s`.`%s`", tbl.Schema, tbl.Table),
+				Description: fmt.Sprintf("Refresh key distribution statistics for `%s`.`%s` to help the optimizer choose better join and index plans.", tbl.Schema, tbl.Table),
+				Severity:    "info",
+				Category:    "maintenance",
+				SQL:         fmt.Sprintf("ANALYZE TABLE `%s`.`%s`;", tbl.Schema, tbl.Table),
+			})
+			recID++
+		}
+	}
+
+	for _, uidx := range report.UnusedIndexes {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       fmt.Sprintf("Drop Unused Index `%s`", uidx.Index),
+			Description: fmt.Sprintf("Index `%s` on table `%s`.`%s` has never been scanned according to MySQL performance metrics. Dropping it saves storage and reduces index maintenance overhead.", uidx.Index, uidx.Schema, uidx.Table),
+			Severity:    "info",
+			Category:    "unused_index",
+			SQL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP INDEX `%s`;", uidx.Schema, uidx.Table, uidx.Index),
+		})
+		recID++
+	}
+
+	return report, nil
+}
+
 
 

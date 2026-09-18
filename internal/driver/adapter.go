@@ -33,3 +33,8 @@ type PlanNode = types.PlanNode
 type ExplainSummary = types.ExplainSummary
 type ExplainResult = types.ExplainResult
 type ProcessInfo = types.ProcessInfo
+type TableStorageStat = types.TableStorageStat
+type UnusedIndexStat = types.UnusedIndexStat
+type RemediationAction = types.RemediationAction
+type HealthReport = types.HealthReport
+

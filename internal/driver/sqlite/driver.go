@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -792,6 +793,140 @@ func (s *SQLiteDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInf
 func (s *SQLiteDriver) KillProcess(ctx context.Context, id string) error {
 	return fmt.Errorf("killing processes is not supported for sqlite (in-process database)")
 }
+
+func (s *SQLiteDriver) InspectHealth(ctx context.Context) (*types.HealthReport, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	report := &types.HealthReport{
+		Tables:          []types.TableStorageStat{},
+		UnusedIndexes:   []types.UnusedIndexStat{},
+		Recommendations: []types.RemediationAction{},
+		CacheHitRatio:   100.0,
+	}
+
+	// 1. Page count, page size, freelist count
+	var pageCount, pageSize, freelistCount int64
+	_ = s.db.QueryRowContext(ctxTimeout, "PRAGMA page_count;").Scan(&pageCount)
+	_ = s.db.QueryRowContext(ctxTimeout, "PRAGMA page_size;").Scan(&pageSize)
+	_ = s.db.QueryRowContext(ctxTimeout, "PRAGMA freelist_count;").Scan(&freelistCount)
+
+	totalDbBytes := pageCount * pageSize
+	freeBytes := freelistCount * pageSize
+	report.DatabaseSizeBytes = totalDbBytes
+	report.DatabaseSize = types.FormatBytes(totalDbBytes)
+	report.DeadTuples = freelistCount
+
+	if pageCount > 0 {
+		ratio := (1.0 - (float64(freelistCount) / float64(pageCount))) * 100.0
+		if ratio < 0 {
+			ratio = 0
+		}
+		if ratio > 100 {
+			ratio = 100
+		}
+		report.CacheHitRatio = math.Round(ratio*10) / 10
+	}
+
+	// 2. Tables and row counts
+	tableNamesRows, err := s.db.QueryContext(ctxTimeout, "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC;")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tables: %w", err)
+	}
+	defer tableNamesRows.Close()
+
+	var tableNames []string
+	for tableNamesRows.Next() {
+		var name string
+		if err := tableNamesRows.Scan(&name); err == nil {
+			tableNames = append(tableNames, name)
+		}
+	}
+	tableNamesRows.Close()
+
+	report.TotalTables = len(tableNames)
+	totalIndexes := 0
+
+	for _, name := range tableNames {
+		var rowCount int64
+		_ = s.db.QueryRowContext(ctxTimeout, fmt.Sprintf("SELECT count(*) FROM %s;", quoteIdent(name))).Scan(&rowCount)
+
+		// Try dbstat for accurate size, fallback to rough estimate
+		var tableBytes int64
+		if err := s.db.QueryRowContext(ctxTimeout, "SELECT coalesce(sum(pgsize), 0) FROM dbstat WHERE name = ?;", name).Scan(&tableBytes); err != nil || tableBytes == 0 {
+			if len(tableNames) > 0 {
+				tableBytes = (totalDbBytes - freeBytes) / int64(len(tableNames))
+			}
+		}
+
+		// Count indexes for this table
+		idxCount := 0
+		if idxRows, err := s.db.QueryContext(ctxTimeout, fmt.Sprintf("PRAGMA index_list(%s);", quoteIdent(name))); err == nil {
+			for idxRows.Next() {
+				idxCount++
+			}
+			idxRows.Close()
+		}
+		totalIndexes += idxCount
+
+		stat := types.TableStorageStat{
+			Schema:         "main",
+			Table:          name,
+			TotalBytes:     tableBytes,
+			DataBytes:      tableBytes,
+			IndexBytes:     0,
+			TotalSize:      types.FormatBytes(tableBytes),
+			DataSize:       types.FormatBytes(tableBytes),
+			IndexSize:      "0 B",
+			RowCount:       rowCount,
+			DeadTuples:     0,
+			RemediationSQL: fmt.Sprintf("ANALYZE %s;", quoteIdent(name)),
+		}
+		report.Tables = append(report.Tables, stat)
+	}
+
+	report.TotalIndexes = totalIndexes
+
+	// 3. Recommendations
+	recID := 1
+	if freelistCount > 0 {
+		severity := "info"
+		if freeBytes > 1024*1024 || freelistCount > 100 {
+			severity = "warning"
+		}
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Reclaim Disk Space with VACUUM",
+			Description: fmt.Sprintf("SQLite has %d unused pages in freelist (%s). VACUUM defragments the database and shrinks the file size.", freelistCount, types.FormatBytes(freeBytes)),
+			Severity:    severity,
+			Category:    "bloat",
+			SQL:         "VACUUM;",
+		})
+		recID++
+	}
+
+	report.Recommendations = append(report.Recommendations, types.RemediationAction{
+		ID:          fmt.Sprintf("rec-%d", recID),
+		Title:       "Run SQLite Query Optimizer",
+		Description: "PRAGMA optimize analyzes table distributions and updates query planner index choices.",
+		Severity:    "info",
+		Category:    "maintenance",
+		SQL:         "PRAGMA optimize;",
+	})
+	recID++
+
+	report.Recommendations = append(report.Recommendations, types.RemediationAction{
+		ID:          fmt.Sprintf("rec-%d", recID),
+		Title:       "Analyze Database Statistics",
+		Description: "Runs ANALYZE across all tables to collect statistical data for query optimization.",
+		Severity:    "info",
+		Category:    "maintenance",
+		SQL:         "ANALYZE;",
+	})
+
+	return report, nil
+}
+
 
 
 

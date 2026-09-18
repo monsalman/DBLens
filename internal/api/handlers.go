@@ -1570,3 +1570,19 @@ func (h *Handler) KillProcess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) GetDatabaseHealth(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	report, err := entry.Driver.InspectHealth(r.Context())
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, report)
+}
+
+

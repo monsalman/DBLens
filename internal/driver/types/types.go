@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type ColumnMeta struct {
@@ -185,6 +186,72 @@ type ProcessInfo struct {
 	Command  string `json:"command,omitempty"`
 }
 
+type TableStorageStat struct {
+	Schema         string `json:"schema"`
+	Table          string `json:"table"`
+	TotalBytes     int64  `json:"totalBytes"`
+	DataBytes      int64  `json:"dataBytes"`
+	IndexBytes     int64  `json:"indexBytes"`
+	TotalSize      string `json:"totalSize"`
+	DataSize       string `json:"dataSize"`
+	IndexSize      string `json:"indexSize"`
+	RowCount       int64  `json:"rowCount"`
+	DeadTuples     int64  `json:"deadTuples"`
+	FreeBytes      int64  `json:"freeBytes,omitempty"`
+	RemediationSQL string `json:"remediationSql,omitempty"`
+}
+
+type UnusedIndexStat struct {
+	Schema         string `json:"schema"`
+	Table          string `json:"table"`
+	Index          string `json:"index"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	Size           string `json:"size"`
+	Scans          int64  `json:"scans"`
+	RemediationSQL string `json:"remediationSql,omitempty"`
+}
+
+type RemediationAction struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Severity    string `json:"severity"` // "critical", "warning", "info"
+	Category    string `json:"category"` // "cache", "bloat", "unused_index", "maintenance"
+	SQL         string `json:"sql"`
+}
+
+type HealthReport struct {
+	CacheHitRatio     float64             `json:"cacheHitRatio"`
+	DatabaseSizeBytes int64               `json:"databaseSizeBytes"`
+	DatabaseSize      string              `json:"databaseSize"`
+	TotalTables       int                 `json:"totalTables"`
+	TotalIndexes      int                 `json:"totalIndexes"`
+	DeadTuples        int64               `json:"deadTuples"`
+	Tables            []TableStorageStat  `json:"tables"`
+	UnusedIndexes     []UnusedIndexStat   `json:"unusedIndexes"`
+	Recommendations   []RemediationAction `json:"recommendations"`
+}
+
+func FormatBytes(b int64) string {
+	if b <= 0 {
+		return "0 B"
+	}
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := "KMGTPE"
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), units[exp])
+}
+
 type Driver interface {
 	Dialect() string
 	InspectDatabases(ctx context.Context) ([]string, error)
@@ -202,6 +269,7 @@ type Driver interface {
 	ExplainQuery(ctx context.Context, sql string, opts ExplainOptions) (*ExplainResult, error)
 	InspectProcesses(ctx context.Context) ([]ProcessInfo, error)
 	KillProcess(ctx context.Context, id string) error
+	InspectHealth(ctx context.Context) (*HealthReport, error)
 	Ping(ctx context.Context) error
 	Close() error
 }

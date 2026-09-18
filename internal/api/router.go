@@ -76,6 +76,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/diff/apply", h.ApplyDiff)
 	api.Get("/connections/{connId}/processes", h.GetProcesses)
 	api.Post("/connections/{connId}/processes/kill", h.KillProcess)
+	api.Get("/connections/{connId}/health", h.GetDatabaseHealth)
 
 	r.Mount("/api", api)
 
