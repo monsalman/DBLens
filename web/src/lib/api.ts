@@ -717,14 +717,36 @@ export const api = {
     return raw ?? { rows: [], columns: [] }
   },
 
-  async executeQuery(connId: string, sql: string, profiles?: ConnectionConfig[]): Promise<QueryResult> {
+  async executeQuery(
+    connId: string,
+    sql: string,
+    profilesOrParams?: ConnectionConfig[] | Record<string, any>,
+    queryParams?: Record<string, any>
+  ): Promise<QueryResult> {
     const start = performance.now()
+    let profiles: ConnectionConfig[] | undefined
+    let params: Record<string, any> | undefined
+
+    if (Array.isArray(profilesOrParams)) {
+      profiles = profilesOrParams
+      params = queryParams
+    } else if (profilesOrParams && typeof profilesOrParams === 'object') {
+      params = profilesOrParams
+      profiles = undefined
+    } else {
+      params = queryParams
+    }
+
     const dsn = this._getDSN(connId, profiles)
     try {
+      const payload: { sql: string; params?: Record<string, any> } = { sql }
+      if (params && Object.keys(params).length > 0) {
+        payload.params = params
+      }
       const res = await fetch(`/api/connections/${connId}/query`, {
         method: 'POST',
         headers: this._headers(dsn),
-        body: JSON.stringify({ sql }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const text = await res.text()
