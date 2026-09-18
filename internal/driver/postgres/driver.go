@@ -347,6 +347,21 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 		detail.DDL = ddl
 	}
 
+	// Cardinality: 1:1 if FK column is single-column UNIQUE or PK
+	uniqueCols := make(map[string]bool)
+	for _, idx := range detail.Indexes {
+		if idx.IsUnique && len(idx.Columns) == 1 {
+			uniqueCols[idx.Columns[0]] = true
+		}
+	}
+	for i := range detail.FKs {
+		if uniqueCols[detail.FKs[i].Column] {
+			detail.FKs[i].Cardinality = "1:1"
+		} else {
+			detail.FKs[i].Cardinality = "1:N"
+		}
+	}
+
 	return detail, nil
 }
 

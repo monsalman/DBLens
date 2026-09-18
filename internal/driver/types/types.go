@@ -16,12 +16,13 @@ type ColumnMeta struct {
 }
 
 type ForeignKey struct {
-	Name      string `json:"name,omitempty"`
-	Column    string `json:"column"`
-	RefTable  string `json:"refTable"`
-	RefColumn string `json:"refColumn"`
-	OnUpdate  string `json:"onUpdate,omitempty"`
-	OnDelete  string `json:"onDelete,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Column      string `json:"column"`
+	RefTable    string `json:"refTable"`
+	RefColumn   string `json:"refColumn"`
+	OnUpdate    string `json:"onUpdate,omitempty"`
+	OnDelete    string `json:"onDelete,omitempty"`
+	Cardinality string `json:"cardinality,omitempty"`
 }
 
 type IndexMeta struct {

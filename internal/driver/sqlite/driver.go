@@ -230,6 +230,24 @@ func (s *SQLiteDriver) InspectTableDetails(ctx context.Context, schema, table st
 		}
 	}
 
+	// Determine FK cardinality: 1:1 if referencing column is single-column PK or has single-column UNIQUE index
+	uniqueCols := make(map[string]bool)
+	if len(pkCols) == 1 {
+		uniqueCols[pkCols[0]] = true
+	}
+	for _, idx := range detail.Indexes {
+		if idx.IsUnique && len(idx.Columns) == 1 {
+			uniqueCols[idx.Columns[0]] = true
+		}
+	}
+	for i := range detail.FKs {
+		if uniqueCols[detail.FKs[i].Column] {
+			detail.FKs[i].Cardinality = "1:1"
+		} else {
+			detail.FKs[i].Cardinality = "1:N"
+		}
+	}
+
 	if ddl, err := s.GenerateTableDDL(ctx, schema, table); err == nil {
 		detail.DDL = ddl
 	}
@@ -661,6 +679,15 @@ func (s *SQLiteDriver) GetERDData(ctx context.Context) ([]types.ERDTable, error)
 			FKs:     details.FKs,
 		})
 	}
+
+	for i := range erd {
+		for j := range erd[i].FKs {
+			if erd[i].FKs[j].Cardinality == "" {
+				erd[i].FKs[j].Cardinality = "1:N"
+			}
+		}
+	}
+
 	return erd, nil
 }
 

@@ -233,6 +233,7 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 		defer fkRows.Close()
 		for fkRows.Next() {
 			var fk types.ForeignKey
+			fk.Cardinality = "1:N"
 			if err := fkRows.Scan(&fk.Name, &fk.Column, &fk.RefTable, &fk.RefColumn, &fk.OnUpdate, &fk.OnDelete); err == nil {
 				detail.FKs = append(detail.FKs, fk)
 			}
@@ -246,6 +247,12 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 			if fkCols[detail.Columns[i].Name] {
 				detail.Columns[i].IsForeignKey = true
 			}
+		}
+	}
+
+	for i := range detail.FKs {
+		if detail.FKs[i].Cardinality == "" {
+			detail.FKs[i].Cardinality = "1:N"
 		}
 	}
 
@@ -287,6 +294,21 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 		}
 		for _, name := range indexOrder {
 			detail.Indexes = append(detail.Indexes, *indexMap[name])
+		}
+
+		// Cardinality: 1:1 if FK column is single-column PK or UNIQUE
+		uniqueCols := make(map[string]bool)
+		for _, idx := range detail.Indexes {
+			if idx.IsUnique && len(idx.Columns) == 1 {
+				uniqueCols[idx.Columns[0]] = true
+			}
+		}
+		for i := range detail.FKs {
+			if uniqueCols[detail.FKs[i].Column] {
+				detail.FKs[i].Cardinality = "1:1"
+			} else {
+				detail.FKs[i].Cardinality = "1:N"
+			}
 		}
 	}
 
