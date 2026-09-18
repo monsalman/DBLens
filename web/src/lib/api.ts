@@ -311,6 +311,17 @@ export interface ExplainOptions {
   database?: string
 }
 
+export interface ProcessInfo {
+  id: string
+  user: string
+  database: string
+  host: string
+  time: number
+  state: string
+  query: string
+  command?: string
+}
+
 // ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
 
 export const api = {
@@ -1005,6 +1016,59 @@ export const api = {
         if (j?.error) msg = j.error
       } catch {}
       throw new Error(msg || 'Apply migration failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getProcesses(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProcessInfo[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/processes`, {
+      headers: this._headers(dsn),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to fetch processes')
+    }
+    const json = await res.json()
+    return json.data ?? []
+  },
+
+  async killProcess(
+    connId: string,
+    processId: string,
+    profiles?: ConnectionConfig[],
+    readOnly?: boolean
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const isReadOnly = readOnly ?? profiles?.find(p => p.id === connId)?.readOnly ?? false
+    const headers: Record<string, string> = {
+      ...(this._headers(dsn) as Record<string, string>),
+    }
+    if (isReadOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    const res = await fetch(`/api/connections/${connId}/processes/kill`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ processId }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to kill process')
     }
     const json = await res.json()
     return json.data ?? json

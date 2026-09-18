@@ -1,7 +1,7 @@
 import React from 'react'
 import { Plus, Moon, Sun, Pencil, Trash2, Search } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
-import { useAppStore } from '../../stores/appStore'
+import { useAppStore, type ActiveTab } from '../../stores/appStore'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -10,8 +10,8 @@ interface Props {
   onAdd: () => void
   onEdit: (conn: ConnectionConfig) => void
   onDeleted: (id: string) => void
-  activeTab: 'table' | 'sql' | 'erd' | 'diff'
-  onTabChange: (tab: 'table' | 'sql' | 'erd' | 'diff') => void
+  activeTab: ActiveTab
+  onTabChange: (tab: ActiveTab) => void
   selectedSchema: string
   onSchemaChange: (schema: string) => void
   selectedTable: string | null
@@ -111,6 +111,7 @@ export const Header: React.FC<Props> = ({
             { id: 'sql' as const, label: 'SQL Editor' },
             { id: 'erd' as const, label: 'ERD' },
             { id: 'diff' as const, label: 'Schema Diff' },
+            { id: 'processes' as const, label: 'Processes' },
           ].map(tab => (
             <button key={tab.id} onClick={() => onTabChange(tab.id)}
               className={`px-2.5 py-1 text-[11px] rounded transition-colors ${

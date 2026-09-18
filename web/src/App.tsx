@@ -8,6 +8,7 @@ import { TableGridView } from './features/grid/TableGridView'
 import { SqlConsoleView } from './features/editor/SqlConsoleView'
 import { SchemaErdView } from './features/erd/SchemaErdView'
 import { SchemaDiffView } from './features/diff/SchemaDiffView'
+import { ProcessMonitorView } from './features/activity/ProcessMonitorView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
@@ -276,6 +277,9 @@ export function App() {
                     defaultSchema={selectedSchema}
                     defaultTable={selectedTable}
                   />
+                )}
+                {activeTab === 'processes' && (
+                  <ProcessMonitorView key={activeConnId} connId={activeConnId} />
                 )}
               </>
             )}
