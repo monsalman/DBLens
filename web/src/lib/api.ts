@@ -32,6 +32,7 @@ export interface ERDForeignKey {
   column: string
   refTable: string
   refColumn: string
+  cardinality?: '1:1' | '1:N' | string
 }
 
 export interface TableForeignKey {
