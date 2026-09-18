@@ -434,7 +434,7 @@ func (s *SQLiteDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string
 
 	upper := strings.ToUpper(compiledSql)
 
-	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "PRAGMA") {
+	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "PRAGMA") || strings.HasPrefix(upper, "WITH") {
 		rows, err := s.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err

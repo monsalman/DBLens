@@ -80,7 +80,12 @@ func CompileNamedParams(dialect string, rawSql string, p map[string]interface{})
 				sb.WriteByte(ch)
 				i++
 				if ch == '`' {
-					break
+					if i < n && rawSql[i] == '`' {
+						sb.WriteByte('`')
+						i++
+					} else {
+						break
+					}
 				}
 			}
 			continue

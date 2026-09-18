@@ -1138,7 +1138,7 @@ func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport
 		stat.TotalSize = types.FormatBytes(stat.TotalBytes)
 		stat.DataSize = types.FormatBytes(stat.DataBytes)
 		stat.IndexSize = types.FormatBytes(stat.IndexBytes)
-		stat.RemediationSQL = fmt.Sprintf(`VACUUM ANALYZE "%s"."%s";`, stat.Schema, stat.Table)
+		stat.RemediationSQL = fmt.Sprintf("VACUUM ANALYZE %s.%s;", quoteIdent(stat.Schema), quoteIdent(stat.Table))
 
 		totalDeadTuples += stat.DeadTuples
 		report.Tables = append(report.Tables, stat)
@@ -1176,7 +1176,7 @@ func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport
 				&uidx.Scans,
 			); err == nil {
 				uidx.Size = types.FormatBytes(uidx.SizeBytes)
-				uidx.RemediationSQL = fmt.Sprintf(`DROP INDEX CONCURRENTLY "%s"."%s";`, uidx.Schema, uidx.Index)
+				uidx.RemediationSQL = fmt.Sprintf("DROP INDEX CONCURRENTLY %s.%s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Index))
 				report.UnusedIndexes = append(report.UnusedIndexes, uidx)
 			}
 		}
@@ -1225,7 +1225,7 @@ func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport
 				Description: fmt.Sprintf("Table has %d dead tuples. VACUUM ANALYZE will reclaim dead row storage and update query planner cost estimates.", tbl.DeadTuples),
 				Severity:    severity,
 				Category:    "bloat",
-				SQL:         fmt.Sprintf(`VACUUM ANALYZE "%s"."%s";`, tbl.Schema, tbl.Table),
+				SQL:         fmt.Sprintf("VACUUM ANALYZE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table)),
 			})
 			recID++
 		}
@@ -1242,7 +1242,7 @@ func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport
 			Description: fmt.Sprintf("Index on %s.%s has 0 scans and occupies %s of disk space. Dropping unused indexes saves storage and avoids index maintenance on writes.", uidx.Schema, uidx.Table, uidx.Size),
 			Severity:    severity,
 			Category:    "unused_index",
-			SQL:         fmt.Sprintf(`DROP INDEX CONCURRENTLY "%s"."%s";`, uidx.Schema, uidx.Index),
+			SQL:         fmt.Sprintf("DROP INDEX CONCURRENTLY %s.%s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Index)),
 		})
 		recID++
 	}

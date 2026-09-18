@@ -67,10 +67,18 @@ export function extractQueryVariables(sql: string): QueryVariable[] {
     // Backticks: `...`
     if (c === '`') {
       i++
-      while (i < n && sql[i] !== '`') {
-        i++
+      while (i < n) {
+        if (sql[i] === '`') {
+          i++
+          if (i < n && sql[i] === '`') {
+            i++
+          } else {
+            break
+          }
+        } else {
+          i++
+        }
       }
-      if (i < n) i++
       continue
     }
 

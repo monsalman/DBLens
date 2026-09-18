@@ -106,6 +106,14 @@ test('DBA_MAINTENANCE_SNIPPETS: contains snippets for postgres, mysql, sqlite', 
   }
 })
 
+// 8. Escaped backtick and double quote identifiers
+test('extractQueryVariables: ignores :param inside identifiers with escaped backticks and quotes', () => {
+  const sql = 'SELECT `col``with:fake_param` AS res, "col""with:fake_param2" AS res2, :real_param FROM `my``table`'
+  const vars = extractQueryVariables(sql)
+  assert(vars.length === 1, `expected 1 variable, got ${vars.length}`)
+  assert(vars[0].name === 'real_param', `expected real_param, got ${vars[0]?.name}`)
+})
+
 console.log(`\nResult: ${passed} passed, ${failed} failed.`)
 if (failed > 0) {
   process.exit(1)

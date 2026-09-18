@@ -215,3 +215,38 @@ SELECT * FROM users WHERE status = :real`
 		t.Errorf("expected args ['active'], got %v", args)
 	}
 }
+
+func TestCompileNamedParams_EscapedBackticks(t *testing.T) {
+	raw := "SELECT `col``with:fake_param` AS res, :real AS val FROM `my``table`"
+	p := map[string]interface{}{
+		"real": 42,
+	}
+
+	// Test with MySQL dialect (?)
+	sql, args, err := CompileNamedParams("mysql", raw, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedSQL := "SELECT `col``with:fake_param` AS res, ? AS val FROM `my``table`"
+	if sql != expectedSQL {
+		t.Errorf("expected SQL %q, got %q", expectedSQL, sql)
+	}
+	if len(args) != 1 || args[0] != 42 {
+		t.Errorf("expected args [42], got %v", args)
+	}
+
+	// Test with Postgres dialect ($1)
+	pgSQL, pgArgs, err := CompileNamedParams("postgres", raw, p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expectedPgSQL := "SELECT `col``with:fake_param` AS res, $1 AS val FROM `my``table`"
+	if pgSQL != expectedPgSQL {
+		t.Errorf("expected SQL %q, got %q", expectedPgSQL, pgSQL)
+	}
+	if len(pgArgs) != 1 || pgArgs[0] != 42 {
+		t.Errorf("expected args [42], got %v", pgArgs)
+	}
+}

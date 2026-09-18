@@ -124,3 +124,30 @@ func TestSQLiteInspectHealth(t *testing.T) {
 	}
 }
 
+func TestSQLiteExecuteQuery_CTE(t *testing.T) {
+	dbFile := "/tmp/dblens_sqlite_cte_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	drv, err := sqlite.New(dsn)
+	if err != nil {
+		t.Fatalf("failed to create sqlite driver: %v", err)
+	}
+	defer drv.Close()
+
+	ctx := context.Background()
+	res, err := drv.ExecuteQueryWithParams(ctx, `
+		WITH numbers AS (
+			SELECT 1 AS n UNION ALL SELECT 2 AS n
+		)
+		SELECT n FROM numbers;
+	`, nil)
+	if err != nil {
+		t.Fatalf("CTE query failed: %v", err)
+	}
+	if len(res.Rows) != 2 {
+		t.Fatalf("expected 2 rows from CTE, got %d", len(res.Rows))
+	}
+}
+

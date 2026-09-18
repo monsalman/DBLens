@@ -495,7 +495,7 @@ func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string,
 
 	upper := strings.ToUpper(compiledSql)
 
-	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") {
+	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") || strings.HasPrefix(upper, "WITH") {
 		rows, err := m.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
@@ -914,7 +914,11 @@ func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, e
 		stat.DataSize = types.FormatBytes(stat.DataBytes)
 		stat.IndexSize = types.FormatBytes(stat.IndexBytes)
 		stat.DeadTuples = stat.FreeBytes
-		stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE `%s`.`%s`;", stat.Schema, stat.Table)
+		if stat.Schema != "" {
+			stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE %s.%s;", quoteIdent(stat.Schema), quoteIdent(stat.Table))
+		} else {
+			stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE %s;", quoteIdent(stat.Table))
+		}
 
 		totalDbBytes += stat.TotalBytes
 		totalDeadBytes += stat.FreeBytes
@@ -945,7 +949,11 @@ func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, e
 			if err := sysRows.Scan(&uidx.Schema, &uidx.Table, &uidx.Index); err == nil {
 				uidx.Size = "N/A"
 				uidx.Scans = 0
-				uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP INDEX `%s`;", uidx.Schema, uidx.Table, uidx.Index)
+				if uidx.Schema != "" {
+					uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE %s.%s DROP INDEX %s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+				} else {
+					uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE %s DROP INDEX %s;", quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+				}
 				report.UnusedIndexes = append(report.UnusedIndexes, uidx)
 			}
 		}
@@ -990,39 +998,51 @@ func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, e
 			if tbl.FreeBytes > 50*1024*1024 {
 				severity = "warning"
 			}
+			optSQL := fmt.Sprintf("OPTIMIZE TABLE %s;", quoteIdent(tbl.Table))
+			if tbl.Schema != "" {
+				optSQL = fmt.Sprintf("OPTIMIZE TABLE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table))
+			}
 			report.Recommendations = append(report.Recommendations, types.RemediationAction{
 				ID:          fmt.Sprintf("rec-%d", recID),
 				Title:       fmt.Sprintf("Optimize Table `%s`.`%s`", tbl.Schema, tbl.Table),
 				Description: fmt.Sprintf("Table `%s`.`%s` has %s of free/fragmented space (DATA_FREE). OPTIMIZE TABLE reorganizes storage and defragments index data.", tbl.Schema, tbl.Table, types.FormatBytes(tbl.FreeBytes)),
 				Severity:    severity,
 				Category:    "bloat",
-				SQL:         fmt.Sprintf("OPTIMIZE TABLE `%s`.`%s`;", tbl.Schema, tbl.Table),
+				SQL:         optSQL,
 			})
 			recID++
 		}
 
 		// Also suggest ANALYZE TABLE if row count > 1000
 		if tbl.RowCount > 1000 {
+			anaSQL := fmt.Sprintf("ANALYZE TABLE %s;", quoteIdent(tbl.Table))
+			if tbl.Schema != "" {
+				anaSQL = fmt.Sprintf("ANALYZE TABLE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table))
+			}
 			report.Recommendations = append(report.Recommendations, types.RemediationAction{
 				ID:          fmt.Sprintf("rec-%d", recID),
 				Title:       fmt.Sprintf("Analyze Table `%s`.`%s`", tbl.Schema, tbl.Table),
 				Description: fmt.Sprintf("Refresh key distribution statistics for `%s`.`%s` to help the optimizer choose better join and index plans.", tbl.Schema, tbl.Table),
 				Severity:    "info",
 				Category:    "maintenance",
-				SQL:         fmt.Sprintf("ANALYZE TABLE `%s`.`%s`;", tbl.Schema, tbl.Table),
+				SQL:         anaSQL,
 			})
 			recID++
 		}
 	}
 
 	for _, uidx := range report.UnusedIndexes {
+		dropSQL := fmt.Sprintf("ALTER TABLE %s DROP INDEX %s;", quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+		if uidx.Schema != "" {
+			dropSQL = fmt.Sprintf("ALTER TABLE %s.%s DROP INDEX %s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+		}
 		report.Recommendations = append(report.Recommendations, types.RemediationAction{
 			ID:          fmt.Sprintf("rec-%d", recID),
 			Title:       fmt.Sprintf("Drop Unused Index `%s`", uidx.Index),
 			Description: fmt.Sprintf("Index `%s` on table `%s`.`%s` has never been scanned according to MySQL performance metrics. Dropping it saves storage and reduces index maintenance overhead.", uidx.Index, uidx.Schema, uidx.Table),
 			Severity:    "info",
 			Category:    "unused_index",
-			SQL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` DROP INDEX `%s`;", uidx.Schema, uidx.Table, uidx.Index),
+			SQL:         dropSQL,
 		})
 		recID++
 	}

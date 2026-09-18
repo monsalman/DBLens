@@ -29,6 +29,35 @@ interface Props {
 
 type AdvisorTab = 'recommendations' | 'tables' | 'indexes'
 
+function quoteIdent(name: string, driver?: string): string {
+  if (driver === 'mysql') {
+    return '`' + name.replace(/`/g, '``') + '`'
+  }
+  return '"' + name.replace(/"/g, '""') + '"'
+}
+
+function getTableRemediationSql(schema: string, table: string, driver?: string): string {
+  const target = schema
+    ? `${quoteIdent(schema, driver)}.${quoteIdent(table, driver)}`
+    : quoteIdent(table, driver)
+  return driver === 'mysql'
+    ? `OPTIMIZE TABLE ${target};`
+    : `ANALYZE ${target};`
+}
+
+function getIndexRemediationSql(schema: string, table: string, index: string, driver?: string): string {
+  if (driver === 'mysql') {
+    const tableTarget = schema
+      ? `${quoteIdent(schema, driver)}.${quoteIdent(table, driver)}`
+      : quoteIdent(table, driver)
+    return `ALTER TABLE ${tableTarget} DROP INDEX ${quoteIdent(index, driver)};`
+  }
+  const indexTarget = schema
+    ? `${quoteIdent(schema, driver)}.${quoteIdent(index, driver)}`
+    : quoteIdent(index, driver)
+  return `DROP INDEX CONCURRENTLY ${indexTarget};`
+}
+
 export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
   const connections = useAppStore((s) => s.connections)
   const activeConn = useMemo(
@@ -69,27 +98,49 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
     }, 6000)
   }, [])
 
-  const fetchHealth = useCallback(
-    async (isManual = false) => {
-      if (isManual) setRefreshing(true)
+  const fetchHealth = useCallback(async () => {
+    try {
+      const data = await api.getHealth(connId, connections)
+      setReport(data)
+      setError(null)
+      setLastUpdated(new Date())
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch database health report')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [connId, connections])
+
+  const handleManualRefresh = useCallback(() => {
+    setRefreshing(true)
+    fetchHealth()
+  }, [fetchHealth])
+
+  useEffect(() => {
+    let active = true
+    const run = async () => {
       try {
         const data = await api.getHealth(connId, connections)
+        if (!active) return
         setReport(data)
         setError(null)
         setLastUpdated(new Date())
       } catch (err: any) {
-        setError(err.message || 'Failed to fetch database health report')
+        if (!active) return
+        setError(err?.message || 'Failed to fetch database health report')
       } finally {
-        setLoading(false)
-        setRefreshing(false)
+        if (active) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
-    },
-    [connId, connections]
-  )
-
-  useEffect(() => {
-    fetchHealth(false)
-  }, [fetchHealth])
+    }
+    run()
+    return () => {
+      active = false
+    }
+  }, [connId, connections])
 
   // Auto-refresh timer
   useEffect(() => {
@@ -100,7 +151,7 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
 
     if (autoRefreshInterval > 0) {
       timerRef.current = setInterval(() => {
-        fetchHealth(false)
+        fetchHealth()
       }, autoRefreshInterval * 1000)
     }
 
@@ -121,7 +172,7 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
         `Affected rows: ${res.affectedRows ?? 0} (took ${res.durationMs ?? 0}ms)`
       )
       // Refresh report after execution
-      await fetchHealth(false)
+      await fetchHealth()
     } catch (err: any) {
       showNotification('error', 'Execution failed', err.message || 'SQL execution error')
     } finally {
@@ -235,7 +286,7 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
 
           {/* Refresh button */}
           <button
-            onClick={() => fetchHealth(true)}
+            onClick={handleManualRefresh}
             disabled={refreshing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-[var(--hover)] hover:bg-[var(--active)] text-[var(--fg)] border border-[var(--border)] transition-colors disabled:opacity-50"
             title="Refresh Advisor Metrics"
@@ -285,7 +336,7 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
             <h3 className="font-semibold text-sm">Failed to inspect database health</h3>
             <p className="mt-1 text-[11px] opacity-90">{error}</p>
             <button
-              onClick={() => fetchHealth(true)}
+              onClick={handleManualRefresh}
               className="mt-3 px-3 py-1 bg-rose-500 text-white rounded text-xs font-medium hover:bg-rose-600 transition-colors"
             >
               Retry
@@ -628,7 +679,9 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
                       </tr>
                     ) : (
                       filteredTables.map((tbl) => {
-                        const sqlToRun = tbl.remediationSql || `ANALYZE "${tbl.schema}"."${tbl.table}";`
+                        const sqlToRun =
+                          tbl.remediationSql ||
+                          getTableRemediationSql(tbl.schema, tbl.table, activeConn?.driver)
                         const isRunning = executingSql === sqlToRun
 
                         return (
@@ -741,7 +794,7 @@ export const DatabaseAdvisorView: React.FC<Props> = ({ connId }) => {
                       {filteredIndexes.map((idx) => {
                         const sqlToRun =
                           idx.remediationSql ||
-                          `DROP INDEX CONCURRENTLY "${idx.schema}"."${idx.index}";`
+                          getIndexRemediationSql(idx.schema, idx.table, idx.index, activeConn?.driver)
                         const isRunning = executingSql === sqlToRun
 
                         return (
