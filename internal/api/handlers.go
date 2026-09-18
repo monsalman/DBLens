@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1502,3 +1503,70 @@ func (h *Handler) ApplyDiff(w http.ResponseWriter, r *http.Request) {
 		"message":            fmt.Sprintf("Successfully executed %d migration statements", len(executed)),
 	})
 }
+
+func (h *Handler) GetProcesses(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	processes, err := entry.Driver.InspectProcesses(r.Context())
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sendJSON(w, http.StatusOK, processes)
+}
+
+type KillProcessRequest struct {
+	ProcessID string `json:"processId"`
+	ID        string `json:"id"`
+}
+
+func (h *Handler) KillProcess(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+		sendError(w, http.StatusForbidden, "Connection is read-only")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	var req KillProcessRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	targetID := strings.TrimSpace(req.ProcessID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(req.ID)
+	}
+	if targetID == "" {
+		sendError(w, http.StatusBadRequest, "processId is required")
+		return
+	}
+
+	pidNum, err := strconv.ParseInt(targetID, 10, 64)
+	if err != nil || pidNum <= 0 {
+		sendError(w, http.StatusBadRequest, "processId must be a positive integer")
+		return
+	}
+
+	if err := entry.Driver.KillProcess(r.Context(), targetID); err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Process %s terminated", targetID),
+	})
+}
+

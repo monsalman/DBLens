@@ -32,3 +32,4 @@ type ExplainOptions = types.ExplainOptions
 type PlanNode = types.PlanNode
 type ExplainSummary = types.ExplainSummary
 type ExplainResult = types.ExplainResult
+type ProcessInfo = types.ProcessInfo

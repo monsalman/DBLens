@@ -747,4 +747,24 @@ func toSQLiteInt(v interface{}) int {
 	}
 }
 
+func (s *SQLiteDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInfo, error) {
+	return []types.ProcessInfo{
+		{
+			ID:       "1",
+			User:     "sqlite",
+			Database: "main",
+			Host:     "embedded",
+			Time:     0,
+			State:    "idle",
+			Query:    "",
+			Command:  "in-process",
+		},
+	}, nil
+}
+
+func (s *SQLiteDriver) KillProcess(ctx context.Context, id string) error {
+	return fmt.Errorf("killing processes is not supported for sqlite (in-process database)")
+}
+
+
 

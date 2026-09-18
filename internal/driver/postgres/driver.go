@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -932,4 +933,109 @@ func (p *PostgresDriver) ExplainQuery(ctx context.Context, rawSql string, opts t
 
 	return explain.ParsePostgres(jsonOutput)
 }
+
+func (p *PostgresDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInfo, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT
+			pid::text,
+			COALESCE(usename, '') AS usename,
+			COALESCE(datname, '') AS datname,
+			COALESCE(CASE 
+				WHEN client_addr IS NOT NULL AND client_port IS NOT NULL THEN client_addr::text || ':' || client_port::text
+				WHEN client_addr IS NOT NULL THEN client_addr::text
+				ELSE 'local'
+			END, 'local') AS client_host,
+			GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (clock_timestamp() - query_start))::bigint, 0)) AS duration,
+			COALESCE(state, 'unknown') AS state,
+			COALESCE(query, '') AS query,
+			COALESCE(backend_type, 'client backend') AS backend_type
+		FROM pg_stat_activity
+		ORDER BY
+			CASE WHEN state = 'active' THEN 0 ELSE 1 END,
+			duration DESC,
+			pid ASC;
+	`
+
+	rows, err := p.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		fallbackQuery := `
+			SELECT
+				pid::text,
+				COALESCE(usename, '') AS usename,
+				COALESCE(datname, '') AS datname,
+				COALESCE(CASE 
+					WHEN client_addr IS NOT NULL AND client_port IS NOT NULL THEN client_addr::text || ':' || client_port::text
+					WHEN client_addr IS NOT NULL THEN client_addr::text
+					ELSE 'local'
+				END, 'local') AS client_host,
+				GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (clock_timestamp() - query_start))::bigint, 0)) AS duration,
+				COALESCE(state, 'unknown') AS state,
+				COALESCE(query, '') AS query,
+				'client backend' AS backend_type
+			FROM pg_stat_activity
+			ORDER BY
+				CASE WHEN state = 'active' THEN 0 ELSE 1 END,
+				duration DESC,
+				pid ASC;
+		`
+		var fallbackErr error
+		rows, fallbackErr = p.db.QueryContext(ctxTimeout, fallbackQuery)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("inspect processes failed: %v (fallback: %w)", err, fallbackErr)
+		}
+	}
+	defer rows.Close()
+
+	var processes []types.ProcessInfo
+	for rows.Next() {
+		var pi types.ProcessInfo
+		if err := rows.Scan(
+			&pi.ID,
+			&pi.User,
+			&pi.Database,
+			&pi.Host,
+			&pi.Time,
+			&pi.State,
+			&pi.Query,
+			&pi.Command,
+		); err != nil {
+			return nil, err
+		}
+		processes = append(processes, pi)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if processes == nil {
+		processes = []types.ProcessInfo{}
+	}
+	return processes, nil
+}
+
+func (p *PostgresDriver) KillProcess(ctx context.Context, id string) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(id)
+	pid, err := strconv.Atoi(trimmed)
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid process id: %s", id)
+	}
+
+	var terminated bool
+	err = p.db.QueryRowContext(ctxTimeout, "SELECT pg_terminate_backend($1)", pid).Scan(&terminated)
+	if err != nil {
+		return fmt.Errorf("failed to terminate backend %d: %w", pid, err)
+	}
+	if !terminated {
+		return fmt.Errorf("process %d could not be terminated or already terminated", pid)
+	}
+	return nil
+}
+
 

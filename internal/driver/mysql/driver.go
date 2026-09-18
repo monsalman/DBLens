@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -712,4 +713,86 @@ func (m *MySQLDriver) ExplainQuery(ctx context.Context, rawSql string, opts type
 
 	return explain.ParseMySQL(jsonOutput)
 }
+
+func (m *MySQLDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInfo, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT
+			ID,
+			COALESCE(USER, ''),
+			COALESCE(HOST, ''),
+			COALESCE(DB, ''),
+			COALESCE(COMMAND, ''),
+			COALESCE(TIME, 0),
+			COALESCE(STATE, ''),
+			COALESCE(INFO, '')
+		FROM information_schema.PROCESSLIST
+		ORDER BY TIME DESC, ID ASC
+	`
+
+	rows, err := m.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		rows, err = m.db.QueryContext(ctxTimeout, "SHOW FULL PROCESSLIST")
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect mysql processes: %w", err)
+		}
+	}
+	defer rows.Close()
+
+	var processes []types.ProcessInfo
+	for rows.Next() {
+		var id int64
+		var user, host, dbName, command, state, info sql.NullString
+		var timeSec sql.NullInt64
+
+		if err := rows.Scan(&id, &user, &host, &dbName, &command, &timeSec, &state, &info); err != nil {
+			return nil, err
+		}
+
+		displayState := state.String
+		if displayState == "" {
+			displayState = command.String
+		}
+
+		processes = append(processes, types.ProcessInfo{
+			ID:       strconv.FormatInt(id, 10),
+			User:     user.String,
+			Host:     host.String,
+			Database: dbName.String,
+			Command:  command.String,
+			Time:     timeSec.Int64,
+			State:    displayState,
+			Query:    info.String,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if processes == nil {
+		processes = []types.ProcessInfo{}
+	}
+	return processes, nil
+}
+
+func (m *MySQLDriver) KillProcess(ctx context.Context, id string) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(id)
+	pid, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid process id: %s", id)
+	}
+
+	_, err = m.db.ExecContext(ctxTimeout, fmt.Sprintf("KILL %d", pid))
+	if err != nil {
+		return fmt.Errorf("failed to kill process %d: %w", pid, err)
+	}
+	return nil
+}
+
 

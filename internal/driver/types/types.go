@@ -173,6 +173,17 @@ type ERDTable struct {
 	FKs     []ForeignKey `json:"fks"`
 }
 
+type ProcessInfo struct {
+	ID       string `json:"id"`
+	User     string `json:"user"`
+	Database string `json:"database"`
+	Host     string `json:"host"`
+	Time     int64  `json:"time"`
+	State    string `json:"state"`
+	Query    string `json:"query"`
+	Command  string `json:"command,omitempty"`
+}
+
 type Driver interface {
 	Dialect() string
 	InspectDatabases(ctx context.Context) ([]string, error)
@@ -188,6 +199,8 @@ type Driver interface {
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)
 	ExplainQuery(ctx context.Context, sql string, opts ExplainOptions) (*ExplainResult, error)
+	InspectProcesses(ctx context.Context) ([]ProcessInfo, error)
+	KillProcess(ctx context.Context, id string) error
 	Ping(ctx context.Context) error
 	Close() error
 }
