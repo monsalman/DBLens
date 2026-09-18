@@ -1698,6 +1698,91 @@ func TestApplyDiffReadOnlyProtection(t *testing.T) {
 	}
 }
 
+func TestGetProcessesAndKillProcess(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	dbFile := filepath.Join(t.TempDir(), "processes_test.db")
+	dsn := "sqlite://" + dbFile
+
+	// 1. Get processes
+	req := httptest.NewRequest("GET", "http://example.com/api/connections/default/processes", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data []driver.ProcessInfo `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) == 0 {
+		t.Fatalf("expected at least 1 process info for sqlite, got 0")
+	}
+	if resp.Data[0].Database != "main" || resp.Data[0].Host != "embedded" {
+		t.Fatalf("unexpected sqlite process metadata: %+v", resp.Data[0])
+	}
+
+	// 2. Kill process with missing processId
+	killEmptyPayload, _ := json.Marshal(map[string]interface{}{})
+	reqKillEmpty := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killEmptyPayload))
+	reqKillEmpty.Header.Set("Content-Type", "application/json")
+	reqKillEmpty.Header.Set("X-DBLENS-DSN", dsn)
+	wKillEmpty := httptest.NewRecorder()
+	router.ServeHTTP(wKillEmpty, reqKillEmpty)
+	if wKillEmpty.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", wKillEmpty.Code, wKillEmpty.Body.String())
+	}
+
+	// 2b. Kill process with non-numeric or non-positive processId
+	for _, invalidPID := range []string{"abc", "-1", "0", "xyz123"} {
+		killInvalidPayload, _ := json.Marshal(map[string]interface{}{"processId": invalidPID})
+		reqKillInvalid := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killInvalidPayload))
+		reqKillInvalid.Header.Set("Content-Type", "application/json")
+		reqKillInvalid.Header.Set("X-DBLENS-DSN", dsn)
+		wKillInvalid := httptest.NewRecorder()
+		router.ServeHTTP(wKillInvalid, reqKillInvalid)
+		if wKillInvalid.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for processId %q, got %d: %s", invalidPID, wKillInvalid.Code, wKillInvalid.Body.String())
+		}
+		if !strings.Contains(wKillInvalid.Body.String(), "positive integer") {
+			t.Fatalf("expected error mentioning positive integer, got: %s", wKillInvalid.Body.String())
+		}
+	}
+
+	// 3. Kill process with read-only header
+	killPayload, _ := json.Marshal(map[string]interface{}{"processId": "1"})
+	reqKillRO := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killPayload))
+	reqKillRO.Header.Set("Content-Type", "application/json")
+	reqKillRO.Header.Set("X-DBLENS-DSN", dsn)
+	reqKillRO.Header.Set("X-DBLENS-READONLY", "true")
+	wKillRO := httptest.NewRecorder()
+	router.ServeHTTP(wKillRO, reqKillRO)
+	if wKillRO.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden, got %d: %s", wKillRO.Code, wKillRO.Body.String())
+	}
+
+	// 4. Kill process on sqlite returns error (not supported)
+	reqKill := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killPayload))
+	reqKill.Header.Set("Content-Type", "application/json")
+	reqKill.Header.Set("X-DBLENS-DSN", dsn)
+	wKill := httptest.NewRecorder()
+	router.ServeHTTP(wKill, reqKill)
+	if wKill.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 error when killing sqlite process, got %d: %s", wKill.Code, wKill.Body.String())
+	}
+	if !strings.Contains(wKill.Body.String(), "killing processes is not supported for sqlite") {
+		t.Fatalf("expected unsupported message, got: %s", wKill.Body.String())
+	}
+}
+
+
 
 
 
