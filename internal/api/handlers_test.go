@@ -1163,6 +1163,11 @@ func TestAutocompleteSchemaEndpoints(t *testing.T) {
 			if len(tbl.Columns) < 3 {
 				t.Fatalf("expected at least 3 columns for orders, got %d", len(tbl.Columns))
 			}
+			for _, fk := range tbl.FKs {
+				if fk.Column == "user_id" && fk.Cardinality != "1:N" {
+					t.Fatalf("expected orders.user_id FK cardinality '1:N', got '%s'", fk.Cardinality)
+				}
+			}
 		}
 	}
 
