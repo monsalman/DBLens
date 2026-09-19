@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/driver/params"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/go-sql-driver/mysql"
@@ -232,6 +235,7 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 		defer fkRows.Close()
 		for fkRows.Next() {
 			var fk types.ForeignKey
+			fk.Cardinality = "1:N"
 			if err := fkRows.Scan(&fk.Name, &fk.Column, &fk.RefTable, &fk.RefColumn, &fk.OnUpdate, &fk.OnDelete); err == nil {
 				detail.FKs = append(detail.FKs, fk)
 			}
@@ -245,6 +249,12 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 			if fkCols[detail.Columns[i].Name] {
 				detail.Columns[i].IsForeignKey = true
 			}
+		}
+	}
+
+	for i := range detail.FKs {
+		if detail.FKs[i].Cardinality == "" {
+			detail.FKs[i].Cardinality = "1:N"
 		}
 	}
 
@@ -286,6 +296,21 @@ func (m *MySQLDriver) InspectTableDetails(ctx context.Context, schema, table str
 		}
 		for _, name := range indexOrder {
 			detail.Indexes = append(detail.Indexes, *indexMap[name])
+		}
+
+		// Cardinality: 1:1 if FK column is single-column PK or UNIQUE
+		uniqueCols := make(map[string]bool)
+		for _, idx := range detail.Indexes {
+			if idx.IsUnique && len(idx.Columns) == 1 {
+				uniqueCols[idx.Columns[0]] = true
+			}
+		}
+		for i := range detail.FKs {
+			if uniqueCols[detail.FKs[i].Column] {
+				detail.FKs[i].Cardinality = "1:1"
+			} else {
+				detail.FKs[i].Cardinality = "1:N"
+			}
 		}
 	}
 
@@ -448,15 +473,30 @@ func (m *MySQLDriver) QueryTableStream(ctx context.Context, schema, table string
 }
 
 func (m *MySQLDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
+	return m.ExecuteQueryWithParams(ctx, rawSql, nil)
+}
+
+func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-	upper := strings.ToUpper(trimmed)
 
-	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") {
-		rows, err := m.db.QueryContext(ctxTimeout, trimmed)
+	compiledSql := trimmed
+	var args []interface{}
+	var err error
+	if queryParams != nil || strings.Contains(trimmed, ":") || strings.Contains(trimmed, "{{") {
+		compiledSql, args, err = params.CompileNamedParams(m.Dialect(), trimmed, queryParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	upper := strings.ToUpper(compiledSql)
+
+	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") || strings.HasPrefix(upper, "WITH") {
+		rows, err := m.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -493,7 +533,7 @@ func (m *MySQLDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.Q
 		}, nil
 	}
 
-	res, err := m.db.ExecContext(ctxTimeout, trimmed)
+	res, err := m.db.ExecContext(ctxTimeout, compiledSql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -712,4 +752,303 @@ func (m *MySQLDriver) ExplainQuery(ctx context.Context, rawSql string, opts type
 
 	return explain.ParseMySQL(jsonOutput)
 }
+
+func (m *MySQLDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInfo, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT
+			ID,
+			COALESCE(USER, ''),
+			COALESCE(HOST, ''),
+			COALESCE(DB, ''),
+			COALESCE(COMMAND, ''),
+			COALESCE(TIME, 0),
+			COALESCE(STATE, ''),
+			COALESCE(INFO, '')
+		FROM information_schema.PROCESSLIST
+		ORDER BY TIME DESC, ID ASC
+	`
+
+	rows, err := m.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		rows, err = m.db.QueryContext(ctxTimeout, "SHOW FULL PROCESSLIST")
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect mysql processes: %w", err)
+		}
+	}
+	defer rows.Close()
+
+	var processes []types.ProcessInfo
+	for rows.Next() {
+		var id int64
+		var user, host, dbName, command, state, info sql.NullString
+		var timeSec sql.NullInt64
+
+		if err := rows.Scan(&id, &user, &host, &dbName, &command, &timeSec, &state, &info); err != nil {
+			return nil, err
+		}
+
+		displayState := state.String
+		if displayState == "" {
+			displayState = command.String
+		}
+
+		processes = append(processes, types.ProcessInfo{
+			ID:       strconv.FormatInt(id, 10),
+			User:     user.String,
+			Host:     host.String,
+			Database: dbName.String,
+			Command:  command.String,
+			Time:     timeSec.Int64,
+			State:    displayState,
+			Query:    info.String,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if processes == nil {
+		processes = []types.ProcessInfo{}
+	}
+	return processes, nil
+}
+
+func (m *MySQLDriver) KillProcess(ctx context.Context, id string) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(id)
+	pid, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid process id: %s", id)
+	}
+
+	_, err = m.db.ExecContext(ctxTimeout, fmt.Sprintf("KILL %d", pid))
+	if err != nil {
+		return fmt.Errorf("failed to kill process %d: %w", pid, err)
+	}
+	return nil
+}
+
+func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	report := &types.HealthReport{
+		Tables:          []types.TableStorageStat{},
+		UnusedIndexes:   []types.UnusedIndexStat{},
+		Recommendations: []types.RemediationAction{},
+		CacheHitRatio:   100.0,
+	}
+
+	// 1. Cache hit ratio: Innodb_buffer_pool_reads vs Innodb_buffer_pool_read_requests
+	statusRows, err := m.db.QueryContext(ctxTimeout, "SHOW GLOBAL STATUS LIKE 'Innodb_buffer_pool_read%'")
+	if err != nil {
+		statusRows, err = m.db.QueryContext(ctxTimeout, "SHOW STATUS LIKE 'Innodb_buffer_pool_read%'")
+	}
+	if err == nil {
+		defer statusRows.Close()
+		var reads, readRequests int64
+		for statusRows.Next() {
+			var varName, varVal string
+			if err := statusRows.Scan(&varName, &varVal); err == nil {
+				if strings.EqualFold(varName, "Innodb_buffer_pool_reads") {
+					reads, _ = strconv.ParseInt(varVal, 10, 64)
+				} else if strings.EqualFold(varName, "Innodb_buffer_pool_read_requests") {
+					readRequests, _ = strconv.ParseInt(varVal, 10, 64)
+				}
+			}
+		}
+		if readRequests > 0 {
+			ratio := (1.0 - (float64(reads) / float64(readRequests))) * 100.0
+			if ratio < 0 {
+				ratio = 0
+			}
+			if ratio > 100 {
+				ratio = 100
+			}
+			report.CacheHitRatio = math.Round(ratio*10) / 10
+		}
+	}
+
+	// 2. Table sizes & DATA_FREE from information_schema.TABLES
+	tablesQuery := `
+		SELECT
+			COALESCE(TABLE_SCHEMA, ''),
+			COALESCE(TABLE_NAME, ''),
+			COALESCE(DATA_LENGTH + INDEX_LENGTH + DATA_FREE, 0) AS total_bytes,
+			COALESCE(DATA_LENGTH, 0) AS data_bytes,
+			COALESCE(INDEX_LENGTH, 0) AS index_bytes,
+			COALESCE(TABLE_ROWS, 0) AS row_count,
+			COALESCE(DATA_FREE, 0) AS free_bytes
+		FROM information_schema.TABLES
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_TYPE = 'BASE TABLE'
+		ORDER BY total_bytes DESC;
+	`
+	rows, err := m.db.QueryContext(ctxTimeout, tablesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query mysql table stats: %w", err)
+	}
+	defer rows.Close()
+
+	var totalDbBytes, totalDeadBytes int64
+	for rows.Next() {
+		var stat types.TableStorageStat
+		if err := rows.Scan(
+			&stat.Schema,
+			&stat.Table,
+			&stat.TotalBytes,
+			&stat.DataBytes,
+			&stat.IndexBytes,
+			&stat.RowCount,
+			&stat.FreeBytes,
+		); err != nil {
+			return nil, err
+		}
+		stat.TotalSize = types.FormatBytes(stat.TotalBytes)
+		stat.DataSize = types.FormatBytes(stat.DataBytes)
+		stat.IndexSize = types.FormatBytes(stat.IndexBytes)
+		stat.DeadTuples = stat.FreeBytes
+		if stat.Schema != "" {
+			stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE %s.%s;", quoteIdent(stat.Schema), quoteIdent(stat.Table))
+		} else {
+			stat.RemediationSQL = fmt.Sprintf("OPTIMIZE TABLE %s;", quoteIdent(stat.Table))
+		}
+
+		totalDbBytes += stat.TotalBytes
+		totalDeadBytes += stat.FreeBytes
+		report.Tables = append(report.Tables, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	report.TotalTables = len(report.Tables)
+	report.DatabaseSizeBytes = totalDbBytes
+	report.DatabaseSize = types.FormatBytes(totalDbBytes)
+	report.DeadTuples = totalDeadBytes
+
+	// 3. Unused indexes from sys schema (if available)
+	sysQuery := `
+		SELECT
+			COALESCE(object_schema, ''),
+			COALESCE(object_name, ''),
+			COALESCE(index_name, '')
+		FROM sys.schema_unused_indexes
+		WHERE object_schema = DATABASE();
+	`
+	if sysRows, err := m.db.QueryContext(ctxTimeout, sysQuery); err == nil {
+		defer sysRows.Close()
+		for sysRows.Next() {
+			var uidx types.UnusedIndexStat
+			if err := sysRows.Scan(&uidx.Schema, &uidx.Table, &uidx.Index); err == nil {
+				uidx.Size = "N/A"
+				uidx.Scans = 0
+				if uidx.Schema != "" {
+					uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE %s.%s DROP INDEX %s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+				} else {
+					uidx.RemediationSQL = fmt.Sprintf("ALTER TABLE %s DROP INDEX %s;", quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+				}
+				report.UnusedIndexes = append(report.UnusedIndexes, uidx)
+			}
+		}
+	}
+
+	// Total indexes
+	var totalIndexes int
+	_ = m.db.QueryRowContext(ctxTimeout, `
+		SELECT count(*)
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE();
+	`).Scan(&totalIndexes)
+	report.TotalIndexes = totalIndexes
+
+	// 4. Recommendations
+	recID := 1
+	if report.CacheHitRatio < 80.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Low Buffer Pool Hit Ratio (< 80%)",
+			Description: fmt.Sprintf("InnoDB buffer pool hit ratio is %.1f%%. Many reads are fetching pages from disk. Consider increasing innodb_buffer_pool_size.", report.CacheHitRatio),
+			Severity:    "critical",
+			Category:    "cache",
+			SQL:         "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';",
+		})
+		recID++
+	} else if report.CacheHitRatio < 95.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Buffer Pool Hit Ratio Below Target (< 95%)",
+			Description: fmt.Sprintf("InnoDB buffer pool hit ratio is %.1f%%. Run ANALYZE TABLE or check if innodb_buffer_pool_size should be increased.", report.CacheHitRatio),
+			Severity:    "warning",
+			Category:    "cache",
+			SQL:         "SHOW VARIABLES LIKE 'innodb_buffer_pool_size';",
+		})
+		recID++
+	}
+
+	for _, tbl := range report.Tables {
+		if tbl.FreeBytes > 0 {
+			severity := "info"
+			if tbl.FreeBytes > 50*1024*1024 {
+				severity = "warning"
+			}
+			optSQL := fmt.Sprintf("OPTIMIZE TABLE %s;", quoteIdent(tbl.Table))
+			if tbl.Schema != "" {
+				optSQL = fmt.Sprintf("OPTIMIZE TABLE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table))
+			}
+			report.Recommendations = append(report.Recommendations, types.RemediationAction{
+				ID:          fmt.Sprintf("rec-%d", recID),
+				Title:       fmt.Sprintf("Optimize Table `%s`.`%s`", tbl.Schema, tbl.Table),
+				Description: fmt.Sprintf("Table `%s`.`%s` has %s of free/fragmented space (DATA_FREE). OPTIMIZE TABLE reorganizes storage and defragments index data.", tbl.Schema, tbl.Table, types.FormatBytes(tbl.FreeBytes)),
+				Severity:    severity,
+				Category:    "bloat",
+				SQL:         optSQL,
+			})
+			recID++
+		}
+
+		// Also suggest ANALYZE TABLE if row count > 1000
+		if tbl.RowCount > 1000 {
+			anaSQL := fmt.Sprintf("ANALYZE TABLE %s;", quoteIdent(tbl.Table))
+			if tbl.Schema != "" {
+				anaSQL = fmt.Sprintf("ANALYZE TABLE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table))
+			}
+			report.Recommendations = append(report.Recommendations, types.RemediationAction{
+				ID:          fmt.Sprintf("rec-%d", recID),
+				Title:       fmt.Sprintf("Analyze Table `%s`.`%s`", tbl.Schema, tbl.Table),
+				Description: fmt.Sprintf("Refresh key distribution statistics for `%s`.`%s` to help the optimizer choose better join and index plans.", tbl.Schema, tbl.Table),
+				Severity:    "info",
+				Category:    "maintenance",
+				SQL:         anaSQL,
+			})
+			recID++
+		}
+	}
+
+	for _, uidx := range report.UnusedIndexes {
+		dropSQL := fmt.Sprintf("ALTER TABLE %s DROP INDEX %s;", quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+		if uidx.Schema != "" {
+			dropSQL = fmt.Sprintf("ALTER TABLE %s.%s DROP INDEX %s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Table), quoteIdent(uidx.Index))
+		}
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       fmt.Sprintf("Drop Unused Index `%s`", uidx.Index),
+			Description: fmt.Sprintf("Index `%s` on table `%s`.`%s` has never been scanned according to MySQL performance metrics. Dropping it saves storage and reduces index maintenance overhead.", uidx.Index, uidx.Schema, uidx.Table),
+			Severity:    "info",
+			Category:    "unused_index",
+			SQL:         dropSQL,
+		})
+		recID++
+	}
+
+	return report, nil
+}
+
+
 

@@ -7,6 +7,9 @@ import { Sidebar } from './features/connections/Sidebar'
 import { TableGridView } from './features/grid/TableGridView'
 import { SqlConsoleView } from './features/editor/SqlConsoleView'
 import { SchemaErdView } from './features/erd/SchemaErdView'
+import { SchemaDiffView } from './features/diff/SchemaDiffView'
+import { ProcessMonitorView } from './features/activity/ProcessMonitorView'
+import { DatabaseAdvisorView } from './features/advisor/DatabaseAdvisorView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
@@ -51,7 +54,8 @@ export function App() {
   const [activeConnId, setActiveConnId] = useState<string | null>(null)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingConfig, setEditingConfig] = useState<ConnectionConfig | null>(null)
-  const [activeTab, setActiveTab] = useState<'table'|'sql'|'erd'>('table')
+  const activeTab = useAppStore((s) => s.activeTab)
+  const setActiveTab = useAppStore((s) => s.setActiveTab)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -80,11 +84,16 @@ export function App() {
   useEffect(() => {
     const localProfiles = api.getProfiles()
     setConnections(localProfiles)
+    useAppStore.getState().setConnections(localProfiles)
     if (localProfiles.length > 0 && !activeConnId) {
       setActiveConnId(localProfiles[0].id)
       useAppStore.getState().setActiveConnectionId(localProfiles[0].id)
     }
   }, [])
+
+  useEffect(() => {
+    useAppStore.getState().setConnections(connections)
+  }, [connections])
 
   useEffect(() => {
     if (activeConnId) {
@@ -262,6 +271,20 @@ export function App() {
                 {activeTab === 'table' && <TableGridView key={`${activeConnId}:${selectedSchema}:${selectedTable || ''}:${refreshKey}`} connId={activeConnId} schema={selectedSchema} table={selectedTable || ''} />}
                 {activeTab === 'sql' && <SqlConsoleView connId={activeConnId} />}
                 {activeTab === 'erd' && <SchemaErdView connId={activeConnId} schema={selectedSchema} />}
+                {activeTab === 'diff' && (
+                  <SchemaDiffView
+                    connections={connections}
+                    activeConnId={activeConnId}
+                    defaultSchema={selectedSchema}
+                    defaultTable={selectedTable}
+                  />
+                )}
+                {activeTab === 'processes' && (
+                  <ProcessMonitorView key={activeConnId} connId={activeConnId} />
+                )}
+                {activeTab === 'advisor' && (
+                  <DatabaseAdvisorView key={activeConnId} connId={activeConnId} />
+                )}
               </>
             )}
           </main>

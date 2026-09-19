@@ -15,15 +15,18 @@ import {
   Layers,
   Server,
   CornerDownLeft,
+  GitCompare,
+  Activity,
+  ShieldCheck,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
-import { useAppStore } from '../stores/appStore'
+import { useAppStore, type ActiveTab } from '../stores/appStore'
 
 export interface CommandPaletteProps {
   connections: ConnectionConfig[]
   activeConnId: string | null
-  activeTab: 'table' | 'sql' | 'erd'
+  activeTab: ActiveTab
   selectedSchema: string
   selectedTable: string | null
   isDark: boolean
@@ -31,7 +34,7 @@ export interface CommandPaletteProps {
   onSelectTable: (table: string) => void
   onSelectSchema: (schema: string) => void
   onSelectDatabase?: (db: string) => void
-  onTabChange: (tab: 'table' | 'sql' | 'erd') => void
+  onTabChange: (tab: ActiveTab) => void
   onToggleTheme: () => void
   onNewConnection: () => void
   onDisconnect: () => void
@@ -211,6 +214,48 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['erd', 'schema', 'diagram', 'graph', 'relations'],
       onSelect: () => {
         onTabChange('erd')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:diff',
+      title: 'Go to Schema Diff / Sync',
+      subtitle: 'Compare schemas, tables, and generate migration SQL',
+      category: 'Actions',
+      icon: GitCompare,
+      badge: 'DIFF',
+      keywords: ['diff', 'schema', 'compare', 'sync', 'migration'],
+      onSelect: () => {
+        onTabChange('diff')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:processes',
+      title: 'Go to Process Activity & Query Killer',
+      subtitle: 'Monitor active queries, connections, and terminate processes',
+      category: 'Actions',
+      icon: Activity,
+      badge: 'ACTIVITY',
+      keywords: ['process', 'processes', 'activity', 'kill', 'query', 'queries', 'monitor'],
+      onSelect: () => {
+        onTabChange('processes')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:advisor',
+      title: 'Go to Database Health & Performance Advisor',
+      subtitle: 'Analyze cache hit ratio, bloat, unused indexes, and run remediation',
+      category: 'Actions',
+      icon: ShieldCheck,
+      badge: 'ADVISOR',
+      keywords: ['advisor', 'health', 'performance', 'cache', 'bloat', 'vacuum', 'indexes', 'optimize'],
+      onSelect: () => {
+        onTabChange('advisor')
         closePalette()
       },
     })

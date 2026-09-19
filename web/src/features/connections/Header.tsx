@@ -1,7 +1,7 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
-import { useAppStore } from '../../stores/appStore'
+import { useAppStore, type ActiveTab } from '../../stores/appStore'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -10,8 +10,8 @@ interface Props {
   onAdd: () => void
   onEdit: (conn: ConnectionConfig) => void
   onDeleted: (id: string) => void
-  activeTab: 'table' | 'sql' | 'erd'
-  onTabChange: (tab: 'table' | 'sql' | 'erd') => void
+  activeTab: ActiveTab
+  onTabChange: (tab: ActiveTab) => void
   selectedSchema: string
   onSchemaChange: (schema: string) => void
   selectedTable: string | null
@@ -110,14 +110,23 @@ export const Header: React.FC<Props> = ({
             { id: 'table' as const, label: 'Tables' },
             { id: 'sql' as const, label: 'SQL Editor' },
             { id: 'erd' as const, label: 'ERD' },
-          ].map(tab => (
-            <button key={tab.id} onClick={() => onTabChange(tab.id)}
-              className={`px-2.5 py-1 text-[11px] rounded transition-colors ${
-                activeTab === tab.id
-                  ? 'text-[var(--fg)] bg-[var(--active)] font-medium'
-                  : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-              }`}>{tab.label}</button>
-          ))}
+            { id: 'diff' as const, label: 'Schema Diff' },
+            { id: 'processes' as const, label: 'Processes' },
+            { id: 'advisor' as const, label: 'Advisor', icon: ShieldCheck },
+          ].map(tab => {
+            const Icon = (tab as any).icon
+            return (
+              <button key={tab.id} onClick={() => onTabChange(tab.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded transition-colors ${
+                  activeTab === tab.id
+                    ? 'text-[var(--fg)] bg-[var(--active)] font-medium'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+                }`}>
+                {Icon && <Icon className="w-3.5 h-3.5" />}
+                {tab.label}
+              </button>
+            )
+          })}
         </div>
 
         {/* Dark/Light Toggle */}

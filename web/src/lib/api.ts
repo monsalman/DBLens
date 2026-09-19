@@ -32,6 +32,7 @@ export interface ERDForeignKey {
   column: string
   refTable: string
   refColumn: string
+  cardinality?: '1:1' | '1:N' | string
 }
 
 export interface TableForeignKey {
@@ -73,6 +74,138 @@ export interface ColumnMeta {
   foreignKeyTarget?: ForeignKeyTarget
   defaultValue?: string
   default?: string | null
+}
+
+export interface RenameColumnSpec {
+  from: string
+  to: string
+}
+
+export interface AlterColumnSpec {
+  name: string
+  type?: string
+  nullable?: boolean
+  default?: string | null
+  dropDefault?: boolean
+}
+
+export interface AlterTablePayload {
+  schema?: string
+  table?: string
+  addedColumns?: ColumnMeta[]
+  droppedColumns?: string[]
+  renamedColumns?: RenameColumnSpec[]
+  alteredColumns?: AlterColumnSpec[]
+  addedIndexes?: IndexMeta[]
+  droppedIndexes?: string[]
+  addedForeignKeys?: TableForeignKey[]
+  droppedForeignKeys?: string[]
+  statements?: string[]
+  sql?: string
+}
+
+export interface AlterTablePreviewResponse {
+  table: string
+  schema?: string
+  dialect: string
+  statements: string[]
+  sql: string
+}
+
+export interface AlterTableApplyResponse {
+  table: string
+  schema?: string
+  statementsExecuted: number
+  elapsedMs: number
+  statements: string[]
+  message: string
+}
+
+export type DiffStatus = 'ADDED' | 'REMOVED' | 'MODIFIED' | 'IDENTICAL'
+
+export interface ColumnDiff {
+  name: string
+  status: DiffStatus
+  sourceType?: string
+  targetType?: string
+  sourceNullable?: boolean
+  targetNullable?: boolean
+  sourceDefault?: string | null
+  targetDefault?: string | null
+  sourcePrimary?: boolean
+  targetPrimary?: boolean
+  changes?: string[]
+}
+
+export interface IndexDiff {
+  name: string
+  status: DiffStatus
+  columns: string[]
+  isUnique: boolean
+  type?: string
+}
+
+export interface FKDiff {
+  name: string
+  status: DiffStatus
+  column: string
+  refTable: string
+  refColumn: string
+  onUpdate?: string
+  onDelete?: string
+}
+
+export interface TableDiff {
+  name: string
+  schema?: string
+  status: DiffStatus
+  columns: ColumnDiff[]
+  indexes: IndexDiff[]
+  foreignKeys: FKDiff[]
+  migrationSql: string[]
+  sql?: string
+}
+
+export interface SchemaDiffResult {
+  sourceSchema: string
+  targetSchema: string
+  sourceDialect?: string
+  targetDialect: string
+  totalTables: number
+  addedCount: number
+  removedCount: number
+  modifiedCount: number
+  identicalCount: number
+  tables: TableDiff[]
+  migrationSql: string[]
+  sql: string
+}
+
+export interface DiffEndpointSpec {
+  connId?: string
+  schema?: string
+  table?: string
+  dsn?: string
+}
+
+export interface SchemaDiffRequest {
+  source: DiffEndpointSpec
+  target: DiffEndpointSpec
+  targetDsn?: string
+  sourceDsn?: string
+}
+
+export interface SchemaDiffApplyRequest {
+  statements: string[]
+  targetDsn?: string
+  readOnly?: boolean
+}
+
+export interface SchemaDiffApplyResponse {
+  statementsExecuted: number
+  elapsedMs: number
+  statements: string[]
+  message: string
 }
 
 export interface ERDTable {
@@ -177,6 +310,63 @@ export interface ExplainOptions {
   analyze?: boolean
   schema?: string
   database?: string
+}
+
+export interface ProcessInfo {
+  id: string
+  user: string
+  database: string
+  host: string
+  time: number
+  state: string
+  query: string
+  command?: string
+}
+
+export interface TableStorageStat {
+  schema: string
+  table: string
+  totalBytes: number
+  dataBytes: number
+  indexBytes: number
+  totalSize: string
+  dataSize: string
+  indexSize: string
+  rowCount: number
+  deadTuples: number
+  freeBytes?: number
+  remediationSql?: string
+}
+
+export interface UnusedIndexStat {
+  schema: string
+  table: string
+  index: string
+  sizeBytes: number
+  size: string
+  scans: number
+  remediationSql?: string
+}
+
+export interface RemediationAction {
+  id: string
+  title: string
+  description: string
+  severity: 'critical' | 'warning' | 'info'
+  category: 'cache' | 'bloat' | 'unused_index' | 'maintenance'
+  sql: string
+}
+
+export interface HealthReport {
+  cacheHitRatio: number
+  databaseSizeBytes: number
+  databaseSize: string
+  totalTables: number
+  totalIndexes: number
+  deadTuples: number
+  tables: TableStorageStat[]
+  unusedIndexes: UnusedIndexStat[]
+  recommendations: RemediationAction[]
 }
 
 // ── Private Profile CRUD (localStorage) & Queries with X-DBLENS-DSN header ──
@@ -317,7 +507,7 @@ export const api = {
   },
 
   _getDSN(connId: string, profiles?: ConnectionConfig[]): string {
-    const allProfiles = profiles ?? api.getProfiles()
+    const allProfiles = profiles && profiles.length > 0 ? profiles : api.getProfiles()
     return allProfiles.find(p => p.id === connId)?.dsn ?? ''
   },
 
@@ -414,6 +604,56 @@ export const api = {
     return json.data ?? json
   },
 
+  async alterTablePreview(
+    connId: string,
+    table: string,
+    payload: AlterTablePayload,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AlterTablePreviewResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter-preview${schemaParam}`,
+      {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify(payload),
+      }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to generate alter table preview')
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async alterTableApply(
+    connId: string,
+    table: string,
+    payload: AlterTablePayload,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AlterTableApplyResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const r = await fetch(
+      `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter${schemaParam}`,
+      {
+        method: 'POST',
+        headers: this._headers(dsn),
+        body: JSON.stringify(payload),
+      }
+    )
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to apply alter table changes')
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
   async getSchema(connId: string, schemaName?: string, profiles?: ConnectionConfig[]): Promise<SchemaMeta> {
     const schemas = await this.getSchemas(connId, profiles)
     const targetSchema = schemaName || schemas[0] || 'public'
@@ -477,14 +717,36 @@ export const api = {
     return raw ?? { rows: [], columns: [] }
   },
 
-  async executeQuery(connId: string, sql: string, profiles?: ConnectionConfig[]): Promise<QueryResult> {
+  async executeQuery(
+    connId: string,
+    sql: string,
+    profilesOrParams?: ConnectionConfig[] | Record<string, any>,
+    queryParams?: Record<string, any>
+  ): Promise<QueryResult> {
     const start = performance.now()
+    let profiles: ConnectionConfig[] | undefined
+    let params: Record<string, any> | undefined
+
+    if (Array.isArray(profilesOrParams)) {
+      profiles = profilesOrParams
+      params = queryParams
+    } else if (profilesOrParams && typeof profilesOrParams === 'object') {
+      params = profilesOrParams
+      profiles = undefined
+    } else {
+      params = queryParams
+    }
+
     const dsn = this._getDSN(connId, profiles)
     try {
+      const payload: { sql: string; params?: Record<string, any> } = { sql }
+      if (params && Object.keys(params).length > 0) {
+        payload.params = params
+      }
       const res = await fetch(`/api/connections/${connId}/query`, {
         method: 'POST',
         headers: this._headers(dsn),
-        body: JSON.stringify({ sql }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const text = await res.text()
@@ -760,6 +1022,143 @@ export const api = {
         if (j?.error) msg = j.error
       } catch {}
       throw new Error(msg || 'Import SQL failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async compareSchema(
+    connId: string,
+    req: SchemaDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaDiffResult> {
+    const srcDsn = req.sourceDsn || req.source.dsn || this._getDSN(req.source.connId || connId, profiles)
+    const tgtDsn = req.targetDsn || req.target.dsn || (req.target.connId ? this._getDSN(req.target.connId, profiles) : srcDsn)
+    const payload: SchemaDiffRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const headers = this._headers(srcDsn)
+    const res = await fetch(`/api/connections/${connId}/diff`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Schema comparison failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applySchemaDiff(
+    connId: string,
+    req: SchemaDiffApplyRequest,
+    profiles?: ConnectionConfig[],
+    readOnly?: boolean
+  ): Promise<SchemaDiffApplyResponse> {
+    const dsn = req.targetDsn || this._getDSN(connId, profiles)
+    const isReadOnly = readOnly ?? req.readOnly ?? profiles?.find(p => p.id === connId)?.readOnly ?? false
+    const headers: Record<string, string> = {
+      ...(this._headers(dsn) as Record<string, string>),
+    }
+    if (isReadOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    const res = await fetch(`/api/connections/${connId}/diff/apply`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...req, readOnly: isReadOnly }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Apply migration failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getProcesses(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProcessInfo[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/processes`, {
+      headers: this._headers(dsn),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to fetch processes')
+    }
+    const json = await res.json()
+    return json.data ?? []
+  },
+
+  async killProcess(
+    connId: string,
+    processId: string,
+    profiles?: ConnectionConfig[],
+    readOnly?: boolean
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const isReadOnly = readOnly ?? profiles?.find(p => p.id === connId)?.readOnly ?? false
+    const headers: Record<string, string> = {
+      ...(this._headers(dsn) as Record<string, string>),
+    }
+    if (isReadOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    const res = await fetch(`/api/connections/${connId}/processes/kill`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ processId }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to kill process')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getHealth(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<HealthReport> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/health`, {
+      headers: this._headers(dsn),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to fetch database health report')
     }
     const json = await res.json()
     return json.data ?? json

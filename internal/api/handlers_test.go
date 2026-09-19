@@ -5,15 +5,18 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dblens/dblens/internal/api"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 )
 
@@ -965,6 +968,73 @@ func TestExecuteQueryHandler(t *testing.T) {
 			t.Fatalf("expected 200 OK for 'sql' field query, got %d: %s", rec.Code, rec.Body.String())
 		}
 	}
+
+	// 5. Parameterized query execution with :param and {{param}}
+	{
+		body := `{"sql": "SELECT * FROM items WHERE id = :id", "params": {"id": 1}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for parameterized query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(resp.Data.Rows) != 1 {
+			t.Fatalf("expected 1 row for id=1, got %d", len(resp.Data.Rows))
+		}
+		if resp.Data.Rows[0][1] != "item1" {
+			t.Errorf("expected item1, got %v", resp.Data.Rows[0][1])
+		}
+	}
+
+	// 6. Parameterized query with double brace {{var}}
+	{
+		body := `{"sql": "SELECT * FROM items WHERE name = {{ target_name }}", "params": {"target_name": "item2"}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for double-brace parameterized query, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp queryResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(resp.Data.Rows) != 1 {
+			t.Fatalf("expected 1 row for item2, got %d", len(resp.Data.Rows))
+		}
+		if resp.Data.Rows[0][1] != "item2" {
+			t.Errorf("expected item2, got %v", resp.Data.Rows[0][1])
+		}
+	}
+
+	// 7. Missing parameter returns error
+	{
+		body := `{"sql": "SELECT * FROM items WHERE id = :missing_id", "params": {}}`
+		req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500 on missing parameter, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func TestExplainQueryHandler(t *testing.T) {
@@ -1087,6 +1157,764 @@ func TestExplainQueryHandler(t *testing.T) {
 		}
 	}
 }
+
+func TestAutocompleteSchemaEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_api_autocomplete_erd_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			email TEXT NOT NULL
+		);
+		CREATE TABLE orders (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			total REAL NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create tables: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	req := httptest.NewRequest("GET", "/api/connections/default/erd", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /erd, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data  []driver.ERDTable `json:"data"`
+		Error *string           `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse json response: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error in response: %v", *resp.Error)
+	}
+
+	if len(resp.Data) < 2 {
+		t.Fatalf("expected at least 2 tables, got %d", len(resp.Data))
+	}
+
+	var foundUsers, foundOrders bool
+	for _, tbl := range resp.Data {
+		if tbl.Name == "users" {
+			foundUsers = true
+			if len(tbl.Columns) < 3 {
+				t.Fatalf("expected at least 3 columns for users, got %d", len(tbl.Columns))
+			}
+		}
+		if tbl.Name == "orders" {
+			foundOrders = true
+			if len(tbl.Columns) < 3 {
+				t.Fatalf("expected at least 3 columns for orders, got %d", len(tbl.Columns))
+			}
+			for _, fk := range tbl.FKs {
+				if fk.Column == "user_id" && fk.Cardinality != "1:N" {
+					t.Fatalf("expected orders.user_id FK cardinality '1:N', got '%s'", fk.Cardinality)
+				}
+			}
+		}
+	}
+
+	if !foundUsers || !foundOrders {
+		t.Fatalf("expected to find both users and orders tables, foundUsers=%v, foundOrders=%v", foundUsers, foundOrders)
+	}
+}
+
+func TestAlterTablePreviewAndApply(t *testing.T) {
+	dbFile := "/tmp/dblens_api_alter_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE widgets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			legacy_name TEXT NOT NULL,
+			removable_col TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Preview alter table
+	previewPayload := `{
+		"schema": "",
+		"table": "widgets",
+		"addedColumns": [
+			{"name": "description", "type": "TEXT", "isNullable": true}
+		],
+		"renamedColumns": [
+			{"from": "legacy_name", "to": "name"}
+		],
+		"droppedColumns": [
+			"removable_col"
+		],
+		"addedIndexes": [
+			{"name": "idx_widgets_desc", "columns": ["description"], "isUnique": false}
+		]
+	}`
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter-preview", bytes.NewBufferString(previewPayload))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var previewResp struct {
+		Data struct {
+			Statements []string `json:"statements"`
+			SQL        string   `json:"sql"`
+			Dialect    string   `json:"dialect"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &previewResp); err != nil {
+		t.Fatalf("failed to unmarshal preview response: %v", err)
+	}
+
+	if len(previewResp.Data.Statements) != 4 {
+		t.Fatalf("expected 4 preview statements, got %d", len(previewResp.Data.Statements))
+	}
+	if !strings.Contains(previewResp.Data.SQL, `ALTER TABLE "widgets" ADD COLUMN "description" TEXT`) {
+		t.Errorf("preview SQL missing add column: %s", previewResp.Data.SQL)
+	}
+
+	// 2. Apply alter table
+	applyReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(previewPayload))
+	applyReq.Header.Set("X-DBLENS-DSN", dsn)
+	applyReq.Header.Set("Content-Type", "application/json")
+	applyW := httptest.NewRecorder()
+	router.ServeHTTP(applyW, applyReq)
+
+	if applyW.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, want %d, body: %s", applyW.Code, http.StatusOK, applyW.Body.String())
+	}
+
+	var applyResp struct {
+		Data struct {
+			StatementsExecuted int `json:"statementsExecuted"`
+		} `json:"data"`
+		Error *string `json:"error"`
+	}
+	if err := json.Unmarshal(applyW.Body.Bytes(), &applyResp); err != nil {
+		t.Fatalf("failed to unmarshal apply response: %v", err)
+	}
+
+	if applyResp.Data.StatementsExecuted != 4 {
+		t.Fatalf("expected 4 statements executed, got %d", applyResp.Data.StatementsExecuted)
+	}
+
+	// 3. Verify changes in table by inserting into new schema
+	_, err = entry.Driver.ExecuteQuery(ctx, `INSERT INTO widgets (name, description) VALUES ('Gadget', 'A cool gadget');`)
+	if err != nil {
+		t.Fatalf("failed to insert into altered table: %v", err)
+	}
+
+	// 4. Test error conditions: control characters
+	badReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets%00injection/alter-preview", bytes.NewBufferString(previewPayload))
+	badReq.Header.Set("X-DBLENS-DSN", dsn)
+	badW := httptest.NewRecorder()
+	router.ServeHTTP(badW, badReq)
+	if badW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for control chars in table name, got %d", badW.Code)
+	}
+
+	// 5. Test table mismatch in request body
+	mismatchPayload := `{"table": "other_table", "addedColumns": [{"name": "extra", "type": "TEXT"}]}`
+	mismatchReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(mismatchPayload))
+	mismatchReq.Header.Set("X-DBLENS-DSN", dsn)
+	mismatchReq.Header.Set("Content-Type", "application/json")
+	mismatchW := httptest.NewRecorder()
+	router.ServeHTTP(mismatchW, mismatchReq)
+	if mismatchW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for table mismatch, got %d", mismatchW.Code)
+	}
+	if !strings.Contains(mismatchW.Body.String(), "table in request body does not match URL parameter") {
+		t.Errorf("expected table mismatch error message, got: %s", mismatchW.Body.String())
+	}
+
+	// 6. Test control characters in request body table/schema
+	crBody := `{"table": "widgets\ninjection"}`
+	crReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(crBody))
+	crReq.Header.Set("X-DBLENS-DSN", dsn)
+	crReq.Header.Set("Content-Type", "application/json")
+	crW := httptest.NewRecorder()
+	router.ServeHTTP(crW, crReq)
+	if crW.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for control chars in body table, got %d", crW.Code)
+	}
+
+	// 7. Verify arbitrary req.Statements and req.SQL are ignored/not executed
+	backdoorPayload := `{"statements": ["DROP TABLE widgets"], "sql": "DROP TABLE widgets"}`
+	backdoorReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/widgets/alter", bytes.NewBufferString(backdoorPayload))
+	backdoorReq.Header.Set("X-DBLENS-DSN", dsn)
+	backdoorReq.Header.Set("Content-Type", "application/json")
+	backdoorW := httptest.NewRecorder()
+	router.ServeHTTP(backdoorW, backdoorReq)
+	if backdoorW.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for empty structured alter, got %d", backdoorW.Code)
+	}
+	// Verify widgets table was NOT dropped
+	qr, err := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM widgets")
+	if err != nil || len(qr.Rows) == 0 {
+		t.Fatalf("backdoor statements executed: widgets table dropped or inaccessible: %v", err)
+	}
+
+	// 8. Test transactional rollback on failure in SQLite
+	_, err = entry.Driver.ExecuteQuery(ctx, "CREATE TABLE tx_test (id INT);")
+	if err != nil {
+		t.Fatalf("failed to create tx_test table: %v", err)
+	}
+	// Attempt to add duplicate column "dup_col" twice in same request
+	failPayload := `{
+		"addedColumns": [
+			{"name": "dup_col", "type": "TEXT"},
+			{"name": "dup_col", "type": "TEXT"}
+		]
+	}`
+	failReq := httptest.NewRequest("POST", "http://example.com/api/connections/default/tables/tx_test/alter", bytes.NewBufferString(failPayload))
+	failReq.Header.Set("X-DBLENS-DSN", dsn)
+	failReq.Header.Set("Content-Type", "application/json")
+	failW := httptest.NewRecorder()
+	router.ServeHTTP(failW, failReq)
+	if failW.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on statement execution error, got %d", failW.Code)
+	}
+	// Verify rollback: dup_col should NOT exist on tx_test because transaction rolled back
+	_, err = entry.Driver.ExecuteQuery(ctx, "SELECT dup_col FROM tx_test")
+	if err == nil {
+		t.Fatalf("expected error querying rolled-back column 'dup_col', but it exists (rollback failed)")
+	}
+}
+
+func TestSchemaDiffAndApply(t *testing.T) {
+	ctx := context.Background()
+	srcDbFile := filepath.Join(t.TempDir(), "src.db")
+	tgtDbFile := filepath.Join(t.TempDir(), "tgt.db")
+	srcDSN := "sqlite://" + srcDbFile
+	tgtDSN := "sqlite://" + tgtDbFile
+
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	srcEntry, err := mgr.GetByDSN(srcDSN)
+	if err != nil {
+		t.Fatalf("failed to open src db: %v", err)
+	}
+	tgtEntry, err := mgr.GetByDSN(tgtDSN)
+	if err != nil {
+		t.Fatalf("failed to open tgt db: %v", err)
+	}
+
+	// Setup schemas:
+	// src has authors (id, name, bio) and books (id, title)
+	// tgt has authors (id, name) and old_logs (id)
+	_, err = srcEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, bio TEXT);")
+	if err != nil {
+		t.Fatalf("src setup failed: %v", err)
+	}
+	_, err = srcEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT);")
+	if err != nil {
+		t.Fatalf("src setup failed: %v", err)
+	}
+
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE old_logs (id INTEGER PRIMARY KEY);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+
+	// 1. Test single table diff (authors)
+	tableDiffPayload := fmt.Sprintf(`{
+		"source": { "connId": "src", "schema": "main", "table": "authors", "dsn": "%s" },
+		"target": { "connId": "tgt", "schema": "main", "table": "authors", "dsn": "%s" }
+	}`, srcDSN, tgtDSN)
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewBufferString(tableDiffPayload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("table diff status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var tableDiffResp struct {
+		Data diff.SchemaDiffResult `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &tableDiffResp); err != nil {
+		t.Fatalf("failed to unmarshal table diff response: %v", err)
+	}
+
+	if tableDiffResp.Data.TotalTables != 1 {
+		t.Fatalf("expected 1 table in single table diff, got %d", tableDiffResp.Data.TotalTables)
+	}
+	if tableDiffResp.Data.ModifiedCount != 1 {
+		t.Fatalf("expected 1 modified table, got %d", tableDiffResp.Data.ModifiedCount)
+	}
+	if len(tableDiffResp.Data.MigrationSQL) == 0 {
+		t.Fatalf("expected migration SQL for authors table diff")
+	}
+
+	// 2. Test full schema diff
+	schemaDiffPayload := fmt.Sprintf(`{
+		"source": { "connId": "src", "schema": "main", "dsn": "%s" },
+		"target": { "connId": "tgt", "schema": "main", "dsn": "%s" }
+	}`, srcDSN, tgtDSN)
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewBufferString(schemaDiffPayload))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("schema diff status = %d, body: %s", w2.Code, w2.Body.String())
+	}
+
+	var schemaDiffResp struct {
+		Data diff.SchemaDiffResult `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &schemaDiffResp); err != nil {
+		t.Fatalf("failed to unmarshal schema diff response: %v", err)
+	}
+
+	// books is added, old_logs is removed, authors is modified
+	if schemaDiffResp.Data.AddedCount != 1 {
+		t.Errorf("expected 1 added table (books), got %d", schemaDiffResp.Data.AddedCount)
+	}
+	if schemaDiffResp.Data.RemovedCount != 1 {
+		t.Errorf("expected 1 removed table (old_logs), got %d", schemaDiffResp.Data.RemovedCount)
+	}
+	if schemaDiffResp.Data.ModifiedCount != 1 {
+		t.Errorf("expected 1 modified table (authors), got %d", schemaDiffResp.Data.ModifiedCount)
+	}
+
+	// 3. Test apply diff to target
+	applyPayload, _ := json.Marshal(map[string]interface{}{
+		"statements": schemaDiffResp.Data.MigrationSQL,
+		"targetDsn":  tgtDSN,
+	})
+
+	req3 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(applyPayload))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusOK {
+		t.Fatalf("apply diff status = %d, body: %s", w3.Code, w3.Body.String())
+	}
+
+	// Verify target now has books and authors has bio
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "SELECT id, title FROM books")
+	if err != nil {
+		t.Fatalf("books table not found in target after migration: %v", err)
+	}
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "SELECT bio FROM authors")
+	if err != nil {
+		t.Fatalf("bio column not found on authors in target after migration: %v", err)
+	}
+}
+
+func TestApplyDiffCommentsAndErrorHandling(t *testing.T) {
+	ctx := context.Background()
+	tgtDbFile := filepath.Join(t.TempDir(), "tgt_apply.db")
+	tgtDSN := "sqlite://" + tgtDbFile
+
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	tgtEntry, err := mgr.GetByDSN(tgtDSN)
+	if err != nil {
+		t.Fatalf("failed to open tgt db: %v", err)
+	}
+
+	_, err = tgtEntry.Driver.ExecuteQuery(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY);")
+	if err != nil {
+		t.Fatalf("tgt setup failed: %v", err)
+	}
+
+	// 1. Statements with empty lines and comments (-- ...)
+	payloadWithComments, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- First comment line",
+			"",
+			"   ",
+			"-- Another comment\n-- Second comment line",
+			"ALTER TABLE users ADD COLUMN name TEXT;",
+			"-- Trailing comment",
+			"ALTER TABLE users ADD COLUMN email TEXT;",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadWithComments))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			StatementsExecuted int      `json:"statementsExecuted"`
+			Statements         []string `json:"statements"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.Data.StatementsExecuted != 2 {
+		t.Fatalf("expected 2 statements executed (comments and empty lines ignored), got %d", resp.Data.StatementsExecuted)
+	}
+	if len(resp.Data.Statements) != 2 {
+		t.Fatalf("expected 2 recorded statements, got %d", len(resp.Data.Statements))
+	}
+
+	// 2. All statements are comments or empty
+	payloadOnlyComments, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- Just a comment",
+			"   ",
+			"-- Another comment",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadOnlyComments))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for only comments, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp2 struct {
+		Data struct {
+			StatementsExecuted int `json:"statementsExecuted"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	if resp2.Data.StatementsExecuted != 0 {
+		t.Fatalf("expected 0 statements executed, got %d", resp2.Data.StatementsExecuted)
+	}
+
+	// 3. Statement failure reports statement index and error
+	payloadWithError, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{
+			"-- comment before",
+			"ALTER TABLE users ADD COLUMN age INTEGER;",
+			"INVALID SQL SYNTAX HERE;",
+		},
+		"targetDsn": tgtDSN,
+	})
+
+	req3 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadWithError))
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusInternalServerError && w3.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 or 500 on statement error, got %d: %s", w3.Code, w3.Body.String())
+	}
+	bodyStr := w3.Body.String()
+	if !strings.Contains(bodyStr, "statement 2") {
+		t.Fatalf("expected error indicating statement 2 failed, got: %s", bodyStr)
+	}
+}
+
+func TestDiffSchemasControlChars(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	tests := []struct {
+		name string
+		req  map[string]interface{}
+	}{
+		{
+			name: "control char in source table",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users\x00inject", "schema": "public"},
+				"target": map[string]string{"table": "users", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in source schema",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "pub\nlic"},
+				"target": map[string]string{"table": "users", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in target table",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "public"},
+				"target": map[string]string{"table": "users\rinject", "schema": "public"},
+			},
+		},
+		{
+			name: "control char in target schema",
+			req: map[string]interface{}{
+				"source": map[string]string{"table": "users", "schema": "public"},
+				"target": map[string]string{"table": "users", "schema": "pub\x01lic"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := json.Marshal(tc.req)
+			req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff", bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 Bad Request, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "control characters") {
+				t.Fatalf("expected error message to mention control characters, got: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestApplyDiffReadOnlyProtection(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Rejection via X-DBLENS-READONLY header
+	payload, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{"ALTER TABLE users ADD COLUMN age INTEGER;"},
+		"targetDsn":  "sqlite:///tmp/test_readonly.db",
+	})
+
+	req := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden with X-DBLENS-READONLY header, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Target connection is read-only") {
+		t.Fatalf("expected error 'Target connection is read-only', got: %s", w.Body.String())
+	}
+
+	// 2. Rejection via readOnly: true in body
+	payloadRO, _ := json.Marshal(map[string]interface{}{
+		"statements": []string{"ALTER TABLE users ADD COLUMN age INTEGER;"},
+		"targetDsn":  "sqlite:///tmp/test_readonly.db",
+		"readOnly":   true,
+	})
+
+	req2 := httptest.NewRequest("POST", "http://example.com/api/connections/default/diff/apply", bytes.NewReader(payloadRO))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden with readOnly: true in body, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if !strings.Contains(w2.Body.String(), "Target connection is read-only") {
+		t.Fatalf("expected error 'Target connection is read-only', got: %s", w2.Body.String())
+	}
+}
+
+func TestGetProcessesAndKillProcess(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	dbFile := filepath.Join(t.TempDir(), "processes_test.db")
+	dsn := "sqlite://" + dbFile
+
+	// 1. Get processes
+	req := httptest.NewRequest("GET", "http://example.com/api/connections/default/processes", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data []driver.ProcessInfo `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data) == 0 {
+		t.Fatalf("expected at least 1 process info for sqlite, got 0")
+	}
+	if resp.Data[0].Database != "main" || resp.Data[0].Host != "embedded" {
+		t.Fatalf("unexpected sqlite process metadata: %+v", resp.Data[0])
+	}
+
+	// 2. Kill process with missing processId
+	killEmptyPayload, _ := json.Marshal(map[string]interface{}{})
+	reqKillEmpty := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killEmptyPayload))
+	reqKillEmpty.Header.Set("Content-Type", "application/json")
+	reqKillEmpty.Header.Set("X-DBLENS-DSN", dsn)
+	wKillEmpty := httptest.NewRecorder()
+	router.ServeHTTP(wKillEmpty, reqKillEmpty)
+	if wKillEmpty.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", wKillEmpty.Code, wKillEmpty.Body.String())
+	}
+
+	// 2b. Kill process with non-numeric or non-positive processId
+	for _, invalidPID := range []string{"abc", "-1", "0", "xyz123"} {
+		killInvalidPayload, _ := json.Marshal(map[string]interface{}{"processId": invalidPID})
+		reqKillInvalid := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killInvalidPayload))
+		reqKillInvalid.Header.Set("Content-Type", "application/json")
+		reqKillInvalid.Header.Set("X-DBLENS-DSN", dsn)
+		wKillInvalid := httptest.NewRecorder()
+		router.ServeHTTP(wKillInvalid, reqKillInvalid)
+		if wKillInvalid.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for processId %q, got %d: %s", invalidPID, wKillInvalid.Code, wKillInvalid.Body.String())
+		}
+		if !strings.Contains(wKillInvalid.Body.String(), "positive integer") {
+			t.Fatalf("expected error mentioning positive integer, got: %s", wKillInvalid.Body.String())
+		}
+	}
+
+	// 3. Kill process with read-only header
+	killPayload, _ := json.Marshal(map[string]interface{}{"processId": "1"})
+	reqKillRO := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killPayload))
+	reqKillRO.Header.Set("Content-Type", "application/json")
+	reqKillRO.Header.Set("X-DBLENS-DSN", dsn)
+	reqKillRO.Header.Set("X-DBLENS-READONLY", "true")
+	wKillRO := httptest.NewRecorder()
+	router.ServeHTTP(wKillRO, reqKillRO)
+	if wKillRO.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden, got %d: %s", wKillRO.Code, wKillRO.Body.String())
+	}
+
+	// 4. Kill process on sqlite returns error (not supported)
+	reqKill := httptest.NewRequest("POST", "http://example.com/api/connections/default/processes/kill", bytes.NewReader(killPayload))
+	reqKill.Header.Set("Content-Type", "application/json")
+	reqKill.Header.Set("X-DBLENS-DSN", dsn)
+	wKill := httptest.NewRecorder()
+	router.ServeHTTP(wKill, reqKill)
+	if wKill.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 error when killing sqlite process, got %d: %s", wKill.Code, wKill.Body.String())
+	}
+	if !strings.Contains(wKill.Body.String(), "killing processes is not supported for sqlite") {
+		t.Fatalf("expected unsupported message, got: %s", wKill.Body.String())
+	}
+}
+
+func TestGetDatabaseHealth(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	dbFile := filepath.Join(t.TempDir(), "health_test.db")
+	dsn := "sqlite://" + dbFile
+
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to get connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+	_, err = entry.Driver.ExecuteQuery(ctx, `INSERT INTO users (name) VALUES ('Alice'), ('Bob');`)
+	if err != nil {
+		t.Fatalf("failed to insert data: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "http://example.com/api/connections/default/health", nil)
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data driver.HealthReport `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Data.TotalTables != 1 {
+		t.Fatalf("expected 1 table, got %d", resp.Data.TotalTables)
+	}
+	if len(resp.Data.Tables) != 1 || resp.Data.Tables[0].Table != "users" {
+		t.Fatalf("expected table 'users', got %+v", resp.Data.Tables)
+	}
+	if resp.Data.Tables[0].RowCount != 2 {
+		t.Fatalf("expected rowCount 2, got %d", resp.Data.Tables[0].RowCount)
+	}
+	if len(resp.Data.Recommendations) == 0 {
+		t.Fatalf("expected at least 1 recommendation, got 0")
+	}
+}
+
+
+
+
 
 
 

@@ -243,6 +243,80 @@ body {
   border-left-color: var(--fg) !important;
 }
 
+/* ── CodeMirror Autocomplete / IntelliSense Tooltip ── */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3) !important;
+  overflow: hidden !important;
+  z-index: 9999 !important;
+}
+
+.cm-tooltip-autocomplete > ul {
+  padding: 4px !important;
+  max-height: 260px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.75rem !important;
+  color: var(--fg) !important;
+}
+
+.cm-tooltip-autocomplete > ul > li {
+  padding: 4px 8px !important;
+  border-radius: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  cursor: pointer !important;
+  transition: background 0.1s ease !important;
+  color: var(--fg) !important;
+}
+
+.cm-tooltip-autocomplete > ul > li[aria-selected="true"] {
+  background: var(--active) !important;
+  color: var(--fg) !important;
+}
+
+.cm-tooltip-autocomplete .cm-completionLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-weight: 500 !important;
+  color: var(--fg) !important;
+}
+
+.cm-tooltip-autocomplete .cm-completionDetail {
+  font-size: 0.7rem !important;
+  color: var(--muted) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  margin-left: 0.5rem !important;
+  font-style: normal !important;
+}
+
+.cm-tooltip-autocomplete .cm-completionMatchedText {
+  color: var(--accent) !important;
+  font-weight: 700 !important;
+  text-decoration: underline !important;
+  text-decoration-color: var(--accent) !important;
+}
+
+.cm-tooltip.cm-completionInfo {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  color: var(--fg) !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 0.75rem !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4) !important;
+  max-width: 320px !important;
+  z-index: 10000 !important;
+}
+
+.cm-completionIcon {
+  width: 14px !important;
+  margin-right: 6px !important;
+  opacity: 0.8 !important;
+  text-align: center !important;
+}
+
 .react-flow__node {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;

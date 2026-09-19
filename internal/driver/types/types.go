@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type ColumnMeta struct {
@@ -16,12 +17,13 @@ type ColumnMeta struct {
 }
 
 type ForeignKey struct {
-	Name      string `json:"name,omitempty"`
-	Column    string `json:"column"`
-	RefTable  string `json:"refTable"`
-	RefColumn string `json:"refColumn"`
-	OnUpdate  string `json:"onUpdate,omitempty"`
-	OnDelete  string `json:"onDelete,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Column      string `json:"column"`
+	RefTable    string `json:"refTable"`
+	RefColumn   string `json:"refColumn"`
+	OnUpdate    string `json:"onUpdate,omitempty"`
+	OnDelete    string `json:"onDelete,omitempty"`
+	Cardinality string `json:"cardinality,omitempty"`
 }
 
 type IndexMeta struct {
@@ -30,6 +32,74 @@ type IndexMeta struct {
 	IsUnique  bool     `json:"isUnique"`
 	IsPrimary bool     `json:"isPrimary"`
 	Type      string   `json:"type"`
+}
+
+type RenameColumnSpec struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	OldName string `json:"oldName,omitempty"`
+	NewName string `json:"newName,omitempty"`
+}
+
+func (r RenameColumnSpec) Old() string {
+	if r.From != "" {
+		return r.From
+	}
+	return r.OldName
+}
+
+func (r RenameColumnSpec) New() string {
+	if r.To != "" {
+		return r.To
+	}
+	return r.NewName
+}
+
+type AlterColumnSpec struct {
+	Name         string  `json:"name"`
+	Type         string  `json:"type,omitempty"`
+	DataType     string  `json:"dataType,omitempty"`
+	Nullable     *bool   `json:"nullable,omitempty"`
+	IsNullable   *bool   `json:"isNullable,omitempty"`
+	Default      *string `json:"default,omitempty"`
+	DefaultValue *string `json:"defaultValue,omitempty"`
+	DropDefault  bool    `json:"dropDefault,omitempty"`
+}
+
+func (a AlterColumnSpec) GetType() string {
+	if a.Type != "" {
+		return a.Type
+	}
+	return a.DataType
+}
+
+func (a AlterColumnSpec) GetNullable() *bool {
+	if a.Nullable != nil {
+		return a.Nullable
+	}
+	return a.IsNullable
+}
+
+func (a AlterColumnSpec) GetDefault() *string {
+	if a.Default != nil {
+		return a.Default
+	}
+	return a.DefaultValue
+}
+
+type AlterTableRequest struct {
+	Schema             string             `json:"schema"`
+	Table              string             `json:"table"`
+	AddedColumns       []ColumnMeta       `json:"addedColumns,omitempty"`
+	DroppedColumns     []string           `json:"droppedColumns,omitempty"`
+	RenamedColumns     []RenameColumnSpec `json:"renamedColumns,omitempty"`
+	AlteredColumns     []AlterColumnSpec  `json:"alteredColumns,omitempty"`
+	AddedIndexes       []IndexMeta        `json:"addedIndexes,omitempty"`
+	DroppedIndexes     []string           `json:"droppedIndexes,omitempty"`
+	AddedForeignKeys   []ForeignKey       `json:"addedForeignKeys,omitempty"`
+	DroppedForeignKeys []string           `json:"droppedForeignKeys,omitempty"`
+	Statements         []string           `json:"statements,omitempty"`
+	SQL                string             `json:"sql,omitempty"`
 }
 
 type TableMeta struct {
@@ -105,6 +175,83 @@ type ERDTable struct {
 	FKs     []ForeignKey `json:"fks"`
 }
 
+type ProcessInfo struct {
+	ID       string `json:"id"`
+	User     string `json:"user"`
+	Database string `json:"database"`
+	Host     string `json:"host"`
+	Time     int64  `json:"time"`
+	State    string `json:"state"`
+	Query    string `json:"query"`
+	Command  string `json:"command,omitempty"`
+}
+
+type TableStorageStat struct {
+	Schema         string `json:"schema"`
+	Table          string `json:"table"`
+	TotalBytes     int64  `json:"totalBytes"`
+	DataBytes      int64  `json:"dataBytes"`
+	IndexBytes     int64  `json:"indexBytes"`
+	TotalSize      string `json:"totalSize"`
+	DataSize       string `json:"dataSize"`
+	IndexSize      string `json:"indexSize"`
+	RowCount       int64  `json:"rowCount"`
+	DeadTuples     int64  `json:"deadTuples"`
+	FreeBytes      int64  `json:"freeBytes,omitempty"`
+	RemediationSQL string `json:"remediationSql,omitempty"`
+}
+
+type UnusedIndexStat struct {
+	Schema         string `json:"schema"`
+	Table          string `json:"table"`
+	Index          string `json:"index"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	Size           string `json:"size"`
+	Scans          int64  `json:"scans"`
+	RemediationSQL string `json:"remediationSql,omitempty"`
+}
+
+type RemediationAction struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Severity    string `json:"severity"` // "critical", "warning", "info"
+	Category    string `json:"category"` // "cache", "bloat", "unused_index", "maintenance"
+	SQL         string `json:"sql"`
+}
+
+type HealthReport struct {
+	CacheHitRatio     float64             `json:"cacheHitRatio"`
+	DatabaseSizeBytes int64               `json:"databaseSizeBytes"`
+	DatabaseSize      string              `json:"databaseSize"`
+	TotalTables       int                 `json:"totalTables"`
+	TotalIndexes      int                 `json:"totalIndexes"`
+	DeadTuples        int64               `json:"deadTuples"`
+	Tables            []TableStorageStat  `json:"tables"`
+	UnusedIndexes     []UnusedIndexStat   `json:"unusedIndexes"`
+	Recommendations   []RemediationAction `json:"recommendations"`
+}
+
+func FormatBytes(b int64) string {
+	if b <= 0 {
+		return "0 B"
+	}
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := "KMGTPE"
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), units[exp])
+}
+
 type Driver interface {
 	Dialect() string
 	InspectDatabases(ctx context.Context) ([]string, error)
@@ -116,10 +263,14 @@ type Driver interface {
 	QueryTableData(ctx context.Context, opts QueryOptions) (*QueryResult, error)
 	QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
+	ExecuteQueryWithParams(ctx context.Context, sql string, params map[string]interface{}) (*QueryResult, error)
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)
 	ExplainQuery(ctx context.Context, sql string, opts ExplainOptions) (*ExplainResult, error)
+	InspectProcesses(ctx context.Context) ([]ProcessInfo, error)
+	KillProcess(ctx context.Context, id string) error
+	InspectHealth(ctx context.Context) (*HealthReport, error)
 	Ping(ctx context.Context) error
 	Close() error
 }

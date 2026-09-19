@@ -8,9 +8,13 @@ import {
   ArrowRight,
   CheckCircle2,
   XCircle,
+  Wrench,
+  GitCompare,
 } from 'lucide-react'
 import { api, type TableDetailResponse } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
 import { DdlModal } from './DdlModal'
+import { TableDesignerModal } from './TableDesignerModal'
 
 interface TableSchemaViewProps {
   connId: string
@@ -33,6 +37,7 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SchemaSubTab>('columns')
   const [ddlModalOpen, setDdlModalOpen] = useState(false)
+  const [designerModalOpen, setDesignerModalOpen] = useState(false)
   const [ddlLoading, setDdlLoading] = useState(false)
   const [ddlError, setDdlError] = useState<string | null>(null)
   const [ddlData, setDdlData] = useState<{ ddl: string; dialect?: string } | null>(null)
@@ -41,6 +46,7 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
     setDdlData(null)
     setDdlError(null)
     setDdlModalOpen(false)
+    setDesignerModalOpen(false)
   }, [connId, schema, table])
 
   const columns = detail?.columns ?? []
@@ -67,6 +73,15 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
     } finally {
       setDdlLoading(false)
     }
+  }
+
+  const handleCompareTable = () => {
+    useAppStore.getState().setDiffPreload({
+      sourceConnId: connId,
+      sourceSchema: schema || 'public',
+      sourceTable: table,
+    })
+    useAppStore.getState().setActiveTab('diff')
   }
 
   return (
@@ -141,12 +156,30 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
           )}
 
           <button
+            onClick={handleCompareTable}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--surface)] text-[var(--fg)] hover:bg-[var(--hover)] text-xs font-mono font-medium transition-colors cursor-pointer"
+            title="Compare Table Schema in Diff Tool"
+          >
+            <GitCompare className="w-3.5 h-3.5 text-[var(--accent)]" />
+            <span>Compare Table</span>
+          </button>
+
+          <button
             onClick={handleOpenDDL}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[var(--accent)]/30 bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 text-xs font-mono font-medium transition-colors"
             title="Generate & View Native DDL"
           >
             <Code2 className="w-3.5 h-3.5" />
             <span>Generate DDL</span>
+          </button>
+
+          <button
+            onClick={() => setDesignerModalOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90 text-xs font-mono font-medium transition-colors shadow-xs"
+            title="Visual Table Designer & Alter Table"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            <span>Table Designer</span>
           </button>
         </div>
       </div>
@@ -378,6 +411,17 @@ export const TableSchemaView: React.FC<TableSchemaViewProps> = ({
         dialect={ddlData?.dialect}
         loading={ddlLoading}
         error={ddlError}
+      />
+
+      {/* Visual Table Designer Modal */}
+      <TableDesignerModal
+        isOpen={designerModalOpen}
+        onClose={() => setDesignerModalOpen(false)}
+        connId={connId}
+        table={table}
+        schema={schema}
+        detail={detail}
+        onRefresh={onRefresh}
       />
     </div>
   )

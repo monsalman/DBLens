@@ -2,13 +2,14 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ConnectionConfig, QueryHistoryItem } from '../lib/api'
 
-export type ActiveTab = 'table' | 'sql' | 'erd'
+export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff' | 'processes' | 'advisor'
 
 export interface SqlTab {
   id: string
   connId: string
   name: string
   query: string
+  params?: Record<string, any>
 }
 
 export interface QueryBookmark {
@@ -59,6 +60,8 @@ interface AppState {
   setSelectedSchema: (schema: string) => void
   selectedTable: string | null
   setSelectedTable: (table: string | null) => void
+  diffPreload: { sourceConnId?: string; sourceSchema?: string; sourceTable?: string } | null
+  setDiffPreload: (preload: { sourceConnId?: string; sourceSchema?: string; sourceTable?: string } | null) => void
 
   // SQL Console History
   queryHistory: QueryHistoryItem[]
@@ -73,6 +76,7 @@ interface AppState {
   closeSqlTab: (connId: string, tabId: string) => void
   renameSqlTab: (connId: string, tabId: string, name: string) => void
   updateSqlTabQuery: (connId: string, tabId: string, query: string) => void
+  updateSqlTabParams: (connId: string, tabId: string, params: Record<string, any>) => void
   setActiveSqlTabId: (connId: string, tabId: string) => void
   addBookmark: (bookmark: Omit<QueryBookmark, 'id' | 'createdAt'> & { id?: string; createdAt?: number }) => void
   deleteBookmark: (id: string) => void
@@ -142,6 +146,8 @@ export const useAppStore = create<AppState>()(
       setSelectedSchema: (selectedSchema) => set({ selectedSchema, selectedTable: null }),
       selectedTable: null,
       setSelectedTable: (selectedTable) => set({ selectedTable }),
+      diffPreload: null,
+      setDiffPreload: (diffPreload) => set({ diffPreload }),
 
       queryHistory: [
         {
@@ -243,6 +249,17 @@ export const useAppStore = create<AppState>()(
             sqlTabs: {
               ...state.sqlTabs,
               [connId]: existing.map((t) => (t.id === tabId ? { ...t, query } : t)),
+            },
+          }
+        }),
+
+      updateSqlTabParams: (connId: string, tabId: string, params: Record<string, any>) =>
+        set((state) => {
+          const existing = state.sqlTabs[connId] || []
+          return {
+            sqlTabs: {
+              ...state.sqlTabs,
+              [connId]: existing.map((t) => (t.id === tabId ? { ...t, params } : t)),
             },
           }
         }),

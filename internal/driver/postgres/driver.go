@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dblens/dblens/internal/driver/params"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/explain"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -346,6 +349,21 @@ func (p *PostgresDriver) InspectTableDetails(ctx context.Context, schema, table 
 		detail.DDL = ddl
 	}
 
+	// Cardinality: 1:1 if FK column is single-column UNIQUE or PK
+	uniqueCols := make(map[string]bool)
+	for _, idx := range detail.Indexes {
+		if idx.IsUnique && len(idx.Columns) == 1 {
+			uniqueCols[idx.Columns[0]] = true
+		}
+	}
+	for i := range detail.FKs {
+		if uniqueCols[detail.FKs[i].Column] {
+			detail.FKs[i].Cardinality = "1:1"
+		} else {
+			detail.FKs[i].Cardinality = "1:N"
+		}
+	}
+
 	return detail, nil
 }
 
@@ -624,15 +642,30 @@ func (p *PostgresDriver) QueryTableStream(ctx context.Context, schema, table str
 }
 
 func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.QueryResult, error) {
+	return p.ExecuteQueryWithParams(ctx, rawSql, nil)
+}
+
+func (p *PostgresDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-	upper := strings.ToUpper(trimmed)
+
+	compiledSql := trimmed
+	var args []interface{}
+	var err error
+	if queryParams != nil || strings.Contains(trimmed, ":") || strings.Contains(trimmed, "{{") {
+		compiledSql, args, err = params.CompileNamedParams(p.Dialect(), trimmed, queryParams)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	upper := strings.ToUpper(compiledSql)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "WITH") {
-		rows, err := p.db.QueryContext(ctxTimeout, trimmed)
+		rows, err := p.db.QueryContext(ctxTimeout, compiledSql, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -669,7 +702,7 @@ func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*type
 		}, nil
 	}
 
-	res, err := p.db.ExecContext(ctxTimeout, trimmed)
+	res, err := p.db.ExecContext(ctxTimeout, compiledSql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -932,4 +965,290 @@ func (p *PostgresDriver) ExplainQuery(ctx context.Context, rawSql string, opts t
 
 	return explain.ParsePostgres(jsonOutput)
 }
+
+func (p *PostgresDriver) InspectProcesses(ctx context.Context) ([]types.ProcessInfo, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT
+			pid::text,
+			COALESCE(usename, '') AS usename,
+			COALESCE(datname, '') AS datname,
+			COALESCE(CASE 
+				WHEN client_addr IS NOT NULL AND client_port IS NOT NULL THEN client_addr::text || ':' || client_port::text
+				WHEN client_addr IS NOT NULL THEN client_addr::text
+				ELSE 'local'
+			END, 'local') AS client_host,
+			GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (clock_timestamp() - query_start))::bigint, 0)) AS duration,
+			COALESCE(state, 'unknown') AS state,
+			COALESCE(query, '') AS query,
+			COALESCE(backend_type, 'client backend') AS backend_type
+		FROM pg_stat_activity
+		ORDER BY
+			CASE WHEN state = 'active' THEN 0 ELSE 1 END,
+			duration DESC,
+			pid ASC;
+	`
+
+	rows, err := p.db.QueryContext(ctxTimeout, query)
+	if err != nil {
+		fallbackQuery := `
+			SELECT
+				pid::text,
+				COALESCE(usename, '') AS usename,
+				COALESCE(datname, '') AS datname,
+				COALESCE(CASE 
+					WHEN client_addr IS NOT NULL AND client_port IS NOT NULL THEN client_addr::text || ':' || client_port::text
+					WHEN client_addr IS NOT NULL THEN client_addr::text
+					ELSE 'local'
+				END, 'local') AS client_host,
+				GREATEST(0, COALESCE(EXTRACT(EPOCH FROM (clock_timestamp() - query_start))::bigint, 0)) AS duration,
+				COALESCE(state, 'unknown') AS state,
+				COALESCE(query, '') AS query,
+				'client backend' AS backend_type
+			FROM pg_stat_activity
+			ORDER BY
+				CASE WHEN state = 'active' THEN 0 ELSE 1 END,
+				duration DESC,
+				pid ASC;
+		`
+		var fallbackErr error
+		rows, fallbackErr = p.db.QueryContext(ctxTimeout, fallbackQuery)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("inspect processes failed: %v (fallback: %w)", err, fallbackErr)
+		}
+	}
+	defer rows.Close()
+
+	var processes []types.ProcessInfo
+	for rows.Next() {
+		var pi types.ProcessInfo
+		if err := rows.Scan(
+			&pi.ID,
+			&pi.User,
+			&pi.Database,
+			&pi.Host,
+			&pi.Time,
+			&pi.State,
+			&pi.Query,
+			&pi.Command,
+		); err != nil {
+			return nil, err
+		}
+		processes = append(processes, pi)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if processes == nil {
+		processes = []types.ProcessInfo{}
+	}
+	return processes, nil
+}
+
+func (p *PostgresDriver) KillProcess(ctx context.Context, id string) error {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	trimmed := strings.TrimSpace(id)
+	pid, err := strconv.Atoi(trimmed)
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid process id: %s", id)
+	}
+
+	var terminated bool
+	err = p.db.QueryRowContext(ctxTimeout, "SELECT pg_terminate_backend($1)", pid).Scan(&terminated)
+	if err != nil {
+		return fmt.Errorf("failed to terminate backend %d: %w", pid, err)
+	}
+	if !terminated {
+		return fmt.Errorf("process %d could not be terminated or already terminated", pid)
+	}
+	return nil
+}
+
+func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	report := &types.HealthReport{
+		Tables:          []types.TableStorageStat{},
+		UnusedIndexes:   []types.UnusedIndexStat{},
+		Recommendations: []types.RemediationAction{},
+		CacheHitRatio:   100.0,
+	}
+
+	// 1. Cache hit ratio
+	cacheQuery := `
+		SELECT
+			COALESCE(sum(heap_blks_hit), 0) AS hits,
+			COALESCE(sum(heap_blks_read), 0) AS reads
+		FROM pg_statio_user_tables;
+	`
+	var hits, reads int64
+	if err := p.db.QueryRowContext(ctxTimeout, cacheQuery).Scan(&hits, &reads); err == nil {
+		if hits+reads > 0 {
+			report.CacheHitRatio = math.Round((float64(hits)/float64(hits+reads)*100.0)*10) / 10
+		}
+	}
+
+	// 2. Database size
+	var dbSizeBytes int64
+	if err := p.db.QueryRowContext(ctxTimeout, "SELECT COALESCE(pg_database_size(current_database()), 0);").Scan(&dbSizeBytes); err == nil {
+		report.DatabaseSizeBytes = dbSizeBytes
+		report.DatabaseSize = types.FormatBytes(dbSizeBytes)
+	}
+
+	// 3. Table storage and dead tuples
+	tablesQuery := `
+		SELECT
+			schemaname,
+			relname,
+			COALESCE(pg_total_relation_size(relid), 0) AS total_bytes,
+			COALESCE(pg_relation_size(relid), 0) AS data_bytes,
+			COALESCE(pg_indexes_size(relid), 0) AS index_bytes,
+			COALESCE(n_live_tup, 0) AS row_count,
+			COALESCE(n_dead_tup, 0) AS dead_tuples
+		FROM pg_stat_user_tables
+		ORDER BY total_bytes DESC;
+	`
+	rows, err := p.db.QueryContext(ctxTimeout, tablesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query table stats: %w", err)
+	}
+	defer rows.Close()
+
+	var totalDeadTuples int64
+	for rows.Next() {
+		var stat types.TableStorageStat
+		if err := rows.Scan(
+			&stat.Schema,
+			&stat.Table,
+			&stat.TotalBytes,
+			&stat.DataBytes,
+			&stat.IndexBytes,
+			&stat.RowCount,
+			&stat.DeadTuples,
+		); err != nil {
+			return nil, err
+		}
+		stat.TotalSize = types.FormatBytes(stat.TotalBytes)
+		stat.DataSize = types.FormatBytes(stat.DataBytes)
+		stat.IndexSize = types.FormatBytes(stat.IndexBytes)
+		stat.RemediationSQL = fmt.Sprintf("VACUUM ANALYZE %s.%s;", quoteIdent(stat.Schema), quoteIdent(stat.Table))
+
+		totalDeadTuples += stat.DeadTuples
+		report.Tables = append(report.Tables, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	report.TotalTables = len(report.Tables)
+	report.DeadTuples = totalDeadTuples
+
+	// 4. Unused indexes (idx_scan = 0 and not primary key)
+	unusedIdxQuery := `
+		SELECT
+			s.schemaname,
+			s.relname,
+			s.indexrelname,
+			COALESCE(pg_relation_size(s.indexrelid), 0) AS size_bytes,
+			COALESCE(s.idx_scan, 0) AS scans
+		FROM pg_stat_user_indexes s
+		JOIN pg_index i ON s.indexrelid = i.indexrelid
+		WHERE s.idx_scan = 0
+		  AND NOT i.indisprimary
+		ORDER BY size_bytes DESC;
+	`
+	idxRows, err := p.db.QueryContext(ctxTimeout, unusedIdxQuery)
+	if err == nil {
+		defer idxRows.Close()
+		for idxRows.Next() {
+			var uidx types.UnusedIndexStat
+			if err := idxRows.Scan(
+				&uidx.Schema,
+				&uidx.Table,
+				&uidx.Index,
+				&uidx.SizeBytes,
+				&uidx.Scans,
+			); err == nil {
+				uidx.Size = types.FormatBytes(uidx.SizeBytes)
+				uidx.RemediationSQL = fmt.Sprintf("DROP INDEX CONCURRENTLY %s.%s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Index))
+				report.UnusedIndexes = append(report.UnusedIndexes, uidx)
+			}
+		}
+	}
+
+	// Also count total indexes
+	var totalIndexes int
+	_ = p.db.QueryRowContext(ctxTimeout, "SELECT count(*) FROM pg_stat_user_indexes;").Scan(&totalIndexes)
+	report.TotalIndexes = totalIndexes
+
+	// 5. Recommendations
+	recID := 1
+	if report.CacheHitRatio < 80.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Low Cache Hit Ratio (< 80%)",
+			Description: fmt.Sprintf("Buffer cache hit ratio is %.1f%%. Many queries read directly from disk. Consider increasing shared_buffers and running ANALYZE.", report.CacheHitRatio),
+			Severity:    "critical",
+			Category:    "cache",
+			SQL:         "ANALYZE;",
+		})
+		recID++
+	} else if report.CacheHitRatio < 95.0 {
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       "Cache Hit Ratio Below Target (< 95%)",
+			Description: fmt.Sprintf("Buffer cache hit ratio is %.1f%%. Target is >= 95%% for optimal performance. Refresh table planner statistics.", report.CacheHitRatio),
+			Severity:    "warning",
+			Category:    "cache",
+			SQL:         "ANALYZE;",
+		})
+		recID++
+	}
+
+	for _, tbl := range report.Tables {
+		if tbl.DeadTuples > 0 {
+			severity := "info"
+			if tbl.DeadTuples > 10000 || (tbl.RowCount > 0 && float64(tbl.DeadTuples)/float64(tbl.RowCount) > 0.2) {
+				severity = "critical"
+			} else if tbl.DeadTuples > 500 {
+				severity = "warning"
+			}
+			report.Recommendations = append(report.Recommendations, types.RemediationAction{
+				ID:          fmt.Sprintf("rec-%d", recID),
+				Title:       fmt.Sprintf(`Vacuum Analyze "%s"."%s"`, tbl.Schema, tbl.Table),
+				Description: fmt.Sprintf("Table has %d dead tuples. VACUUM ANALYZE will reclaim dead row storage and update query planner cost estimates.", tbl.DeadTuples),
+				Severity:    severity,
+				Category:    "bloat",
+				SQL:         fmt.Sprintf("VACUUM ANALYZE %s.%s;", quoteIdent(tbl.Schema), quoteIdent(tbl.Table)),
+			})
+			recID++
+		}
+	}
+
+	for _, uidx := range report.UnusedIndexes {
+		severity := "info"
+		if uidx.SizeBytes > 10*1024*1024 {
+			severity = "warning"
+		}
+		report.Recommendations = append(report.Recommendations, types.RemediationAction{
+			ID:          fmt.Sprintf("rec-%d", recID),
+			Title:       fmt.Sprintf(`Drop Unused Index "%s"`, uidx.Index),
+			Description: fmt.Sprintf("Index on %s.%s has 0 scans and occupies %s of disk space. Dropping unused indexes saves storage and avoids index maintenance on writes.", uidx.Schema, uidx.Table, uidx.Size),
+			Severity:    severity,
+			Category:    "unused_index",
+			SQL:         fmt.Sprintf("DROP INDEX CONCURRENTLY %s.%s;", quoteIdent(uidx.Schema), quoteIdent(uidx.Index)),
+		})
+		recID++
+	}
+
+	return report, nil
+}
+
+
 

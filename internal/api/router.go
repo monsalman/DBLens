@@ -60,6 +60,8 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/tables", h.GetTables)
 	api.Get("/connections/{connId}/tables/{table}", h.GetTableDetails)
 	api.Get("/connections/{connId}/tables/{table}/ddl", h.GetTableDDL)
+	api.Post("/connections/{connId}/tables/{table}/alter-preview", h.AlterTablePreview)
+	api.Post("/connections/{connId}/tables/{table}/alter", h.AlterTableApply)
 	api.Post("/connections/{connId}/tables/{table}/data", h.QueryTableData)
 	api.Post("/connections/{connId}/query", h.ExecuteQuery)
 	api.Post("/connections/{connId}/explain", h.ExplainQuery)
@@ -70,6 +72,11 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/export", h.ExportTable)
 	api.Post("/connections/{connId}/import/csv", h.ImportCSV)
 	api.Post("/connections/{connId}/import/sql", h.ImportSQL)
+	api.Post("/connections/{connId}/diff", h.DiffSchemas)
+	api.Post("/connections/{connId}/diff/apply", h.ApplyDiff)
+	api.Get("/connections/{connId}/processes", h.GetProcesses)
+	api.Post("/connections/{connId}/processes/kill", h.KillProcess)
+	api.Get("/connections/{connId}/health", h.GetDatabaseHealth)
 
 	r.Mount("/api", api)
 
