@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
@@ -8,6 +8,7 @@ import { AddRowModal } from './AddRowModal'
 import { MockDataModal } from './MockDataModal'
 import { ImportModal } from './ImportModal'
 import { TableSchemaView } from './TableSchemaView'
+import { generateStagedSQL, type StagedChange } from './stagedMutations'
 
 interface Props {
   connId: string
@@ -35,6 +36,16 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
+  const qc = useQueryClient()
+  const { openPeekDrawer, connections } = useAppStore()
+  const activeConn = connections.find((c) => c.id === connId)
+  const isProd = activeConn?.environment === 'production'
+
+  const [stagedMode, setStagedMode] = useState<boolean>(() => isProd)
+  const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
+  const [showDiffModal, setShowDiffModal] = useState(false)
+  const [isApplyingStaged, setIsApplyingStaged] = useState(false)
+
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
@@ -58,6 +69,9 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedCol('')
     setEditingCell(null)
     setViewMode('data')
+    setStagedChanges({})
+    setShowDiffModal(false)
+    setIsApplyingStaged(false)
   }, [table, schema, connId])
 
   // Focus edit input when entering edit mode
@@ -67,8 +81,11 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     }
   }, [editingCell])
 
-  const qc = useQueryClient()
-  const { openPeekDrawer } = useAppStore()
+  useEffect(() => {
+    if (isProd) {
+      setStagedMode(true)
+    }
+  }, [isProd, connId, table])
 
   // Columns metadata
   const { data: cols, isLoading: colsLoading } = useQuery({
@@ -204,17 +221,46 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     if (!editingCell) return
     isCommittingRef.current = true
     try {
-      const { col } = editingCell
+      const { col, rowIdx } = editingCell
       setEditingCell(null)
       const originalVal = row[col]
       const newVal = editValue
+      const rowKey = getRowKey(row, rowIdx)
+      const cellKey = `${rowKey}:${col}`
+
       // skip if unchanged
-      if (String(originalVal ?? '') === newVal) return
+      if (String(originalVal ?? '') === newVal) {
+        if (stagedMode) {
+          setStagedChanges((prev) => {
+            const next = { ...prev }
+            delete next[cellKey]
+            return next
+          })
+        }
+        return
+      }
+
       setInlineError(null)
       const where: Record<string, any> = {}
       for (const pk of pkCols) {
         where[pk.name] = row[pk.name]
       }
+
+      if (stagedMode) {
+        setStagedChanges((prev) => ({
+          ...prev,
+          [cellKey]: {
+            key: cellKey,
+            row,
+            col,
+            oldVal: originalVal,
+            newVal: newVal === '' ? null : newVal,
+            where,
+          },
+        }))
+        return
+      }
+
       await mutateM.mutateAsync({
         schema,
         table,
@@ -227,6 +273,41 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     } finally {
       isCommittingRef.current = false
       cancelledRef.current = false
+    }
+  }
+
+  const stagedList = useMemo(() => Object.values(stagedChanges), [stagedChanges])
+  const stagedCount = stagedList.length
+
+  const handleApplyStagedChanges = async () => {
+    if (stagedCount === 0 || isApplyingStaged) return
+    if (activeConn?.readOnly) {
+      setInlineError('Connection is read-only. Mutation blocked by Safe Mode.')
+      return
+    }
+    setIsApplyingStaged(true)
+    setInlineError(null)
+    try {
+      for (const change of stagedList) {
+        await api.mutateRow(
+          connId,
+          {
+            schema,
+            table,
+            type: 'UPDATE',
+            data: { [change.col]: change.newVal },
+            where: change.where,
+          },
+          connections
+        )
+      }
+      setStagedChanges({})
+      setShowDiffModal(false)
+      qc.invalidateQueries({ queryKey: ['data', connId, table] })
+    } catch (err: any) {
+      setInlineError(`Failed to apply staged mutations: ${err?.message ?? 'Unknown error'}`)
+    } finally {
+      setIsApplyingStaged(false)
     }
   }
 
@@ -333,6 +414,21 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             
             {/* Actions */}
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Staged Mode Toggle */}
+              <button
+                type="button"
+                onClick={() => setStagedMode(!stagedMode)}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors cursor-pointer ${
+                  stagedMode
+                    ? 'bg-amber-500/15 text-amber-400 border-amber-500/30 font-medium'
+                    : 'bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--fg)]'
+                }`}
+                title="Toggle Staged Mode: Review changes and generate SQL diff before applying"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${stagedMode ? 'bg-amber-400 animate-pulse' : 'bg-[var(--muted)]'}`} />
+                <span>Staged: {stagedMode ? 'ON' : 'OFF'}</span>
+              </button>
+
               {Object.values(selectedRows).some(Boolean) && (
                 <button onClick={handleDelete} className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-red-400 hover:bg-red-950/20">
                   <Trash2 className="w-3 h-3" /> <span>{Object.values(selectedRows).filter(Boolean).length}</span>
@@ -478,16 +574,30 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     />
                   </td>
                   {colDefs.map(c => {
-                    const val = row[c.name]
-                    const isFkValue = !!c.fk && val !== null && val !== undefined && String(val) !== ''
+                    const rowKey = getRowKey(row, i)
+                    const cellKey = `${rowKey}:${c.name}`
+                    const staged = stagedChanges[cellKey]
+                    const isStaged = !!staged
+                    const val = isStaged ? staged.newVal : row[c.name]
+                    const isFkValue = !isStaged && !!c.fk && val !== null && val !== undefined && String(val) !== ''
                     const isEditing = editingCell?.rowIdx === i && editingCell?.col === c.name
                     const isPending = mutateM.isPending
 
                     return (
                       <td
                         key={c.name}
-                        title={!hasPk ? 'Inline edit requires a primary key' : undefined}
-                        className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] ${hasPk && !isFkValue ? 'cursor-text' : ''} ${isPending && isEditing ? 'opacity-50' : ''}`}
+                        title={
+                          isStaged
+                            ? `Staged change: ${String(staged.oldVal ?? 'NULL')} ➔ ${String(staged.newVal ?? 'NULL')}`
+                            : (!hasPk ? 'Inline edit requires a primary key' : undefined)
+                        }
+                        className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] relative transition-colors ${
+                          hasPk && !isFkValue ? 'cursor-text' : ''
+                        } ${isPending && isEditing ? 'opacity-50' : ''} ${
+                          isStaged
+                            ? 'bg-amber-500/15 text-amber-300 font-semibold border border-amber-500/40 rounded-xs'
+                            : ''
+                        }`}
                         onDoubleClick={() => {
                           if (!hasPk) return
                           if (isFkValue) return
@@ -515,24 +625,32 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                             onClick={e => e.stopPropagation()}
                           />
                         ) : isFkValue ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
-                          }}
-                          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
-                          title={`Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
-                        >
-                          <span className="truncate">{formatValue(val)}</span>
-                          <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
-                        </button>
-                      ) : (
-                        formatValue(val)
-                      )}
-                    </td>
-                  )
-                })}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
+                            }}
+                            className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
+                            title={`Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
+                          >
+                            <span className="truncate">{formatValue(val)}</span>
+                            <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-1.5 truncate">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <span className="truncate">{formatValue(val)}</span>
+                          </span>
+                        )}
+                      </td>
+                    )
+                  })}
               </tr>
               )
             })}
@@ -603,6 +721,105 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             refetch()
           }}
         />
+      )}
+
+      {/* Floating Action Bar for Staged Changes */}
+      {stagedCount > 0 && (
+        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-[var(--surface)] border-2 border-amber-500/60 rounded-xl shadow-2xl backdrop-blur-md">
+          <div className="flex items-center gap-2 font-mono text-xs font-semibold text-amber-400">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <span>{stagedCount} Staged Change{stagedCount > 1 ? 's' : ''}</span>
+          </div>
+          <div className="h-4 w-px bg-[var(--border)]" />
+          <button
+            type="button"
+            onClick={() => setShowDiffModal(true)}
+            className="px-2.5 py-1 text-xs font-mono rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-colors cursor-pointer"
+          >
+            Review SQL Diff
+          </button>
+          <button
+            type="button"
+            onClick={() => setStagedChanges({})}
+            disabled={isApplyingStaged}
+            className="px-2.5 py-1 text-xs font-mono rounded text-[var(--muted)] hover:text-red-400 transition-colors cursor-pointer disabled:opacity-40"
+          >
+            Discard All
+          </button>
+          <button
+            type="button"
+            onClick={handleApplyStagedChanges}
+            disabled={isApplyingStaged}
+            className="px-3 py-1 text-xs font-mono font-medium rounded bg-amber-500 hover:bg-amber-600 text-slate-950 shadow transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+          >
+            {isApplyingStaged && <Loader2 className="w-3 h-3 animate-spin" />}
+            <span>{isApplyingStaged ? 'Applying...' : 'Apply Changes'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Review SQL Diff Modal */}
+      {showDiffModal && (
+        <div className="modal-overlay p-4 z-50">
+          <div className="modal-content w-full max-w-2xl p-5 flex flex-col gap-3.5 bg-[var(--surface)] border border-[var(--border)] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+              <div className="flex items-center gap-2 font-mono text-xs font-bold text-[var(--fg)]">
+                <span className="text-amber-400 uppercase">Review SQL Diff</span>
+                <span className="text-[var(--muted)]">({stagedCount} statement{stagedCount > 1 ? 's' : ''})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDiffModal(false)}
+                className="text-[var(--muted)] hover:text-[var(--fg)] p-0.5 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono uppercase text-[var(--muted)] tracking-wider">
+                Generated UPDATE Statements
+              </label>
+              <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded font-mono text-xs text-amber-300 dark:text-amber-200 whitespace-pre-wrap max-h-80 overflow-auto">
+                {generateStagedSQL(stagedChanges, table, schema, activeConn?.dialect)}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[var(--border)] flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setStagedChanges({})
+                  setShowDiffModal(false)
+                }}
+                className="text-xs font-mono text-red-400 hover:text-red-300 cursor-pointer"
+              >
+                Discard All
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDiffModal(false)}
+                  className="btn-secondary px-3 py-1.5 text-xs font-mono"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiffModal(false)
+                    handleApplyStagedChanges()
+                  }}
+                  disabled={isApplyingStaged}
+                  className="px-3 py-1.5 text-xs font-mono font-medium rounded bg-amber-500 hover:bg-amber-600 text-slate-950 shadow transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                >
+                  {isApplyingStaged && <Loader2 className="w-3 h-3 animate-spin" />}
+                  <span>{isApplyingStaged ? 'Applying...' : 'Apply Changes'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
