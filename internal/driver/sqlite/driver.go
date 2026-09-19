@@ -21,6 +21,7 @@ type SQLiteDriver struct {
 
 func New(dsn string) (*SQLiteDriver, error) {
 	cleanDSN := strings.TrimPrefix(dsn, "sqlite://")
+	cleanDSN = strings.TrimPrefix(cleanDSN, "sqlite3://")
 	cleanDSN = strings.TrimPrefix(cleanDSN, "file:")
 	db, err := sql.Open("sqlite", cleanDSN)
 	if err != nil {

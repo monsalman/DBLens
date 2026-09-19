@@ -22,7 +22,79 @@ import (
 var (
 	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 	reLineComment  = regexp.MustCompile(`--[^\r\n]*`)
+	reCteMutation  = regexp.MustCompile(`(?i)\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b`)
+	reAnalyze      = regexp.MustCompile(`(?i)\bANALYZE\b`)
+	reMutating     = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|MERGE|GRANT|REVOKE|DO|CALL|RENAME)\b`)
 )
+
+func splitStatements(sql string) []string {
+	var stmts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	inBacktick := false
+
+	chars := []rune(sql)
+	for i := 0; i < len(chars); i++ {
+		ch := chars[i]
+		if ch == '\'' && !inDoubleQuote && !inBacktick {
+			if inSingleQuote && i+1 < len(chars) && chars[i+1] == '\'' {
+				current.WriteRune(ch)
+				current.WriteRune(chars[i+1])
+				i++
+				continue
+			}
+			inSingleQuote = !inSingleQuote
+			current.WriteRune(ch)
+		} else if ch == '"' && !inSingleQuote && !inBacktick {
+			if inDoubleQuote && i+1 < len(chars) && chars[i+1] == '"' {
+				current.WriteRune(ch)
+				current.WriteRune(chars[i+1])
+				i++
+				continue
+			}
+			inDoubleQuote = !inDoubleQuote
+			current.WriteRune(ch)
+		} else if ch == '`' && !inSingleQuote && !inDoubleQuote {
+			inBacktick = !inBacktick
+			current.WriteRune(ch)
+		} else if ch == ';' && !inSingleQuote && !inDoubleQuote && !inBacktick {
+			stmts = append(stmts, current.String())
+			current.Reset()
+		} else {
+			current.WriteRune(ch)
+		}
+	}
+	if current.Len() > 0 {
+		stmts = append(stmts, current.String())
+	}
+	return stmts
+}
+
+func stripOuterParens(s string) string {
+	s = strings.TrimSpace(s)
+	for strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		depth := 0
+		matched := true
+		for i, ch := range s {
+			if ch == '(' {
+				depth++
+			} else if ch == ')' {
+				depth--
+				if depth == 0 && i < len(s)-1 {
+					matched = false
+					break
+				}
+			}
+		}
+		if matched && depth == 0 {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		} else {
+			break
+		}
+	}
+	return s
+}
 
 // IsNonSelectSQL returns true if SQL statement is non-SELECT (mutation/DDL).
 func IsNonSelectSQL(sql string) bool {
@@ -33,23 +105,33 @@ func IsNonSelectSQL(sql string) bool {
 		return false
 	}
 
-	fields := strings.Fields(cleaned)
-	if len(fields) == 0 {
-		return false
-	}
-	firstWord := strings.ToUpper(fields[0])
+	stmts := splitStatements(cleaned)
+	for _, stmt := range stmts {
+		stmt = stripOuterParens(stmt)
+		if stmt == "" {
+			continue
+		}
 
-	switch firstWord {
-	case "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "REPLACE", "MERGE", "GRANT", "REVOKE":
-		return true
-	case "WITH":
-		upper := strings.ToUpper(cleaned)
-		for _, kw := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
-			if strings.Contains(upper, kw) {
+		fields := strings.Fields(stmt)
+		if len(fields) == 0 {
+			continue
+		}
+		firstWord := strings.ToUpper(fields[0])
+
+		switch firstWord {
+		case "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "REPLACE", "MERGE", "GRANT", "REVOKE", "DO", "CALL", "RENAME":
+			return true
+		case "WITH":
+			if reCteMutation.MatchString(stmt) {
+				return true
+			}
+		case "EXPLAIN":
+			if reAnalyze.MatchString(stmt) && reMutating.MatchString(stmt) {
 				return true
 			}
 		}
 	}
+
 	return false
 }
 
@@ -323,7 +405,7 @@ func (h *Handler) AlterTablePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AlterTableApply(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -481,7 +563,7 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Header.Get("X-DBLENS-READONLY") == "true" && IsNonSelectSQL(sql) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") && IsNonSelectSQL(sql) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -552,7 +634,7 @@ func (h *Handler) ExplainQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -578,7 +660,7 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -887,6 +969,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ImportCSV(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -1195,6 +1282,11 @@ func splitSQLStatements(sql string) []string {
 }
 
 func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
