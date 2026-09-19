@@ -42,8 +42,11 @@ export function isDestructiveQuery(sql: string): DestructiveCheckResult {
     }
   }
 
+  // Strip string literals before checking WHERE clause to prevent false negatives from strings containing WHERE
+  const sqlWithoutStrings = clean.replace(/'(?:''|\\'|[^'])*'/g, "''")
+
   // 3. DELETE FROM without WHERE
-  if (/\bDELETE\s+FROM\b/i.test(clean) && !/\bWHERE\b/i.test(clean)) {
+  if (/\bDELETE\s+FROM\b/i.test(sqlWithoutStrings) && !/\bWHERE\b/i.test(sqlWithoutStrings)) {
     return {
       isDestructive: true,
       reason: 'DELETE without a WHERE clause will delete ALL rows in the table.',
@@ -51,7 +54,7 @@ export function isDestructiveQuery(sql: string): DestructiveCheckResult {
   }
 
   // 4. UPDATE without WHERE
-  if (/\bUPDATE\b/i.test(clean) && !/\bWHERE\b/i.test(clean)) {
+  if (/\bUPDATE\b/i.test(sqlWithoutStrings) && !/\bWHERE\b/i.test(sqlWithoutStrings)) {
     return {
       isDestructive: true,
       reason: 'UPDATE without a WHERE clause will modify ALL rows in the table.',

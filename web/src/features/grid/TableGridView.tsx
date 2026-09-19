@@ -346,12 +346,17 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           },
           connections
         )
+        setStagedChanges((prev) => {
+          const next = { ...prev }
+          delete next[change.key]
+          return next
+        })
       }
-      setStagedChanges({})
       setShowDiffModal(false)
       qc.invalidateQueries({ queryKey: ['data', connId, table] })
     } catch (err: any) {
       setInlineError(`Failed to apply staged mutations: ${err?.message ?? 'Unknown error'}`)
+      qc.invalidateQueries({ queryKey: ['data', connId, table] })
     } finally {
       setIsApplyingStaged(false)
     }

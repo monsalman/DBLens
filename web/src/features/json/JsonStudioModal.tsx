@@ -19,7 +19,6 @@ import {
   parseJsonSafely,
   generateDialectSqlPath,
   setValueByPath,
-  formatJsonPath,
 } from './jsonPathHelper.ts'
 
 export interface JsonStudioModalProps {
@@ -34,6 +33,18 @@ export interface JsonStudioModalProps {
 }
 
 type DialectType = 'postgres' | 'mysql' | 'sqlite'
+
+function getChildJsonPath(parentPath: string, k: string | number): string {
+  const isValidIdentifier = (s: string) => /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(s)
+  if (typeof k === 'number') {
+    return parentPath === '$' ? `$[${k}]` : `${parentPath}[${k}]`
+  }
+  const keyStr = String(k)
+  const isIdent = isValidIdentifier(keyStr)
+  return parentPath === '$'
+    ? (isIdent ? `$.${keyStr}` : `$[${JSON.stringify(keyStr)}]`)
+    : (isIdent ? `${parentPath}.${keyStr}` : `${parentPath}[${JSON.stringify(keyStr)}]`)
+}
 
 interface TreeNodeProps {
   name?: string | number
@@ -254,7 +265,7 @@ const JsonTreeNode: React.FC<TreeNodeProps> = ({
                   key={idx}
                   name={idx}
                   value={item}
-                  path={`${path}[${idx}]`}
+                  path={getChildJsonPath(path, idx)}
                   activePath={activePath}
                   onSelectPath={onSelectPath}
                   onUpdateValue={onUpdateValue}
@@ -267,7 +278,7 @@ const JsonTreeNode: React.FC<TreeNodeProps> = ({
                   key={k}
                   name={k}
                   value={value[k]}
-                  path={formatJsonPath([...(path === '$' ? [] : [path]), k]).replace(/^\$\.?\$/, '$')}
+                  path={getChildJsonPath(path, k)}
                   activePath={activePath}
                   onSelectPath={onSelectPath}
                   onUpdateValue={onUpdateValue}

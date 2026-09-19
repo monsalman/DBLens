@@ -1,3 +1,5 @@
+import { escapeIdentifier } from '../grid/stagedMutations.ts'
+
 export type PathSegment = string | number
 
 /**
@@ -45,7 +47,7 @@ export function parseJsonPath(jsonPath: string): PathSegment[] {
   if (!cleanStr) return []
 
   const segments: PathSegment[] = []
-  const regex = /(?:^|\.)([a-zA-Z0-9_$-]+)|\[(\d+)\]|\[['"]([^'"]+)['"]\]/g
+  const regex = /(?:^|\.)([a-zA-Z0-9_$-]+)|\[(\d+)\]|\["((?:\\"|[^"])*)"\]|\['((?:\\'|[^'])*)'\]/g
   let match: RegExpExecArray | null
 
   while ((match = regex.exec(cleanStr)) !== null) {
@@ -54,7 +56,9 @@ export function parseJsonPath(jsonPath: string): PathSegment[] {
     } else if (match[2] !== undefined) {
       segments.push(parseInt(match[2], 10))
     } else if (match[3] !== undefined) {
-      segments.push(match[3])
+      segments.push(match[3].replace(/\\"/g, '"'))
+    } else if (match[4] !== undefined) {
+      segments.push(match[4].replace(/\\'/g, "'"))
     }
   }
 
@@ -93,21 +97,25 @@ export function generateDialectSqlPath(
   const normDialect = (dialect || 'postgres').toLowerCase()
   const segments = parseJsonPath(jsonPath)
   const normalizedPath = formatJsonPath(segments)
+  const quotedCol = escapeIdentifier(columnName, normDialect)
+
+  // Escape single quotes and backslashes for string literal embedding
+  const escapedPath = normalizedPath.replace(/\\/g, '\\\\').replace(/'/g, "''")
 
   if (normDialect.includes('sqlite')) {
-    return `json_extract(${columnName}, '${normalizedPath}')`
+    return `json_extract(${quotedCol}, '${escapedPath}')`
   }
 
   if (normDialect.includes('mysql') || normDialect.includes('mariadb')) {
-    return `${columnName}->>'${normalizedPath}'`
+    return `${quotedCol}->>'${escapedPath}'`
   }
 
   // Default: PostgreSQL
   if (segments.length === 0) {
-    return columnName
+    return quotedCol
   }
 
-  let result = columnName
+  let result = quotedCol
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]
     const isLast = i === segments.length - 1
