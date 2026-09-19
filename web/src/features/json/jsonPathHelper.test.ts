@@ -95,34 +95,47 @@ test('formatJsonPath: formats segments to standardized JSONPath', () => {
 })
 
 // 3. generateDialectSqlPath across PostgreSQL, MySQL, SQLite
-test('generateDialectSqlPath: PostgreSQL path generation', () => {
+test('generateDialectSqlPath: PostgreSQL path generation with quoting', () => {
   // Nested keys + array index
   const pg1 = generateDialectSqlPath('postgres', 'payload', '$.user.profile.emails[0]')
-  assert(pg1 === "payload->'user'->'profile'->'emails'->>0", `PostgreSQL nested path: ${pg1}`)
+  assert(pg1 === "\"payload\"->'user'->'profile'->'emails'->>0", `PostgreSQL nested path: ${pg1}`)
 
   // Single key
   const pg2 = generateDialectSqlPath('postgres', 'payload', '$.user')
-  assert(pg2 === "payload->>'user'", `PostgreSQL single key: ${pg2}`)
+  assert(pg2 === "\"payload\"->>'user'", `PostgreSQL single key: ${pg2}`)
 
   // Root
   const pgRoot = generateDialectSqlPath('postgres', 'payload', '$')
-  assert(pgRoot === 'payload', `PostgreSQL root: ${pgRoot}`)
+  assert(pgRoot === '"payload"', `PostgreSQL root: ${pgRoot}`)
+
+  // Quoting with double quotes in column name
+  const pgEscapeCol = generateDialectSqlPath('postgres', 'pay"load', '$.key')
+  assert(pgEscapeCol === '"pay""load"->>\'key\'', `PostgreSQL escaped column name: ${pgEscapeCol}`)
 })
 
-test('generateDialectSqlPath: MySQL path generation', () => {
+test('generateDialectSqlPath: MySQL path generation with quoting and escaping', () => {
   const my1 = generateDialectSqlPath('mysql', 'payload', '$.user.profile.emails[0]')
-  assert(my1 === "payload->>'$.user.profile.emails[0]'", `MySQL nested path: ${my1}`)
+  assert(my1 === "`payload`->>'$.user.profile.emails[0]'", `MySQL nested path: ${my1}`)
 
   const myRoot = generateDialectSqlPath('mysql', 'payload', '$')
-  assert(myRoot === "payload->>'S'".replace('S', '$'), `MySQL root: ${myRoot}`)
+  assert(myRoot === "`payload`->>'S'".replace('S', '$'), `MySQL root: ${myRoot}`)
+
+  // Escapes backslashes and single quotes in path
+  const myEsc = generateDialectSqlPath('mysql', 'pay`load', "$.foo['bar\\'baz']")
+  assert(myEsc.includes('`pay``load`'), `MySQL escaped backtick column: ${myEsc}`)
+  assert(myEsc.includes("''"), `MySQL escaped single quote in path: ${myEsc}`)
 })
 
-test('generateDialectSqlPath: SQLite path generation', () => {
+test('generateDialectSqlPath: SQLite path generation with quoting and escaping', () => {
   const sq1 = generateDialectSqlPath('sqlite', 'payload', '$.user.profile.emails[0]')
-  assert(sq1 === "json_extract(payload, '$.user.profile.emails[0]')", `SQLite nested path: ${sq1}`)
+  assert(sq1 === "json_extract(\"payload\", '$.user.profile.emails[0]')", `SQLite nested path: ${sq1}`)
 
   const sqRoot = generateDialectSqlPath('sqlite', 'payload', '$')
-  assert(sqRoot === "json_extract(payload, '$')", `SQLite root: ${sqRoot}`)
+  assert(sqRoot === "json_extract(\"payload\", '$')", `SQLite root: ${sqRoot}`)
+
+  // Escapes backslashes and single quotes in path
+  const sqEsc = generateDialectSqlPath('sqlite', 'payload', "$.foo['bar\\'baz']")
+  assert(sqEsc.includes("''"), `SQLite escaped single quote in path: ${sqEsc}`)
 })
 
 // 4. getValueByPath & setValueByPath

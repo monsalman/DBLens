@@ -2035,6 +2035,105 @@ func TestSafeModeReadOnlyEnforcement(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected AlterTableApply to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
 	}
+
+	// 7. Extended IsNonSelectSQL tests
+	nonSelectCases := []struct {
+		sql      string
+		expected bool
+		desc     string
+	}{
+		{"SELECT 1; DROP TABLE items;", true, "multi-statement with drop"},
+		{"SELECT * FROM items WHERE name = 'foo; DROP TABLE items;'", false, "semicolon in string literal"},
+		{"(SELECT 1)", false, "parenthesized SELECT"},
+		{"(DROP TABLE items)", true, "parenthesized DROP"},
+		{"(((UPDATE items SET name = 'foo')))", true, "deeply parenthesized UPDATE"},
+		{"WITH cte AS (SELECT 1) SELECT * FROM cte", false, "read-only CTE"},
+		{"WITH cte AS (SELECT 1) INSERT INTO items (name) VALUES ('a')", true, "CTE with INSERT"},
+		{"WITH cte AS (SELECT 1) UPDATE items SET name = 'a'", true, "CTE with UPDATE"},
+		{"WITH cte AS (SELECT 1) DELETE FROM items", true, "CTE with DELETE"},
+		{"DO $$ BEGIN PERFORM 1; END $$;", true, "DO block"},
+		{"CALL my_procedure()", true, "CALL statement"},
+		{"RENAME TABLE a TO b", true, "RENAME statement"},
+		{"EXPLAIN ANALYZE DELETE FROM items", true, "EXPLAIN ANALYZE mutation"},
+		{"EXPLAIN SELECT * FROM items", false, "EXPLAIN plan only"},
+		{"EXPLAIN ANALYZE SELECT * FROM items", false, "EXPLAIN ANALYZE SELECT"},
+	}
+	for _, tc := range nonSelectCases {
+		if api.IsNonSelectSQL(tc.sql) != tc.expected {
+			t.Errorf("IsNonSelectSQL failed for %s: got %v, expected %v", tc.desc, !tc.expected, tc.expected)
+		}
+	}
+
+	// 8. Multi-statement mutation blocked under read-only
+	multiStmtBody := `{"sql": "SELECT 1; DROP TABLE items;"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(multiStmtBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected multi-statement mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 9. CTE mutation blocked under read-only (case-insensitive True)
+	cteMutBody := `{"sql": "WITH cte AS (SELECT 1) DELETE FROM items WHERE id = 1"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(cteMutBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "True")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected CTE mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 10. Parenthesized mutation blocked under read-only
+	parenMutBody := `{"sql": "(((DELETE FROM items WHERE id = 1)))"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(parenMutBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "TRUE")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected parenthesized mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 11. ImportCSV with Read-Only header should be blocked (403)
+	csvBuf := &bytes.Buffer{}
+	csvWriter := multipart.NewWriter(csvBuf)
+	_ = csvWriter.WriteField("table", "items")
+	csvPart, _ := csvWriter.CreateFormFile("file", "data.csv")
+	_, _ = csvPart.Write([]byte("name\nitem_new\n"))
+	_ = csvWriter.Close()
+
+	req = httptest.NewRequest("POST", "/api/connections/default/import/csv", csvBuf)
+	req.Header.Set("Content-Type", csvWriter.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected ImportCSV to be 403 Forbidden under read-only, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 12. ImportSQL with Read-Only header should be blocked (403)
+	sqlBuf := &bytes.Buffer{}
+	sqlWriter := multipart.NewWriter(sqlBuf)
+	sqlPart, _ := sqlWriter.CreateFormFile("file", "script.sql")
+	_, _ = sqlPart.Write([]byte("INSERT INTO items (name) VALUES ('script');"))
+	_ = sqlWriter.Close()
+
+	req = httptest.NewRequest("POST", "/api/connections/default/import/sql", sqlBuf)
+	req.Header.Set("Content-Type", sqlWriter.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "TRUE")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected ImportSQL to be 403 Forbidden under read-only, got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 

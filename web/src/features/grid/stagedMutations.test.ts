@@ -78,6 +78,17 @@ test('isDestructiveQuery: allows UPDATE with WHERE', () => {
   assert(res.isDestructive === false, 'UPDATE with WHERE should not be marked destructive')
 })
 
+test('isDestructiveQuery: catches UPDATE/DELETE without WHERE even if string literal contains WHERE', () => {
+  const resUpdate = isDestructiveQuery("UPDATE users SET status = 'WHERE is my mind';")
+  assert(resUpdate.isDestructive === true, 'UPDATE without actual WHERE should be destructive despite string literal')
+
+  const resDelete = isDestructiveQuery("DELETE FROM logs; -- notes with WHERE inside 'WHERE'")
+  assert(resDelete.isDestructive === true, 'DELETE without actual WHERE should be destructive')
+
+  const resSafe = isDestructiveQuery("UPDATE users SET status = 'WHERE is my mind' WHERE id = 10;")
+  assert(resSafe.isDestructive === false, 'UPDATE with actual WHERE clause should not be destructive')
+})
+
 // 5. isDestructiveQuery: SELECT queries and comments
 test('isDestructiveQuery: safe SELECT with comments', () => {
   const res = isDestructiveQuery('/* drop table in comment */ SELECT * FROM users;')
@@ -103,6 +114,8 @@ test('formatSqlValue: handles primitives and escaping', () => {
   assert(formatSqlValue(false) === 'FALSE', 'boolean false should be FALSE')
   assert(formatSqlValue('hello') === '\'hello\'', 'string should be quoted')
   assert(formatSqlValue("O'Reilly") === '\'O\'\'Reilly\'', 'single quotes should be escaped')
+  // MySQL escaping
+  assert(formatSqlValue("C:\\path\\O'Reilly", 'mysql') === "'C:\\\\path\\\\O''Reilly'", 'mysql escapes backslashes')
 })
 
 // 8. escapeIdentifier

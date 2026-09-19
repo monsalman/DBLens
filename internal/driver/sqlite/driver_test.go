@@ -151,3 +151,20 @@ func TestSQLiteExecuteQuery_CTE(t *testing.T) {
 	}
 }
 
+func TestSQLiteDriverSqlite3Prefix(t *testing.T) {
+	dbFile := "/tmp/dblens_sqlite_sqlite3_prefix_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite3://" + dbFile
+	drv, err := sqlite.New(dsn)
+	if err != nil {
+		t.Fatalf("failed to create sqlite driver with sqlite3:// prefix: %v", err)
+	}
+	defer drv.Close()
+
+	if err := drv.Ping(context.Background()); err != nil {
+		t.Fatalf("failed to ping db initialized with sqlite3:// prefix: %v", err)
+	}
+}
+
