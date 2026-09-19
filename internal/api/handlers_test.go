@@ -1912,6 +1912,131 @@ func TestGetDatabaseHealth(t *testing.T) {
 	}
 }
 
+func TestSafeModeReadOnlyEnforcement(t *testing.T) {
+	dbFile := filepath.Join(t.TempDir(), "safemode_test.db")
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL
+		);
+		INSERT INTO items (name) VALUES ('item1');
+	`)
+	if err != nil {
+		t.Fatalf("failed to init table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. IsNonSelectSQL unit tests
+	if api.IsNonSelectSQL("SELECT * FROM items") {
+		t.Errorf("expected SELECT to be false for IsNonSelectSQL")
+	}
+	if api.IsNonSelectSQL("/* comment */ SELECT 1") {
+		t.Errorf("expected commented SELECT to be false for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("INSERT INTO items (name) VALUES ('item2')") {
+		t.Errorf("expected INSERT to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("UPDATE items SET name = 'updated' WHERE id = 1") {
+		t.Errorf("expected UPDATE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("DELETE FROM items WHERE id = 1") {
+		t.Errorf("expected DELETE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("DROP TABLE items") {
+		t.Errorf("expected DROP TABLE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("TRUNCATE TABLE items") {
+		t.Errorf("expected TRUNCATE to be true for IsNonSelectSQL")
+	}
+
+	// 2. ExecuteQuery with Read-Only header: SELECT should succeed (200)
+	selectBody := `{"sql": "SELECT * FROM items"}`
+	req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(selectBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected SELECT to succeed with 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. ExecuteQuery with Read-Only header: INSERT should be blocked (403)
+	insertBody := `{"sql": "INSERT INTO items (name) VALUES ('blocked')"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(insertBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected INSERT to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Safe Mode") {
+		t.Fatalf("expected error message to mention Safe Mode, got %s", w.Body.String())
+	}
+
+	// 4. MutateRow with Read-Only header should be blocked (403)
+	mutateBody := `{
+		"schema": "",
+		"table": "items",
+		"type": "UPDATE",
+		"data": {"name": "hacked"},
+		"where": {"id": 1}
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/mutate", strings.NewReader(mutateBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected MutateRow to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 5. BatchInsert with Read-Only header should be blocked (403)
+	batchBody := `{
+		"schema": "",
+		"table": "items",
+		"rows": [{"name": "itemX"}]
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/batch-insert", strings.NewReader(batchBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected BatchInsert to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. AlterTableApply with Read-Only header should be blocked (403)
+	alterBody := `{
+		"table": "items",
+		"addedColumns": [{"name": "price", "type": "REAL"}]
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/tables/items/alter", strings.NewReader(alterBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected AlterTableApply to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 
 
 
