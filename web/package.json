@@ -1,13 +1,13 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.1.18",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "node --experimental-strip-types src/features/editor/sqlVariableParser.test.ts && node --experimental-strip-types src/features/grid/stagedMutations.test.ts",
+    "test": "node --experimental-strip-types src/features/editor/sqlVariableParser.test.ts && node --experimental-strip-types src/features/grid/stagedMutations.test.ts && node --experimental-strip-types src/features/json/jsonPathHelper.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
