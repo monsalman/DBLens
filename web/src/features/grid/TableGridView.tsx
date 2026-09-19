@@ -9,6 +9,8 @@ import { MockDataModal } from './MockDataModal'
 import { ImportModal } from './ImportModal'
 import { TableSchemaView } from './TableSchemaView'
 import { generateStagedSQL, type StagedChange } from './stagedMutations'
+import { JsonStudioModal } from '../json/JsonStudioModal'
+import { parseJsonSafely } from '../json/jsonPathHelper'
 
 interface Props {
   connId: string
@@ -45,6 +47,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
   const [showDiffModal, setShowDiffModal] = useState(false)
   const [isApplyingStaged, setIsApplyingStaged] = useState(false)
+  const [jsonModal, setJsonModal] = useState<{
+    isOpen: boolean
+    row: Record<string, any>
+    col: string
+    val: any
+    rowIdx: number
+  } | null>(null)
 
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -273,6 +282,43 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     } finally {
       isCommittingRef.current = false
       cancelledRef.current = false
+    }
+  }
+
+  const handleJsonModalSave = async (newValue: string) => {
+    if (!jsonModal) return
+    const { row, col, rowIdx, val: oldVal } = jsonModal
+    const rowKey = getRowKey(row, rowIdx)
+    const cellKey = `${rowKey}:${col}`
+    const where: Record<string, any> = {}
+    for (const pk of pkCols) {
+      where[pk.name] = row[pk.name]
+    }
+
+    if (stagedMode) {
+      setStagedChanges((prev) => ({
+        ...prev,
+        [cellKey]: {
+          key: cellKey,
+          row,
+          col,
+          oldVal,
+          newVal: newValue,
+          where,
+        },
+      }))
+    } else {
+      try {
+        await mutateM.mutateAsync({
+          schema,
+          table,
+          type: 'UPDATE',
+          data: { [col]: newValue },
+          where,
+        })
+      } catch (err: any) {
+        setInlineError(`Update failed: ${err?.message ?? 'Unknown error'}`)
+      }
     }
   }
 
@@ -582,6 +628,9 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     const isFkValue = !isStaged && !!c.fk && val !== null && val !== undefined && String(val) !== ''
                     const isEditing = editingCell?.rowIdx === i && editingCell?.col === c.name
                     const isPending = mutateM.isPending
+                    const isJsonType = !!(c.type && c.type.toLowerCase().includes('json'))
+                    const jsonCheck = parseJsonSafely(val)
+                    const isJson = isJsonType || jsonCheck.isJson
 
                     return (
                       <td
@@ -637,6 +686,34 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                             <span className="truncate">{formatValue(val)}</span>
                             <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
                           </button>
+                        ) : isJson ? (
+                          <span className="flex items-center gap-1.5 truncate group/json">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setJsonModal({
+                                  isOpen: true,
+                                  row,
+                                  col: c.name,
+                                  val,
+                                  rowIdx: i,
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 text-[10px] font-mono border border-indigo-500/30 cursor-pointer shrink-0 transition-colors"
+                              title="Open in JSON Document Studio"
+                            >
+                              <span className="font-bold">{'{ }'}</span>
+                              <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
+                            </button>
+                            <span className="truncate">{formatValue(val)}</span>
+                          </span>
                         ) : (
                           <span className="flex items-center gap-1.5 truncate">
                             {isStaged && (
@@ -820,6 +897,19 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {jsonModal && (
+        <JsonStudioModal
+          isOpen={jsonModal.isOpen}
+          initialValue={jsonModal.val}
+          columnName={jsonModal.col}
+          tableName={table}
+          dialect={activeConn?.dialect || activeConn?.driver || 'postgres'}
+          readOnly={!hasPk || activeConn?.readOnly}
+          onClose={() => setJsonModal(null)}
+          onSave={handleJsonModalSave}
+        />
       )}
     </div>
   )

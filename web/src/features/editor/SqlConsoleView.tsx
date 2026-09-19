@@ -38,6 +38,8 @@ import { extractQueryVariables, DBA_MAINTENANCE_SNIPPETS, type SqlSnippet } from
 import { sqlVariableHighlight } from './sqlVariableHighlight'
 import { ParameterPromptModal } from './ParameterPromptModal'
 import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
+import { JsonStudioModal } from '../json/JsonStudioModal'
+import { parseJsonSafely } from '../json/jsonPathHelper'
 
 interface Props {
   connId: string
@@ -230,6 +232,11 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
 
   // Query variables & snippets state
   const [isParamModalOpen, setIsParamModalOpen] = useState(false)
+  const [jsonStudioTarget, setJsonStudioTarget] = useState<{
+    isOpen: boolean
+    columnName: string
+    value: any
+  } | null>(null)
   const [isSnippetsOpen, setIsSnippetsOpen] = useState(false)
   const [snippetCategory, setSnippetCategory] = useState<string>('All')
   const snippetsMenuRef = useRef<HTMLDivElement>(null)
@@ -1009,22 +1016,49 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                             key={i}
                             className="border-b border-[var(--border)] hover:bg-[var(--hover)]"
                           >
-                            {(currentResult.columns ?? []).map((c) => (
-                              <td
-                                key={c}
-                                className="px-3 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]"
-                              >
-                                {row[c] === null || row[c] === undefined ? (
-                                  <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">
-                                    null
-                                  </span>
-                                ) : typeof row[c] === 'object' ? (
-                                  JSON.stringify(row[c])
-                                ) : (
-                                  String(row[c])
-                                )}
-                              </td>
-                            ))}
+                            {(currentResult.columns ?? []).map((c) => {
+                              const cellVal = row[c]
+                              const jsonCheck = parseJsonSafely(cellVal)
+                              const isJson = jsonCheck.isJson
+
+                              return (
+                                <td
+                                  key={c}
+                                  className="px-3 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]"
+                                >
+                                  {cellVal === null || cellVal === undefined ? (
+                                    <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">
+                                      null
+                                    </span>
+                                  ) : isJson ? (
+                                    <div className="flex items-center gap-1.5 truncate group/json">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setJsonStudioTarget({
+                                            isOpen: true,
+                                            columnName: c,
+                                            value: cellVal,
+                                          })
+                                        }}
+                                        className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 text-[10px] font-mono border border-indigo-500/30 cursor-pointer shrink-0 transition-colors"
+                                        title="Inspect in JSON Document Studio"
+                                      >
+                                        <span className="font-bold">{'{ }'}</span>
+                                        <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
+                                      </button>
+                                      <span className="truncate">
+                                        {typeof cellVal === 'object' ? JSON.stringify(cellVal) : String(cellVal)}
+                                      </span>
+                                    </div>
+                                  ) : typeof cellVal === 'object' ? (
+                                    JSON.stringify(cellVal)
+                                  ) : (
+                                    String(cellVal)
+                                  )}
+                                </td>
+                              )
+                            })}
                           </tr>
                         ))}
                       </tbody>
@@ -1435,6 +1469,18 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           initialValues={currentTab?.params || {}}
           onRun={handleRunParameters}
           onSave={handleSaveParameters}
+        />
+      )}
+
+      {/* JSON Document Studio Modal */}
+      {jsonStudioTarget && (
+        <JsonStudioModal
+          isOpen={jsonStudioTarget.isOpen}
+          initialValue={jsonStudioTarget.value}
+          columnName={jsonStudioTarget.columnName}
+          dialect={currentDialect || 'postgres'}
+          readOnly={true}
+          onClose={() => setJsonStudioTarget(null)}
         />
       )}
     </div>
