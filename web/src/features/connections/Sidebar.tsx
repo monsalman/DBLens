@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table2 } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
+import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export const Sidebar: React.FC<Props> = ({
+  connections = [],
   activeConnId,
   selectedSchema = 'public',
   onSelectSchema,
@@ -73,8 +75,20 @@ export const Sidebar: React.FC<Props> = ({
     }
   }
 
+  const activeConn = connections.find(c => c.id === activeConnId)
+
   return (
     <aside className="w-56 bg-[var(--bg)] border-r border-[var(--border)] flex flex-col shrink-0 overflow-hidden">
+      {/* Active Connection Info */}
+      {activeConn && (
+        <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between gap-2 bg-[var(--surface)]/40 shrink-0">
+          <span className="font-mono text-xs font-semibold text-[var(--fg)] truncate">
+            {activeConn.label || activeConn.name || activeConn.id}
+          </span>
+          <EnvironmentBadge env={activeConn.environment} />
+        </div>
+      )}
+
       {/* Database Selector (Always visible like Adminer) */}
       <div className="px-3 py-2 border-b border-[var(--border)] space-y-1">
         <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider block">

@@ -14,6 +14,7 @@ import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
 import { CommandPalette } from './components/CommandPalette'
+import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
 import { Monitor, Moon, Sun, Database, Zap, Shield, GitBranch } from 'lucide-react'
 
@@ -224,7 +225,7 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="h-screen w-screen overflow-hidden select-none transition-colors duration-200">
+      <div className="h-screen w-screen flex flex-col overflow-hidden select-none transition-colors duration-200">
         <Header 
           connections={connections} 
           activeConnId={activeConnId} 
@@ -242,7 +243,8 @@ export function App() {
           onToggleTheme={toggleTheme}
           onOpenCommandPalette={() => useAppStore.getState().setCommandPaletteOpen(true)}
         />
-        <div className="flex-1 flex overflow-hidden h-[calc(100vh-40px)]">
+        <EnvironmentBanner connection={connections.find(c => c.id === activeConnId) || null} />
+        <div className="flex-1 flex overflow-hidden min-h-0">
           <Sidebar 
             key={`${activeConnId}:${refreshKey}`}
             connections={connections} 

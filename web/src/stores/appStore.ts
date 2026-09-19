@@ -99,9 +99,15 @@ interface AppState {
     title: string
     sql: string
     onConfirm: () => void
+    requireTypedConfirm?: boolean
   }
-  openDryRunModal: (title: string, sql: string, onConfirm: () => void) => void
+  openDryRunModal: (title: string, sql: string, onConfirm: () => void, requireTypedConfirm?: boolean) => void
   closeDryRunModal: () => void
+
+  // Safe Mode guardrails
+  safeModeOverrides: Record<string, boolean>
+  setSafeMode: (connId: string, enabled: boolean) => void
+  isSafeModeActive: (connId?: string | null) => boolean
 
   // Command Palette
   isCommandPaletteOpen: boolean
@@ -110,7 +116,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       connections: [],
       activeConnectionId: null,
       setConnections: (connections) =>
@@ -318,14 +324,16 @@ export const useAppStore = create<AppState>()(
         title: '',
         sql: '',
         onConfirm: () => {},
+        requireTypedConfirm: false,
       },
-      openDryRunModal: (title, sql, onConfirm) =>
+      openDryRunModal: (title, sql, onConfirm, requireTypedConfirm = false) =>
         set({
           dryRunModal: {
             isOpen: true,
             title,
             sql,
             onConfirm,
+            requireTypedConfirm,
           },
         }),
       closeDryRunModal: () =>
@@ -335,8 +343,25 @@ export const useAppStore = create<AppState>()(
             title: '',
             sql: '',
             onConfirm: () => {},
+            requireTypedConfirm: false,
           },
         }),
+
+      safeModeOverrides: {},
+      setSafeMode: (connId, enabled) =>
+        set((state) => ({
+          safeModeOverrides: { ...state.safeModeOverrides, [connId]: enabled },
+        })),
+      isSafeModeActive: (connId) => {
+        const id = connId || get().activeConnectionId
+        if (!id) return false
+        const overrides = get().safeModeOverrides
+        if (id in overrides) {
+          return !!overrides[id]
+        }
+        const conn = get().connections.find((c) => c.id === id)
+        return conn?.environment === 'production' || conn?.environment === 'staging'
+      },
 
       isCommandPaletteOpen: false,
       setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),

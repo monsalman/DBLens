@@ -37,6 +37,7 @@ import { createSqlExtension } from '../../lib/sqlAutocomplete'
 import { extractQueryVariables, DBA_MAINTENANCE_SNIPPETS, type SqlSnippet } from './sqlVariableParser'
 import { sqlVariableHighlight } from './sqlVariableHighlight'
 import { ParameterPromptModal } from './ParameterPromptModal'
+import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
 
 interface Props {
   connId: string
@@ -326,11 +327,37 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
       }
     }
 
-    const isDestructive = /\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE|DELETE\s+FROM(?!\s+[\s\S]*?\bWHERE\b))\b/i.test(query)
-    if (isDestructive) {
-      openDryRunModal('Confirm Destructive Query', query, () => {
-        executeRun(tabId, query, overrideParams)
-      })
+    const activeConn = effectiveConnections.find((c) => c.id === connId)
+    const isReadOnly = !!activeConn?.readOnly
+    const isMutation = isNonSelectQuery(query)
+
+    if (isReadOnly && isMutation) {
+      const errRes: QueryResult = {
+        columns: [],
+        rows: [],
+        durationMs: 0,
+        error: 'Connection is read-only. Mutation blocked by Safe Mode.',
+      }
+      setTabResults((prev) => ({ ...prev, [tabId]: errRes }))
+      return
+    }
+
+    const { isDestructive } = isDestructiveQuery(query)
+    const isSafeMode = useAppStore.getState().isSafeModeActive(connId)
+    const isProd = activeConn?.environment === 'production'
+
+    if (isDestructive || (isSafeMode && isMutation) || (isProd && isMutation)) {
+      const modalTitle = isDestructive
+        ? 'Confirm Destructive Query'
+        : `${isProd ? 'Production' : 'Safe Mode'} Mutation Guardrail`
+      openDryRunModal(
+        modalTitle,
+        query,
+        () => {
+          executeRun(tabId, query, overrideParams)
+        },
+        true
+      )
       return
     }
 

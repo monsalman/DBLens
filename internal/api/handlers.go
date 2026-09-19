@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,40 @@ import (
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/go-chi/chi/v5"
 )
+
+var (
+	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	reLineComment  = regexp.MustCompile(`--[^\r\n]*`)
+)
+
+// IsNonSelectSQL returns true if SQL statement is non-SELECT (mutation/DDL).
+func IsNonSelectSQL(sql string) bool {
+	cleaned := reBlockComment.ReplaceAllString(sql, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return false
+	}
+
+	fields := strings.Fields(cleaned)
+	if len(fields) == 0 {
+		return false
+	}
+	firstWord := strings.ToUpper(fields[0])
+
+	switch firstWord {
+	case "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "REPLACE", "MERGE", "GRANT", "REVOKE":
+		return true
+	case "WITH":
+		upper := strings.ToUpper(cleaned)
+		for _, kw := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
+			if strings.Contains(upper, kw) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 type Response struct {
 	Data  interface{} `json:"data"`
@@ -288,6 +323,11 @@ func (h *Handler) AlterTablePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AlterTableApply(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	tableName := chi.URLParam(r, "table")
 	schema := r.URL.Query().Get("schema")
 
@@ -441,6 +481,11 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Header.Get("X-DBLENS-READONLY") == "true" && IsNonSelectSQL(sql) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	res, err := entry.Driver.ExecuteQueryWithParams(r.Context(), sql, req.Params)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
@@ -507,6 +552,11 @@ func (h *Handler) ExplainQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -528,6 +578,11 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())

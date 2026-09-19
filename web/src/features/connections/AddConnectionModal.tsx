@@ -20,6 +20,7 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
   const [showAllDatabases, setShowAllDatabases] = useState(false)
   const [user, setUser] = useState('postgres')
   const [password, setPassword] = useState('')
+  const [environment, setEnvironment] = useState<'production' | 'staging' | 'development' | 'local'>('development')
   const [readOnly, setReadOnly] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -88,6 +89,7 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
       setName(initialData.label || initialData.name || '')
       setDsnInput(initialData.dsn || '')
       setReadOnly(!!initialData.readOnly)
+      setEnvironment(initialData.environment || 'development')
       const d = initialData.driver || 'postgres'
       setDriver(d)
       if (d === 'mysql') {
@@ -104,6 +106,7 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
       setName('')
       setDsnInput('')
       setReadOnly(false)
+      setEnvironment('development')
       setDriver('postgres')
       setHost('localhost')
       setPort('5432')
@@ -174,11 +177,11 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
       const label = name.trim() || `${driver} DB`
       const dsn = buildDSN()
       if (initialData) {
-        const conn = await api.updateProfile(initialData.id, dsn, label, initialData.color || '#6366f1', readOnly)
+        const conn = await api.updateProfile(initialData.id, dsn, label, initialData.color || '#6366f1', readOnly, environment)
         setTestResult({ success: true, message: 'Updated successfully', dialect: conn.dialect })
         if (onUpdated) onUpdated(conn)
       } else {
-        const conn = await api.addProfile(dsn, label, '#6366f1', readOnly)
+        const conn = await api.addProfile(dsn, label, '#6366f1', readOnly, environment)
         setTestResult({ success: true, message: 'Connection successful', dialect: conn.dialect })
         if (onAdded) onAdded(conn)
       }
@@ -244,6 +247,46 @@ export const AddConnectionModal: React.FC<Props> = ({ isOpen = true, initialData
               </div>
             </div>
           )}
+
+          {/* Environment selector */}
+          <div>
+            <label className="form-label text-[var(--muted)] mb-1.5 block text-xs">
+              ENVIRONMENT
+            </label>
+            <div className="grid grid-cols-4 gap-1.5 p-1 rounded border border-[var(--border)] bg-[var(--bg)]">
+              {(
+                [
+                  { id: 'production', label: 'Production', active: 'bg-red-500 text-white font-semibold' },
+                  { id: 'staging', label: 'Staging', active: 'bg-amber-500 text-slate-950 font-semibold' },
+                  { id: 'development', label: 'Development', active: 'bg-blue-500 text-white font-semibold' },
+                  { id: 'local', label: 'Local', active: 'bg-slate-600 text-white font-semibold' },
+                ] as const
+              ).map((env) => (
+                <button
+                  key={env.id}
+                  type="button"
+                  onClick={() => {
+                    setEnvironment(env.id)
+                    if (env.id === 'production') {
+                      setReadOnly(true)
+                    }
+                  }}
+                  className={`py-1 text-[11px] font-mono rounded uppercase transition-colors text-center ${
+                    environment === env.id
+                      ? `${env.active} shadow-xs`
+                      : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+                  }`}
+                >
+                  {env.label}
+                </button>
+              ))}
+            </div>
+            {environment === 'production' && (
+              <p className="text-[11px] text-red-500 mt-1 font-mono">
+                Production environment: Read-only protection recommended.
+              </p>
+            )}
+          </div>
 
           {/* Driver tabs */}
           <div className="flex border border-[var(--border)] rounded overflow-hidden p-0.5 bg-[var(--bg)]">

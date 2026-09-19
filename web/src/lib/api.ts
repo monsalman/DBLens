@@ -10,6 +10,7 @@ export interface Profile {
   color?: string
   readOnly?: boolean
   dialect?: string   // cached after test
+  environment?: 'production' | 'staging' | 'development' | 'local'
 }
 
 export interface ConnectionConfig {
@@ -21,6 +22,7 @@ export interface ConnectionConfig {
   dialect?: string
   name?: string
   driver?: DatabaseDriver
+  environment?: 'production' | 'staging' | 'development' | 'local'
 }
 
 export interface ForeignKeyTarget {
@@ -385,7 +387,13 @@ export const api = {
     localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles))
   },
 
-  addProfile(dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+  addProfile(
+    dsn: string,
+    label: string = '',
+    color: string = '#818cf8',
+    readOnly: boolean = false,
+    environment?: 'production' | 'staging' | 'development' | 'local'
+  ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       // Test connection first
       fetch('/api/connections/test', {
@@ -408,6 +416,7 @@ export const api = {
             readOnly,
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
+            environment: environment || (readOnly ? 'production' : 'development'),
           }
           const existing = api.getProfiles()
           api.saveProfiles([...existing, profile])
@@ -417,7 +426,14 @@ export const api = {
     })
   },
 
-  updateProfile(id: string, dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+  updateProfile(
+    id: string,
+    dsn: string,
+    label: string = '',
+    color: string = '#818cf8',
+    readOnly: boolean = false,
+    environment?: 'production' | 'staging' | 'development' | 'local'
+  ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       fetch('/api/connections/test', {
         method: 'POST',
@@ -440,6 +456,7 @@ export const api = {
             readOnly,
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
+            environment: environment || (readOnly ? 'production' : 'development'),
           }
           api.saveProfiles(profiles.map(p => (p.id === id ? updated : p)))
           resolve(updated)
@@ -496,12 +513,19 @@ export const api = {
   },
 
   // ── Database Queries — all pass DSN via X-DBLENS-DSN header ──
-  _headers(dsn: string): HeadersInit {
+  _headers(dsn: string, connId?: string, profiles?: ConnectionConfig[]): HeadersInit {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
     if (dsn) {
       headers['X-DBLENS-DSN'] = dsn
+    }
+    const allProfiles = profiles && profiles.length > 0 ? profiles : this.getProfiles()
+    const match = connId
+      ? allProfiles.find(p => p.id === connId)
+      : allProfiles.find(p => p.dsn === dsn)
+    if (match?.readOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
     }
     return headers
   },
@@ -617,7 +641,7 @@ export const api = {
       `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter-preview${schemaParam}`,
       {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       }
     )
@@ -642,7 +666,7 @@ export const api = {
       `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter${schemaParam}`,
       {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       }
     )
@@ -745,7 +769,7 @@ export const api = {
       }
       const res = await fetch(`/api/connections/${connId}/query`, {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
@@ -865,7 +889,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/mutate`, {
       method: 'POST',
-      headers: this._headers(dsn),
+      headers: this._headers(dsn, connId, profiles),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -885,7 +909,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     try {
       const res = await fetch(`/api/connections/${connId}/erd`, {
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
       })
       if (!res.ok) return []
       const json = await res.json()
@@ -905,7 +929,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/batch-insert`, {
       method: 'POST',
-      headers: this._headers(dsn),
+      headers: this._headers(dsn, connId, profiles),
       body: JSON.stringify({ schema, table, rows }),
     })
     if (!res.ok) {

@@ -2,6 +2,7 @@ import React from 'react'
 import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
+import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -71,6 +72,7 @@ export const Header: React.FC<Props> = ({
                     : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
                 }`}>
                 <span>{c.label || c.name || c.id}</span>
+                <EnvironmentBadge env={c.environment} />
                 <span className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 ${c.id === activeConnId ? 'opacity-100' : ''}`}>
                   <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(c); }} className="hover:text-[var(--fg)] p-0.5" title="Edit">
                     <Pencil className="w-3 h-3" />

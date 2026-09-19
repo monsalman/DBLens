@@ -22,6 +22,7 @@ import {
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
 import { useAppStore, type ActiveTab } from '../stores/appStore'
+import { EnvironmentBadge } from './EnvironmentBadge'
 
 export interface CommandPaletteProps {
   connections: ConnectionConfig[]
@@ -50,6 +51,7 @@ interface CommandItem {
   category: CategoryType
   icon: React.ComponentType<{ className?: string }>
   badge?: string
+  environment?: string
   keywords?: string[]
   onSelect: () => void
 }
@@ -386,7 +388,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         category: 'Connections',
         icon: Server,
         badge: (conn.dialect || conn.driver || 'CONN').toUpperCase(),
-        keywords: ['connection', 'profile', conn.label || '', conn.name || '', conn.dialect || '', conn.id],
+        environment: conn.environment,
+        keywords: ['connection', 'profile', conn.label || '', conn.name || '', conn.dialect || '', conn.id, conn.environment || ''],
         onSelect: () => {
           onSwitchConnection(conn.id)
           closePalette()
@@ -631,6 +634,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                           </div>
 
                           <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            {item.environment && (
+                              <EnvironmentBadge env={item.environment} />
+                            )}
                             {item.badge && (
                               <span className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--muted)] bg-[var(--hover)]">
                                 {item.badge}
