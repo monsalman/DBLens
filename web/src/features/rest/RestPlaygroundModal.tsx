@@ -52,8 +52,10 @@ export const RestPlaygroundModal: React.FC = () => {
   const connections = useAppStore((s) => s.connections)
   const isSafeModeActive = useAppStore((s) => s.isSafeModeActive)
 
-  const selectedSchema = restTarget?.schema || useAppStore((s) => s.selectedSchema) || 'public'
-  const selectedTable = restTarget?.table || useAppStore((s) => s.selectedTable) || ''
+  const storeSchema = useAppStore((s) => s.selectedSchema)
+  const storeTable = useAppStore((s) => s.selectedTable)
+  const selectedSchema = restTarget?.schema || storeSchema || 'public'
+  const selectedTable = restTarget?.table || storeTable || ''
 
   const [activeTab, setActiveTab] = useState<'testbench' | 'snippets'>('testbench')
   const [snippetLang, setSnippetLang] = useState<'curl' | 'js' | 'python' | 'go'>('curl')

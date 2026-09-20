@@ -29,7 +29,7 @@ export const Sidebar: React.FC<Props> = ({
 
   const loadTables = (connId: string, schema: string) => {
     setLoading(true)
-    api.getTables(connId, schema).then(tList => {
+    api.getTables(connId, schema, connections).then(tList => {
       const names = tList.map(t => t.name)
       setTables(names)
       if (names.length > 0 && (!selectedTable || !names.includes(selectedTable)) && onSelectTable) {
@@ -43,14 +43,14 @@ export const Sidebar: React.FC<Props> = ({
     if (!activeConnId) return
     
     setDbLoading(true)
-    api.getDatabases(activeConnId).then(dbList => {
+    api.getDatabases(activeConnId, connections).then(dbList => {
       if (dbList && dbList.length > 0) {
         setDatabases(dbList)
         if (!selectedDb) setSelectedDb(dbList[0])
       }
     }).catch(() => {}).finally(() => setDbLoading(false))
 
-    api.getSchemas(activeConnId).then(sList => {
+    api.getSchemas(activeConnId, connections).then(sList => {
       if (sList && sList.length > 0) {
         setSchemas(sList)
         if (!sList.includes(selectedSchema) && onSelectSchema) {

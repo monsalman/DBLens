@@ -104,6 +104,14 @@ export function App() {
     }
   }, [activeConnId])
 
+  useEffect(() => {
+    useAppStore.getState().setSelectedSchema(selectedSchema)
+  }, [selectedSchema])
+
+  useEffect(() => {
+    useAppStore.getState().setSelectedTable(selectedTable)
+  }, [selectedTable])
+
   const handleDeleted = (id: string) => {
     setConnections(prev => {
       const next = prev.filter(c => c.id !== id)

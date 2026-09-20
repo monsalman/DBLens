@@ -29,6 +29,7 @@ export const DatabaseDumpModal: React.FC<Props> = ({
   const setStoreIsOpen = useAppStore((s) => s.setIsDumpModalOpen)
   const activeConnId = useAppStore((s) => s.activeConnectionId)
   const selectedSchema = useAppStore((s) => s.selectedSchema)
+  const connections = useAppStore((s) => s.connections)
 
   const show = isOpen !== undefined ? isOpen : storeIsOpen
   const handleClose = () => {
@@ -72,7 +73,7 @@ export const DatabaseDumpModal: React.FC<Props> = ({
     let cancelled = false
     setFetchingTables(true)
     api
-      .getTables(activeConnId, selectedSchema)
+      .getTables(activeConnId, selectedSchema, connections)
       .then((data) => {
         if (cancelled) return
         const tableList = (data || []).filter(
