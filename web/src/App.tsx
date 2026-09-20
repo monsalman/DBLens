@@ -10,6 +10,7 @@ import { SchemaErdView } from './features/erd/SchemaErdView'
 import { SchemaDiffView } from './features/diff/SchemaDiffView'
 import { ProcessMonitorView } from './features/activity/ProcessMonitorView'
 import { DatabaseAdvisorView } from './features/advisor/DatabaseAdvisorView'
+import { PrivilegeManagerView } from './features/privilege/PrivilegeManagerView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
@@ -296,6 +297,9 @@ export function App() {
                 )}
                 {activeTab === 'advisor' && (
                   <DatabaseAdvisorView key={activeConnId} connId={activeConnId} />
+                )}
+                {activeTab === 'privileges' && (
+                  <PrivilegeManagerView key={activeConnId} connId={activeConnId} />
                 )}
               </>
             )}

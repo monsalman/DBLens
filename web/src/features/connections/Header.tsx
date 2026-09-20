@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
@@ -115,6 +115,7 @@ export const Header: React.FC<Props> = ({
             { id: 'diff' as const, label: 'Schema Diff' },
             { id: 'processes' as const, label: 'Processes' },
             { id: 'advisor' as const, label: 'Advisor', icon: ShieldCheck },
+            { id: 'privileges' as const, label: 'Privileges', icon: Shield },
           ].map(tab => {
             const Icon = (tab as any).icon
             return (

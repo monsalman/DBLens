@@ -18,6 +18,7 @@ import {
   GitCompare,
   Activity,
   ShieldCheck,
+  Shield,
   Archive,
   Code2,
 } from 'lucide-react'
@@ -261,6 +262,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['advisor', 'health', 'performance', 'cache', 'bloat', 'vacuum', 'indexes', 'optimize'],
       onSelect: () => {
         onTabChange('advisor')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:privileges',
+      title: 'Go to Database Role & Access Privilege Manager',
+      subtitle: 'Manage roles, 2D permission matrix, grant/revoke table privileges, dry-run DDL',
+      category: 'Actions',
+      icon: Shield,
+      badge: 'AUTH',
+      keywords: ['privilege', 'privileges', 'roles', 'permissions', 'grant', 'revoke', 'access', 'users', 'auth'],
+      onSelect: () => {
+        onTabChange('privileges')
         closePalette()
       },
     })

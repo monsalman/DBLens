@@ -18,6 +18,7 @@ import (
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
 	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/go-chi/chi/v5"
 )
@@ -2128,6 +2129,104 @@ func (h *Handler) PreviewMaskData(w http.ResponseWriter, r *http.Request) {
 		"rows":     []interface{}{},
 	})
 }
+
+// GetPrivileges inspects database roles, table privileges, and available tables.
+func (h *Handler) GetPrivileges(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	schema := strings.TrimSpace(r.URL.Query().Get("schema"))
+	report, err := privilege.InspectPrivileges(r.Context(), entry.Driver, schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, report)
+}
+
+type PreviewPrivilegesRequest struct {
+	Changes []privilege.PrivilegeChange `json:"changes"`
+	Roles   []privilege.RoleInfo        `json:"roles"`
+}
+
+// PreviewPrivileges generates dry-run DDL and security warnings for staged privilege adjustments.
+func (h *Handler) PreviewPrivileges(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req PreviewPrivilegesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	plan, err := privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, plan)
+}
+
+type ApplyPrivilegesRequest struct {
+	Plan    *privilege.PrivilegePlan    `json:"plan,omitempty"`
+	Changes []privilege.PrivilegeChange `json:"changes,omitempty"`
+	Roles   []privilege.RoleInfo        `json:"roles,omitempty"`
+}
+
+// ApplyPrivileges applies the generated privilege plan statements if not in read-only mode.
+func (h *Handler) ApplyPrivileges(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Privilege modification blocked by Safe Mode.")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req ApplyPrivilegesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	plan := req.Plan
+	if plan == nil && len(req.Changes) > 0 {
+		var genErr error
+		plan, genErr = privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
+		if genErr != nil {
+			sendError(w, http.StatusBadRequest, genErr.Error())
+			return
+		}
+	}
+
+	if plan == nil {
+		sendError(w, http.StatusBadRequest, "no privilege plan or changes provided")
+		return
+	}
+
+	if err := privilege.ApplyPlan(r.Context(), entry.Driver, plan); err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success":            true,
+		"executedStatements": len(plan.Statements),
+	})
+}
+
 
 
 

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ConnectionConfig, QueryHistoryItem } from '../lib/api'
 
-export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff' | 'processes' | 'advisor'
+export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff' | 'processes' | 'advisor' | 'privileges'
 
 export interface SqlTab {
   id: string

@@ -1355,6 +1355,86 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async getPrivileges(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PrivilegeReport> {
+    const dsn = this._getDSN(connId, profiles)
+    const url = schema
+      ? `/api/connections/${connId}/privileges?schema=${encodeURIComponent(schema)}`
+      : `/api/connections/${connId}/privileges`
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to get privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async previewPrivileges(
+    connId: string,
+    payload: { changes: PrivilegeChange[]; roles?: RoleInfo[] },
+    profiles?: ConnectionConfig[]
+  ): Promise<PrivilegePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/privileges/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to preview privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyPrivileges(
+    connId: string,
+    payload: { plan?: PrivilegePlan; changes?: PrivilegeChange[]; roles?: RoleInfo[] },
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; executedStatements: number }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/privileges/apply`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to apply privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
 }
 
 export interface ColumnPIIInfo {
@@ -1381,4 +1461,53 @@ export interface PreviewMaskResponse {
   strategy: string
   columns?: string[]
   rows: Record<string, any>[]
+}
+
+export interface RoleInfo {
+  name: string
+  isSuperuser: boolean
+  canLogin: boolean
+  connectionLimit: number
+  inherit?: boolean
+  createDb?: boolean
+  createRole?: boolean
+  attributes?: Record<string, any>
+}
+
+export interface TablePrivilege {
+  grantee: string
+  tableSchema: string
+  tableName: string
+  privilegeType: string
+  isGrantable: boolean
+}
+
+export interface PrivilegeReport {
+  dialect: string
+  roles: RoleInfo[]
+  tablePrivileges: TablePrivilege[]
+  tables: string[]
+  supportedPrivileges: string[]
+}
+
+export interface PrivilegeChange {
+  role: string
+  schema: string
+  table: string
+  privilege: string
+  action: 'GRANT' | 'REVOKE'
+  withGrantOption?: boolean
+}
+
+export interface SafetyWarning {
+  level: 'critical' | 'warning' | 'info'
+  role: string
+  message: string
+}
+
+export interface PrivilegePlan {
+  statements: string[]
+  warnings: SafetyWarning[]
+  dangerous: boolean
+  affectedRoles: string[]
 }
