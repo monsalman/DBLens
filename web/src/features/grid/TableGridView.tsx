@@ -826,11 +826,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                         ) : isFkValue ? (
                           <button
                             type="button"
+                            disabled={isMaskedPII}
                             onClick={(e) => {
                               e.stopPropagation()
+                              if (isMaskedPII) return
                               openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
                             }}
-                            className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
+                            className={`inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate ${
+                              isMaskedPII ? 'opacity-50 cursor-not-allowed hover:no-underline' : ''
+                            }`}
                             title={isMaskedPII ? 'Peek disabled in Privacy Mode' : `Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
                           >
                             <span className="truncate">{formatValue(val, c.name)}</span>

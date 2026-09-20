@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -252,6 +254,55 @@ func BuildPrompt(op string, dialect string, schemaCtx *SchemaContext, input stri
 	return b.String()
 }
 
+var (
+	_, linkLocalV4, _ = net.ParseCIDR("169.254.0.0/16")
+	_, linkLocalV6, _ = net.ParseCIDR("fe80::/10")
+)
+
+func validateLLMEndpoint(endpointStr string) error {
+	u, err := url.Parse(endpointStr)
+	if err != nil {
+		return fmt.Errorf("invalid endpoint url: %w", err)
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid scheme %q: only http and https are permitted", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("missing host in endpoint url")
+	}
+
+	hostLower := strings.ToLower(host)
+	if hostLower == "169.254.169.254" ||
+		hostLower == "metadata.google.internal" ||
+		hostLower == "instance-data" ||
+		strings.HasSuffix(hostLower, ".metadata.google.internal") ||
+		strings.HasSuffix(hostLower, ".instance-data") {
+		return fmt.Errorf("endpoint target blocked: cloud metadata access prohibited")
+	}
+
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			(linkLocalV4 != nil && linkLocalV4.Contains(ip)) ||
+			(linkLocalV6 != nil && linkLocalV6.Contains(ip)) {
+			return fmt.Errorf("endpoint target blocked: link-local addresses prohibited")
+		}
+	}
+
+	return nil
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) > maxRunes {
+		return string(r[:maxRunes])
+	}
+	return s
+}
+
 // CallLLM connects to OpenAI-compatible endpoints or Anthropic API.
 func CallLLM(ctx context.Context, cfg LLMConfig, systemPrompt string, userPrompt string) (string, error) {
 	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
@@ -280,6 +331,10 @@ func CallLLM(ctx context.Context, cfg LLMConfig, systemPrompt string, userPrompt
 					endpoint += "/v1/messages"
 				}
 			}
+		}
+
+		if err := validateLLMEndpoint(endpoint); err != nil {
+			return "", fmt.Errorf("invalid llm endpoint: %w", err)
 		}
 
 		model := strings.TrimSpace(cfg.Model)
@@ -328,13 +383,13 @@ func CallLLM(ctx context.Context, cfg LLMConfig, systemPrompt string, userPrompt
 		}
 		defer resp.Body.Close()
 
-		respBytes, err := io.ReadAll(resp.Body)
+		respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		if err != nil {
 			return "", fmt.Errorf("failed to read anthropic response: %w", err)
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", fmt.Errorf("anthropic error (HTTP %d): %s", resp.StatusCode, string(respBytes))
+			return "", fmt.Errorf("anthropic error (HTTP %d): %s", resp.StatusCode, truncateRunes(string(respBytes), 256))
 		}
 
 		type anthropicContent struct {
@@ -381,6 +436,10 @@ func CallLLM(ctx context.Context, cfg LLMConfig, systemPrompt string, userPrompt
 				endpoint += "/v1/chat/completions"
 			}
 		}
+	}
+
+	if err := validateLLMEndpoint(endpoint); err != nil {
+		return "", fmt.Errorf("invalid llm endpoint: %w", err)
 	}
 
 	model := strings.TrimSpace(cfg.Model)
@@ -430,13 +489,13 @@ func CallLLM(ctx context.Context, cfg LLMConfig, systemPrompt string, userPrompt
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return "", fmt.Errorf("failed to read llm response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("llm error (HTTP %d): %s", resp.StatusCode, string(respBytes))
+		return "", fmt.Errorf("llm error (HTTP %d): %s", resp.StatusCode, truncateRunes(string(respBytes), 256))
 	}
 
 	type openAIChoice struct {

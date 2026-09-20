@@ -54,6 +54,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/profiles/global", h.ListGlobalProfiles)
 
 	api.Post("/connections/test", h.TestConnection)
+	api.Post("/connect", h.TestConnection)
 	api.Get("/connections/{connId}/databases", h.GetDatabases)
 	api.Post("/connections/{connId}/databases/select", h.SelectDatabase)
 	api.Get("/connections/{connId}/schemas", h.GetSchemas)

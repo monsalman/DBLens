@@ -28,6 +28,41 @@ import {
   hasUsableConfig,
 } from './aiAssistant'
 
+async function safeCopyText(text: string): Promise<boolean> {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // Fall through to fallback
+  }
+
+  try {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-9999px'
+    textArea.style.top = '0'
+    textArea.setAttribute('readonly', '')
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+    const successful = document.execCommand('copy')
+    document.body.removeChild(textArea)
+    if (successful) return true
+  } catch {
+    // Fall through to prompt
+  }
+
+  try {
+    window.prompt('Copy to clipboard: Ctrl+C / Cmd+C, Enter', text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface AiAssistantBarProps {
   connId: string
   currentQuery: string
@@ -242,7 +277,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({
         profiles
       )
 
-      await navigator.clipboard.writeText(offlinePrompt)
+      await safeCopyText(offlinePrompt)
       setCopiedPrompt(true)
       setTimeout(() => setCopiedPrompt(false), 2500)
     } catch (err: any) {
@@ -418,7 +453,7 @@ export const AiAssistantBar: React.FC<AiAssistantBarProps> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={async () => {
-                    await navigator.clipboard.writeText(generatedSql)
+                    await safeCopyText(generatedSql)
                     setCopiedSql(true)
                     setTimeout(() => setCopiedSql(false), 2000)
                   }}

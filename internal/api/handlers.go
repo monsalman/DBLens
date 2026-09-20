@@ -2004,6 +2004,7 @@ type DetectMaskResponse struct {
 
 // DetectMaskPII analyzes a list of columns and optional sample values to identify PII.
 func (h *Handler) DetectMaskPII(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req DetectMaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2053,6 +2054,7 @@ type PreviewMaskRequest struct {
 // PreviewMaskData previews masked data using provided rows or live sample query.
 // ponytail: in-memory preview capped at 100 rows; upgrade to stream preview if multi-MB payloads requested.
 func (h *Handler) PreviewMaskData(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	var req PreviewMaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2140,6 +2142,10 @@ func (h *Handler) GetPrivileges(w http.ResponseWriter, r *http.Request) {
 	}
 
 	schema := strings.TrimSpace(r.URL.Query().Get("schema"))
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "schema parameter contains invalid characters")
+		return
+	}
 	report, err := privilege.InspectPrivileges(r.Context(), entry.Driver, schema)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
@@ -2162,6 +2168,7 @@ func (h *Handler) PreviewPrivileges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req PreviewPrivilegesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2196,24 +2203,21 @@ func (h *Handler) ApplyPrivileges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req ApplyPrivilegesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	plan := req.Plan
-	if plan == nil && len(req.Changes) > 0 {
-		var genErr error
-		plan, genErr = privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
-		if genErr != nil {
-			sendError(w, http.StatusBadRequest, genErr.Error())
-			return
-		}
+	if len(req.Changes) == 0 {
+		sendError(w, http.StatusBadRequest, "changes are required")
+		return
 	}
 
-	if plan == nil {
-		sendError(w, http.StatusBadRequest, "no privilege plan or changes provided")
+	plan, err := privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -2260,6 +2264,10 @@ func (h *Handler) GetAssistantSchema(w http.ResponseWriter, r *http.Request) {
 	}
 
 	schema := r.URL.Query().Get("schema")
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "schema parameter contains invalid characters")
+		return
+	}
 	schemaCtx, err := assistant.ExtractCompactSchema(r.Context(), entry.Driver, schema)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
@@ -2285,6 +2293,7 @@ func (h *Handler) BuildAssistantPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req AssistantPromptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2335,6 +2344,7 @@ func (h *Handler) GenerateSQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req AssistantGenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2374,6 +2384,7 @@ func (h *Handler) FixSQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req AssistantFixRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -2412,6 +2423,7 @@ func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req AssistantExplainRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())

@@ -205,8 +205,8 @@ func detectColumnPII(colName string) string {
 func DetectPIIType(colName string, sampleValue string) string {
 	val := strings.TrimSpace(sampleValue)
 
-	// 1. High-confidence value heuristics
-	if val != "" {
+	// 1. High-confidence value heuristics (skip values longer than 256 chars to prevent ReDoS/CPU waste)
+	if val != "" && len(sampleValue) <= 256 {
 		if rfc5322EmailRegex.MatchString(val) {
 			return PIITypeEmail
 		}
@@ -228,7 +228,7 @@ func DetectPIIType(colName string, sampleValue string) string {
 	}
 
 	// 3. Phone value heuristics
-	if val != "" && isPhone(val) {
+	if val != "" && len(sampleValue) <= 256 && isPhone(val) {
 		return PIITypePhone
 	}
 

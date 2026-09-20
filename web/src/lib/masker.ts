@@ -216,9 +216,11 @@ function detectColumnPII(colName: string): PIIType {
 }
 
 export function detectPIIType(colName: string, sampleValue?: string): PIIType {
-  const val = (sampleValue ?? '').trim()
+  const raw = sampleValue ?? ''
+  const val = raw.trim()
+  const checkValue = raw.length > 0 && raw.length <= 256
 
-  if (val) {
+  if (checkValue && val) {
     if (RFC5322_EMAIL.test(val)) return 'email'
     if (isLuhnValid(val)) return 'card'
     if (SSN_REGEX.test(val)) return 'ssn'
@@ -228,7 +230,7 @@ export function detectPIIType(colName: string, sampleValue?: string): PIIType {
   const colPII = detectColumnPII(colName)
   if (colPII) return colPII
 
-  if (val && isPhone(val)) return 'phone'
+  if (checkValue && val && isPhone(val)) return 'phone'
 
   return ''
 }
