@@ -1132,6 +1132,11 @@ export const api = {
     if (dsn) {
       headers['X-DBLENS-DSN'] = dsn
     }
+    const allProfiles = profiles && profiles.length > 0 ? profiles : this.getProfiles()
+    const match = allProfiles.find(p => p.id === connId)
+    if (match?.readOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
     const res = await fetch(`/api/connections/${connId}/restore`, {
       method: 'POST',
       headers,

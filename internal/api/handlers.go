@@ -407,7 +407,7 @@ func (h *Handler) AlterTablePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AlterTableApply(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -565,7 +565,7 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") && IsNonSelectSQL(sql) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) && IsNonSelectSQL(sql) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -636,7 +636,7 @@ func (h *Handler) ExplainQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -662,7 +662,7 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -971,7 +971,7 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ImportCSV(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -1284,7 +1284,7 @@ func splitSQLStatements(sql string) []string {
 }
 
 func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -1442,7 +1442,7 @@ func (h *Handler) DumpDatabase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RestoreDatabase(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
@@ -1725,7 +1725,7 @@ func trimLeadingComments(s string) string {
 }
 
 func (h *Handler) ApplyDiff(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Target connection is read-only")
 		return
 	}
@@ -1832,7 +1832,7 @@ type KillProcessRequest struct {
 }
 
 func (h *Handler) KillProcess(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only")
 		return
 	}
@@ -1901,9 +1901,14 @@ func getRestTarget(r *http.Request) (string, string) {
 	return schema, table
 }
 
+func isTruthy(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "true" || s == "1" || s == "yes"
+}
+
 func (h *Handler) isRestReadOnly(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") ||
-		strings.EqualFold(r.URL.Query().Get("readonly"), "true")
+	return isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
+		isTruthy(r.URL.Query().Get("readonly"))
 }
 
 func (h *Handler) RestGet(w http.ResponseWriter, r *http.Request) {
@@ -1921,6 +1926,7 @@ func (h *Handler) RestPost(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	schema, table := getRestTarget(r)
 	entry, err := h.resolveDriver(r)
 	if err != nil {
@@ -1935,6 +1941,7 @@ func (h *Handler) RestPatch(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	schema, table := getRestTarget(r)
 	entry, err := h.resolveDriver(r)
 	if err != nil {

@@ -7,6 +7,7 @@ import {
   Archive,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   Layers,
   RotateCcw,
@@ -30,6 +31,8 @@ export const DatabaseDumpModal: React.FC<Props> = ({
   const activeConnId = useAppStore((s) => s.activeConnectionId)
   const selectedSchema = useAppStore((s) => s.selectedSchema)
   const connections = useAppStore((s) => s.connections)
+  const activeConn = connections.find((c) => c.id === activeConnId)
+  const isReadOnly = !!activeConn?.readOnly
 
   const show = isOpen !== undefined ? isOpen : storeIsOpen
   const handleClose = () => {
@@ -185,7 +188,7 @@ export const DatabaseDumpModal: React.FC<Props> = ({
   }
 
   const handleExecuteRestore = async () => {
-    if (!activeConnId || !restoreFile || loading) return
+    if (!activeConnId || !restoreFile || loading || isReadOnly) return
 
     setLoading(true)
     setError(null)
@@ -193,7 +196,7 @@ export const DatabaseDumpModal: React.FC<Props> = ({
     setSuccessMessage(null)
 
     try {
-      const result = await api.restoreDatabaseDump(activeConnId, restoreFile)
+      const result = await api.restoreDatabaseDump(activeConnId, restoreFile, connections)
       setRestoreResult(result)
       if (result.errors && result.errors.length > 0) {
         if (result.executed > 0) {
@@ -406,6 +409,17 @@ export const DatabaseDumpModal: React.FC<Props> = ({
           ) : (
             /* Restore Configuration */
             <div className="space-y-4">
+              {isReadOnly && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg text-xs flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>Connection is read-only. Database restore is blocked by Safe Mode.</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                    Safe Mode
+                  </span>
+                </div>
+              )}
               {/* Dropzone */}
               <div
                 onDragOver={(e) => {
@@ -529,7 +543,8 @@ export const DatabaseDumpModal: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={handleExecuteRestore}
-                disabled={loading || !restoreFile}
+                disabled={loading || !restoreFile || isReadOnly}
+                title={isReadOnly ? 'Restore disabled: Connection is read-only' : undefined}
                 className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-md shadow-sm transition-colors"
               >
                 {loading ? (

@@ -2,6 +2,7 @@ package dump
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -212,7 +213,7 @@ func GenerateDump(ctx context.Context, drv types.Driver, w io.Writer, opts DumpO
 	}
 
 	if isPostgres(dialect) {
-		if _, err := fmt.Fprintf(outWriter, "SET session_replication_role = 'replica';\n\n"); err != nil {
+		if _, err := fmt.Fprintf(outWriter, "SET session_replication_role = 'replica';\nSET standard_conforming_strings = on;\nSET client_encoding = 'UTF8';\n\n"); err != nil {
 			return err
 		}
 	} else if isMySQL(dialect) {
@@ -239,7 +240,8 @@ func GenerateDump(ctx context.Context, drv types.Driver, w io.Writer, opts DumpO
 			if !strings.HasSuffix(ddl, ";") {
 				ddl += ";"
 			}
-			if _, err := fmt.Fprintf(outWriter, "--\n-- Table structure for table %s\n--\n\n%s\n\n", quoteIdentifier(dialect, t), ddl); err != nil {
+			cleanTable := strings.ReplaceAll(strings.ReplaceAll(t, "\n", " "), "\r", " ")
+			if _, err := fmt.Fprintf(outWriter, "--\n-- Table structure for table %s\n--\n\n%s\n\n", quoteIdentifier(dialect, cleanTable), ddl); err != nil {
 				return err
 			}
 		}
@@ -325,7 +327,8 @@ func dumpTableData(ctx context.Context, drv types.Driver, w io.Writer, dialect, 
 			return nil
 		}
 		if !hasWrittenHeader {
-			if _, err := fmt.Fprintf(w, "--\n-- Dumping data for table %s\n--\n\n", quoteIdentifier(dialect, table)); err != nil {
+			cleanTable := strings.ReplaceAll(strings.ReplaceAll(table, "\n", " "), "\r", " ")
+			if _, err := fmt.Fprintf(w, "--\n-- Dumping data for table %s\n--\n\n", quoteIdentifier(dialect, cleanTable)); err != nil {
 				return err
 			}
 			hasWrittenHeader = true
@@ -394,9 +397,14 @@ func RestoreDump(ctx context.Context, drv types.Driver, r io.Reader) (RestoreRes
 		reader = gzr
 	}
 
-	content, err := io.ReadAll(reader)
+	const maxRestoreBytes = 250 << 20 // 250MB
+	limitedReader := io.LimitReader(reader, maxRestoreBytes+1)
+	content, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return result, fmt.Errorf("failed to read restore data: %w", err)
+	}
+	if int64(len(content)) > maxRestoreBytes {
+		return result, fmt.Errorf("decompressed dump exceeds maximum limit of 250MB")
 	}
 
 	stmts := SplitSQLStatements(string(content))
@@ -409,7 +417,7 @@ func RestoreDump(ctx context.Context, drv types.Driver, r io.Reader) (RestoreRes
 			continue
 		}
 		result.Total++
-		_, err := drv.ExecuteQuery(ctx, trimmed)
+		_, err := drv.ExecuteRaw(ctx, trimmed)
 		if err != nil {
 			if len(result.Errors) < 100 {
 				result.Errors = append(result.Errors, fmt.Sprintf("statement %d: %s", result.Total, err.Error()))
@@ -622,7 +630,7 @@ func FormatSQLValue(dialect string, val interface{}) string {
 	}
 	switch v := val.(type) {
 	case []byte:
-		if utf8.Valid(v) {
+		if utf8.Valid(v) && !bytes.ContainsRune(v, 0) {
 			return escapeStr(string(v))
 		}
 		if isPostgres(dialect) {

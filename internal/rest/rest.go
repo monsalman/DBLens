@@ -182,11 +182,21 @@ func ParseQueryParams(values url.Values) (QueryParams, error) {
 			filterVal := parts[1]
 
 			switch op {
-			case "eq", "neq", "gt", "gte", "lt", "lte", "like", "is":
+			case "eq", "neq", "gt", "gte", "lt", "lte", "like":
 				qp.Filters = append(qp.Filters, Filter{
 					Column:   k,
 					Operator: op,
 					Value:    filterVal,
+				})
+			case "is":
+				lowerVal := strings.ToLower(filterVal)
+				if lowerVal != "null" && lowerVal != "not.null" && lowerVal != "true" && lowerVal != "false" {
+					return qp, fmt.Errorf("invalid value %q for 'is' operator (expected null, not.null, true, false)", filterVal)
+				}
+				qp.Filters = append(qp.Filters, Filter{
+					Column:   k,
+					Operator: op,
+					Value:    lowerVal,
 				})
 			case "in":
 				if !strings.HasPrefix(filterVal, "(") || !strings.HasSuffix(filterVal, ")") {
@@ -265,12 +275,18 @@ func buildWhereClause(dialect string, filters []Filter, tracker *paramTracker) (
 		case "like":
 			parts = append(parts, colQuoted+" LIKE "+tracker.nextPlaceholder(f.Value))
 		case "is":
-			if strings.EqualFold(f.Value, "null") {
+			lowerVal := strings.ToLower(f.Value)
+			switch lowerVal {
+			case "null":
 				parts = append(parts, colQuoted+" IS NULL")
-			} else if strings.EqualFold(f.Value, "not.null") {
+			case "not.null":
 				parts = append(parts, colQuoted+" IS NOT NULL")
-			} else {
-				parts = append(parts, colQuoted+" IS "+tracker.nextPlaceholder(f.Value))
+			case "true":
+				parts = append(parts, colQuoted+" IS TRUE")
+			case "false":
+				parts = append(parts, colQuoted+" IS FALSE")
+			default:
+				return "", fmt.Errorf("invalid value %q for 'is' operator (expected null, not.null, true, false)", f.Value)
 			}
 		case "in":
 			if len(f.Values) == 0 {
@@ -565,6 +581,10 @@ func HandlePost(w http.ResponseWriter, r *http.Request, drv types.Driver, schema
 				"rowsAffected": 0,
 				"data":         []map[string]interface{}{},
 			})
+			return
+		}
+		if len(parsedRows) > 500 {
+			sendError(w, http.StatusBadRequest, "batch insert exceeds maximum limit of 500 rows")
 			return
 		}
 	} else if strings.HasPrefix(trimmed, "{") {
