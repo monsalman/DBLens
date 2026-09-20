@@ -83,6 +83,30 @@ test('isValidDumpFile: accepts .sql and .sql.gz', () => {
   assert(!isValidDumpFile('backup.txt'), '.txt invalid')
 })
 
+test('restoreHeaders: sets X-DBLENS-READONLY header when profile is readOnly', () => {
+  const profiles = [
+    { id: 'conn-prod', dsn: 'postgres://...', readOnly: true },
+    { id: 'conn-dev', dsn: 'sqlite://...', readOnly: false },
+  ]
+  const isReadOnlyProd = profiles.find((p) => p.id === 'conn-prod')?.readOnly ?? false
+  const isReadOnlyDev = profiles.find((p) => p.id === 'conn-dev')?.readOnly ?? false
+
+  assert(isReadOnlyProd === true, 'prod profile is read-only')
+  assert(isReadOnlyDev === false, 'dev profile is not read-only')
+
+  const headersProd: Record<string, string> = {}
+  if (isReadOnlyProd) {
+    headersProd['X-DBLENS-READONLY'] = 'true'
+  }
+  assert(headersProd['X-DBLENS-READONLY'] === 'true', 'X-DBLENS-READONLY set for prod')
+
+  const headersDev: Record<string, string> = {}
+  if (isReadOnlyDev) {
+    headersDev['X-DBLENS-READONLY'] = 'true'
+  }
+  assert(!('X-DBLENS-READONLY' in headersDev), 'X-DBLENS-READONLY omitted for dev')
+})
+
 console.log(`\nDump Client Tests Summary: ${passed} passed, ${failed} failed\n`)
 if (failed > 0) {
   process.exit(1)

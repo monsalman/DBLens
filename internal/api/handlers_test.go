@@ -2392,6 +2392,76 @@ func TestRestAPIEndpoints(t *testing.T) {
 	}
 }
 
+func TestRestEndpointsTruthyReadOnlyAndMaxBytesLimit(t *testing.T) {
+	dbPath := "/tmp/test_rest_truthy.db"
+	_ = os.Remove(dbPath)
+	defer os.Remove(dbPath)
+
+	mgr := connection.NewManager()
+	dsn := "sqlite://" + dbPath
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to connect sqlite: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			price REAL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create items table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Test X-DBLENS-READONLY with "1" and "yes"
+	for _, truthy := range []string{"1", "yes", "true", "TRUE", "Yes"} {
+		req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(`{"title": "Test", "price": 10}`))
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		req.Header.Set("X-DBLENS-READONLY", truthy)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for X-DBLENS-READONLY=%q, got %d", truthy, rec.Code)
+		}
+	}
+
+	// 2. Test readonly query param with "1" and "yes"
+	for _, truthy := range []string{"1", "yes", "true", "YES"} {
+		req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items?readonly="+truthy, strings.NewReader(`{"title": "Test", "price": 10}`))
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for readonly param=%q, got %d", truthy, rec.Code)
+		}
+	}
+
+	// 3. Test MaxBytesReader 10MB limit on RestPost
+	reqLarge := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", bytes.NewReader(make([]byte, 10<<20+1024)))
+	reqLarge.Header.Set("X-DBLENS-DSN", dsn)
+	recLarge := httptest.NewRecorder()
+	router.ServeHTTP(recLarge, reqLarge)
+	if recLarge.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for body exceeding 10MB limit, got %d", recLarge.Code)
+	}
+
+	// 4. Test MaxBytesReader 10MB limit on RestPatch
+	reqPatchLarge := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?id=eq.1", bytes.NewReader(make([]byte, 10<<20+1024)))
+	reqPatchLarge.Header.Set("X-DBLENS-DSN", dsn)
+	recPatchLarge := httptest.NewRecorder()
+	router.ServeHTTP(recPatchLarge, reqPatchLarge)
+	if recPatchLarge.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for PATCH body exceeding 10MB limit, got %d", recPatchLarge.Code)
+	}
+}
+
 
 
 

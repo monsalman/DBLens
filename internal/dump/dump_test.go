@@ -3,6 +3,7 @@ package dump
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -283,5 +284,171 @@ func TestRestoreDumpErrorCapturing(t *testing.T) {
 	}
 	if len(res.Errors) != 1 {
 		t.Errorf("expected 1 error captured, got %d: %v", len(res.Errors), res.Errors)
+	}
+}
+
+func TestRestoreDumpDecompressionBombLimit(t *testing.T) {
+	dbFile := "/tmp/dblens_dump_bomb_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN("sqlite://" + dbFile)
+	if err != nil {
+		t.Fatalf("failed to connect sqlite: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	// Reader exceeding 250MB
+	const overLimit = int64(250<<20 + 10)
+	pattern := []byte("-- comment padding line to simulate large dump\n")
+	repeatingReader := &repeatReader{pattern: pattern, totalRemaining: overLimit}
+
+	_, err = RestoreDump(context.Background(), entry.Driver, repeatingReader)
+	if err == nil {
+		t.Fatalf("expected decompression bomb limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "decompressed dump exceeds maximum limit of 250MB") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+type repeatReader struct {
+	pattern        []byte
+	totalRemaining int64
+}
+
+func (r *repeatReader) Read(p []byte) (n int, err error) {
+	if r.totalRemaining <= 0 {
+		return 0, io.EOF
+	}
+	toRead := int64(len(p))
+	if toRead > r.totalRemaining {
+		toRead = r.totalRemaining
+	}
+	patLen := int64(len(r.pattern))
+	for i := int64(0); i < toRead; i++ {
+		p[i] = r.pattern[i%patLen]
+	}
+	r.totalRemaining -= toRead
+	return int(toRead), nil
+}
+
+func TestFormatSQLValueBlobNulHandling(t *testing.T) {
+	// Normal UTF-8 without NUL formats as string literal
+	normalBytes := []byte("hello world")
+	formattedNormal := FormatSQLValue("sqlite", normalBytes)
+	if formattedNormal != "'hello world'" {
+		t.Errorf("expected 'hello world', got: %s", formattedNormal)
+	}
+
+	// Bytes with NUL character formats as hex literal
+	nulBytes := []byte("hello\x00world")
+	formattedSqlite := FormatSQLValue("sqlite", nulBytes)
+	if !strings.HasPrefix(formattedSqlite, "X'") {
+		t.Errorf("expected sqlite hex literal for byte slice with NUL, got: %s", formattedSqlite)
+	}
+
+	formattedPg := FormatSQLValue("postgres", nulBytes)
+	if !strings.HasPrefix(formattedPg, "decode(") {
+		t.Errorf("expected postgres decode hex for byte slice with NUL, got: %s", formattedPg)
+	}
+}
+
+type mockPostgresDriver struct {
+	types.Driver
+}
+
+func (m *mockPostgresDriver) Dialect() string {
+	return "postgres"
+}
+
+func (m *mockPostgresDriver) InspectTables(ctx context.Context, schema string) ([]types.TableMeta, error) {
+	return []types.TableMeta{}, nil
+}
+
+func (m *mockPostgresDriver) InspectTableDetails(ctx context.Context, schema, table string) (*types.TableDetail, error) {
+	return nil, nil
+}
+
+func TestPostgresDumpPragmas(t *testing.T) {
+	var buf bytes.Buffer
+	opts := DumpOptions{
+		IncludeSchema: true,
+		IncludeData:   true,
+		UseGzip:       false,
+	}
+
+	err := GenerateDump(context.Background(), &mockPostgresDriver{}, &buf, opts)
+	if err != nil {
+		t.Fatalf("GenerateDump failed: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "SET standard_conforming_strings = on;") {
+		t.Errorf("expected SET standard_conforming_strings = on; in Postgres dump header")
+	}
+	if !strings.Contains(out, "SET client_encoding = 'UTF8';") {
+		t.Errorf("expected SET client_encoding = 'UTF8'; in Postgres dump header")
+	}
+	if !strings.Contains(out, "SET session_replication_role = 'replica';") {
+		t.Errorf("expected SET session_replication_role = 'replica'; in Postgres dump header")
+	}
+	if !strings.Contains(out, "SET session_replication_role = 'origin';") {
+		t.Errorf("expected SET session_replication_role = 'origin'; in Postgres dump footer")
+	}
+}
+
+type trackingDriver struct {
+	types.Driver
+	rawCalls   []string
+	queryCalls []string
+}
+
+func (t *trackingDriver) ExecuteRaw(ctx context.Context, sql string, args ...interface{}) (*types.QueryResult, error) {
+	t.rawCalls = append(t.rawCalls, sql)
+	return t.Driver.ExecuteRaw(ctx, sql, args...)
+}
+
+func (t *trackingDriver) ExecuteQuery(ctx context.Context, sql string) (*types.QueryResult, error) {
+	t.queryCalls = append(t.queryCalls, sql)
+	return t.Driver.ExecuteQuery(ctx, sql)
+}
+
+func TestRestoreDumpWithExecuteRaw(t *testing.T) {
+	dbFile := "/tmp/dblens_dump_raw_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN("sqlite://" + dbFile)
+	if err != nil {
+		t.Fatalf("failed to connect sqlite: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	tracker := &trackingDriver{Driver: entry.Driver}
+
+	sqlText := `
+		CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);
+		INSERT INTO items (id, name) VALUES (1, 'First item');
+		INSERT INTO items (id, name) VALUES (2, 'Second item');
+	`
+
+	res, err := RestoreDump(context.Background(), tracker, strings.NewReader(sqlText))
+	if err != nil {
+		t.Fatalf("RestoreDump failed: %v", err)
+	}
+	if len(res.Errors) > 0 {
+		t.Fatalf("RestoreDump had unexpected errors: %v", res.Errors)
+	}
+	if res.Executed != 3 {
+		t.Errorf("expected 3 executed statements, got %d", res.Executed)
+	}
+	if len(tracker.rawCalls) != 3 {
+		t.Errorf("expected 3 ExecuteRaw calls, got %d", len(tracker.rawCalls))
+	}
+	if len(tracker.queryCalls) != 0 {
+		t.Errorf("expected 0 ExecuteQuery calls, got %d (ExecuteRaw must be used)", len(tracker.queryCalls))
 	}
 }

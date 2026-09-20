@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -330,5 +331,98 @@ func TestSQLInjectionResistance(t *testing.T) {
 	rest.HandlePost(wBadInsert, reqBadInsert, drv, "", "users")
 	if wBadInsert.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request on malicious JSON key in INSERT, got %d", wBadInsert.Code)
+	}
+}
+
+func TestIsOperatorWhitelisting(t *testing.T) {
+	// 1. Valid whitelisted values
+	validValues := url.Values{
+		"deleted": []string{"is.null"},
+		"status":  []string{"is.not.null"},
+		"active":  []string{"is.true"},
+		"archived": []string{"is.false"},
+	}
+
+	qp, err := rest.ParseQueryParams(validValues)
+	if err != nil {
+		t.Fatalf("expected valid params, got: %v", err)
+	}
+
+	sql, args, err := rest.BuildSelectSQL("postgres", "", "users", qp)
+	if err != nil {
+		t.Fatalf("BuildSelectSQL failed: %v", err)
+	}
+
+	if len(args) != 0 {
+		t.Errorf("expected 0 args for 'is' operators, got %d: %v", len(args), args)
+	}
+	if !strings.Contains(sql, `"deleted" IS NULL`) {
+		t.Errorf("expected \"deleted\" IS NULL, got: %s", sql)
+	}
+	if !strings.Contains(sql, `"status" IS NOT NULL`) {
+		t.Errorf("expected \"status\" IS NOT NULL, got: %s", sql)
+	}
+	if !strings.Contains(sql, `"active" IS TRUE`) {
+		t.Errorf("expected \"active\" IS TRUE, got: %s", sql)
+	}
+	if !strings.Contains(sql, `"archived" IS FALSE`) {
+		t.Errorf("expected \"archived\" IS FALSE, got: %s", sql)
+	}
+	if strings.Contains(sql, "$1") {
+		t.Errorf("expected no placeholder $1 in sql, got: %s", sql)
+	}
+
+	// 2. Unsupported value rejected by ParseQueryParams
+	badValues := url.Values{
+		"role": []string{"is.admin"},
+	}
+	if _, err := rest.ParseQueryParams(badValues); err == nil {
+		t.Errorf("expected error on invalid 'is' value, got nil")
+	}
+
+	badInjection := url.Values{
+		"role": []string{"is.NULL; DROP TABLE users;--"},
+	}
+	if _, err := rest.ParseQueryParams(badInjection); err == nil {
+		t.Errorf("expected error on malicious 'is' value, got nil")
+	}
+}
+
+func TestBatchInsertMaxRowsLimit(t *testing.T) {
+	drv := setupTestSQLite(t)
+	defer drv.Close()
+
+	// 1. Over 500 rows rejected
+	var rowsOverLimit []map[string]interface{}
+	for i := 0; i < 501; i++ {
+		rowsOverLimit = append(rowsOverLimit, map[string]interface{}{
+			"name":  fmt.Sprintf("User%d", i),
+			"email": fmt.Sprintf("user%d@example.com", i),
+			"role":  "member",
+		})
+	}
+	bodyOver, _ := json.Marshal(rowsOverLimit)
+
+	reqOver := httptest.NewRequest(http.MethodPost, "/api/connections/1/rest/users", bytes.NewReader(bodyOver))
+	wOver := httptest.NewRecorder()
+	rest.HandlePost(wOver, reqOver, drv, "", "users")
+	if wOver.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for batch insert > 500 rows, got %d", wOver.Code)
+	}
+	if !strings.Contains(wOver.Body.String(), "batch insert exceeds maximum limit of 500 rows") {
+		t.Fatalf("unexpected error message: %s", wOver.Body.String())
+	}
+
+	// 2. Exactly 2 rows accepted
+	validBatch := []map[string]interface{}{
+		{"name": "UserA", "email": "a@example.com", "role": "member"},
+		{"name": "UserB", "email": "b@example.com", "role": "member"},
+	}
+	bodyValid, _ := json.Marshal(validBatch)
+	reqValid := httptest.NewRequest(http.MethodPost, "/api/connections/1/rest/users", bytes.NewReader(bodyValid))
+	wValid := httptest.NewRecorder()
+	rest.HandlePost(wValid, reqValid, drv, "", "users")
+	if wValid.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for valid batch, got %d: %s", wValid.Code, wValid.Body.String())
 	}
 }
