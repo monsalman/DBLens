@@ -40,6 +40,7 @@ import { ParameterPromptModal } from './ParameterPromptModal'
 import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
 import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
+import { AiAssistantBar } from './AiAssistantBar'
 
 interface Props {
   connId: string
@@ -126,6 +127,11 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const currentExplain = currentTab ? tabExplainResults[currentTab.id] ?? null : null
   const isExplaining = Boolean(currentTab && tabExplaining[currentTab.id])
   const activePane = currentTab ? tabActivePane[currentTab.id] ?? 'results' : 'results'
+
+  // AI Assistant states
+  const [isAiBarOpen, setIsAiBarOpen] = useState(false)
+  const [fixContext, setFixContext] = useState<{ query: string; error: string } | null>(null)
+  const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -592,6 +598,30 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
 
       {/* Main Console Body */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+        {/* AI Assistant Bar */}
+        <AiAssistantBar
+          connId={connId}
+          currentQuery={currentTab?.query || ''}
+          activeSchema={selectedSchema}
+          profiles={effectiveConnections}
+          isOpen={isAiBarOpen}
+          onToggle={() => setIsAiBarOpen((prev) => !prev)}
+          onApplySql={(sql, mode) => {
+            if (!currentTab) return
+            if (mode === 'insert') {
+              const current = currentTab.query
+              const separator = current.endsWith('\n') || !current ? '' : '\n\n'
+              updateSqlTabQuery(connId, currentTab.id, current + separator + sql)
+            } else {
+              updateSqlTabQuery(connId, currentTab.id, sql)
+            }
+          }}
+          fixContext={fixContext}
+          onClearFixContext={() => setFixContext(null)}
+          explainRequested={explainWithAiRequested}
+          onClearExplainRequested={() => setExplainWithAiRequested(false)}
+        />
+
         {/* Editor Pane */}
         <div className="flex-1 flex flex-col min-h-0 border-b border-[var(--border)] overflow-hidden">
           <div className="flex-1 min-h-0 overflow-auto">
@@ -807,6 +837,41 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               </div>
             </div>
 
+            {/* AI Assistant Toggle Button */}
+            <button
+              id="dblens-ask-ai-btn"
+              onClick={() => setIsAiBarOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border transition-colors ${
+                isAiBarOpen
+                  ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-medium'
+                  : 'bg-[var(--surface)] hover:bg-[var(--hover)] text-[var(--fg)] border-[var(--border)]'
+              }`}
+              title="Ask AI Assistant (Cmd+I / Ctrl+I)"
+              aria-label="Ask AI Assistant (Cmd+I / Ctrl+I)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Ask AI</span>
+              <kbd className="hidden sm:inline text-[9px] px-1 py-0.2 rounded bg-[var(--bg)] border border-[var(--border)] text-[var(--muted)] font-mono">
+                ⌘I
+              </kbd>
+            </button>
+
+            {/* AI Explain Query Button */}
+            <button
+              id="dblens-ai-explain-btn"
+              onClick={() => {
+                setIsAiBarOpen(true)
+                setExplainWithAiRequested(true)
+              }}
+              disabled={!currentTab?.query.trim()}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-[var(--fg)] border border-[var(--border)] disabled:opacity-40 transition-colors"
+              title="Explain Query with AI"
+              aria-label="Explain Query with AI"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+              <span>Explain with AI</span>
+            </button>
+
             <button
               id="dblens-explain-btn"
               onClick={() => handleExplain()}
@@ -951,11 +1016,30 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         {activePane === 'results' && currentResult && (
           <div className="flex-1 flex flex-col min-h-0 overflow-auto">
             {currentResult.error ? (
-              <div className="p-4 flex items-start gap-2">
+              <div className="p-4 flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">
-                  {currentResult.error}
-                </pre>
+                <div className="flex-1 flex flex-col gap-2.5">
+                  <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">
+                    {currentResult.error}
+                  </pre>
+                  <div>
+                    <button
+                      id="dblens-fix-with-ai-btn"
+                      onClick={() => {
+                        setFixContext({
+                          query: currentTab?.query || '',
+                          error: currentResult.error || '',
+                        })
+                        setIsAiBarOpen(true)
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-medium transition-colors"
+                      title="Fix this error with AI Assistant"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>✨ Fix with AI</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="flex-1 flex flex-col min-h-0">

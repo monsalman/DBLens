@@ -1,4 +1,5 @@
 export type DatabaseDriver = 'postgres' | 'mysql' | 'sqlite'
+import type { AIAssistantConfig } from '../features/editor/aiAssistant'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -1435,6 +1436,132 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async getAssistantSchema(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantSchemaContext> {
+    const dsn = this._getDSN(connId, profiles)
+    const url = schema
+      ? `/api/connections/${connId}/assistant/schema?schema=${encodeURIComponent(schema)}`
+      : `/api/connections/${connId}/assistant/schema`
+    const r = await fetch(url, { headers: this._headers(dsn, connId, profiles) })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch assistant schema (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async buildAssistantPrompt(
+    connId: string,
+    payload: {
+      op?: 'generate' | 'fix' | 'explain'
+      prompt?: string
+      query?: string
+      error?: string
+      schema?: string
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/prompt`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to build prompt (${r.status})`)
+    }
+    const json = await r.json()
+    const data = json.data ?? json
+    return data.prompt ?? ''
+  },
+
+  async generateSqlWithAI(
+    connId: string,
+    payload: {
+      prompt: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantGenerateResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/generate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async fixSqlWithAI(
+    connId: string,
+    payload: {
+      query: string
+      error: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantFixResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/fix`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fix SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async explainSqlWithAI(
+    connId: string,
+    payload: {
+      query: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantExplainResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/explain`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to explain SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
 }
 
 export interface ColumnPIIInfo {
@@ -1511,3 +1638,44 @@ export interface PrivilegePlan {
   dangerous: boolean
   affectedRoles: string[]
 }
+
+export interface CompactColumn {
+  name: string
+  type: string
+  pk?: boolean
+  nullable?: boolean
+}
+
+export interface CompactFK {
+  column: string
+  refTable: string
+  refColumn: string
+}
+
+export interface CompactTable {
+  name: string
+  schema?: string
+  columns: CompactColumn[]
+  fks?: CompactFK[]
+}
+
+export interface AssistantSchemaContext {
+  tables: CompactTable[]
+  ddl: string
+}
+
+export interface AssistantGenerateResponse {
+  sql: string
+  raw?: string
+}
+
+export interface AssistantFixResponse {
+  sql: string
+  raw?: string
+}
+
+export interface AssistantExplainResponse {
+  explanation: string
+  raw?: string
+}
+

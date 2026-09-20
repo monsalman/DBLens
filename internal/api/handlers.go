@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
@@ -2226,6 +2227,215 @@ func (h *Handler) ApplyPrivileges(w http.ResponseWriter, r *http.Request) {
 		"executedStatements": len(plan.Statements),
 	})
 }
+
+func extractLLMConfig(r *http.Request, bodyCfg assistant.LLMConfig) assistant.LLMConfig {
+	cfg := bodyCfg
+	if cfg.Provider == "" {
+		cfg.Provider = r.Header.Get("X-AI-Provider")
+	}
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = r.Header.Get("X-AI-Endpoint")
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = r.Header.Get("X-AI-Key")
+		if cfg.APIKey == "" {
+			cfg.APIKey = r.Header.Get("X-AI-ApiKey")
+		}
+	}
+	if cfg.Model == "" {
+		cfg.Model = r.Header.Get("X-AI-Model")
+	}
+	if cfg.Provider == "" {
+		cfg.Provider = "openai"
+	}
+	return cfg
+}
+
+// GetAssistantSchema returns compact table and DDL metadata for the assistant.
+func (h *Handler) GetAssistantSchema(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	schema := r.URL.Query().Get("schema")
+	schemaCtx, err := assistant.ExtractCompactSchema(r.Context(), entry.Driver, schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, schemaCtx)
+}
+
+type AssistantPromptRequest struct {
+	Op     string `json:"op"`
+	Prompt string `json:"prompt"`
+	Query  string `json:"query"`
+	Error  string `json:"error"`
+	Schema string `json:"schema"`
+}
+
+// BuildAssistantPrompt generates offline prompt formatted with schema context for copy-paste.
+func (h *Handler) BuildAssistantPrompt(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req AssistantPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	schemaCtx, err := assistant.ExtractCompactSchema(r.Context(), entry.Driver, req.Schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	op := req.Op
+	if op == "" {
+		if req.Error != "" {
+			op = "fix"
+		} else if req.Query != "" {
+			op = "explain"
+		} else {
+			op = "generate"
+		}
+	}
+
+	input := req.Prompt
+	if op == "fix" || op == "explain" {
+		if req.Query != "" {
+			input = req.Query
+		}
+	}
+
+	prompt := assistant.BuildPrompt(op, entry.Driver.Dialect(), schemaCtx, input, req.Error)
+	sendJSON(w, http.StatusOK, map[string]string{
+		"prompt": prompt,
+	})
+}
+
+type AssistantGenerateRequest struct {
+	Prompt string              `json:"prompt"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// GenerateSQL converts natural language prompt into SQL.
+func (h *Handler) GenerateSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req AssistantGenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		sendError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.GenerateSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Prompt)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"sql": resp.Result,
+		"raw": resp.Raw,
+	})
+}
+
+type AssistantFixRequest struct {
+	Query  string              `json:"query"`
+	Error  string              `json:"error"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// FixSQL corrects failing SQL from error message.
+func (h *Handler) FixSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req AssistantFixRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		sendError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.FixSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Query, req.Error)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"sql": resp.Result,
+		"raw": resp.Raw,
+	})
+}
+
+type AssistantExplainRequest struct {
+	Query  string              `json:"query"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// ExplainSQL explains SQL query in bullet points.
+func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req AssistantExplainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		sendError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.ExplainSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Query)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"explanation": resp.Result,
+		"raw":         resp.Raw,
+	})
+}
+
 
 
 
