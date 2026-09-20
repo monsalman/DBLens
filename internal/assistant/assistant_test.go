@@ -279,3 +279,65 @@ func TestGenerateAndFixSQL(t *testing.T) {
 		t.Fatalf("unexpected fix result: %q", fixResp.Result)
 	}
 }
+
+func TestValidateLLMEndpoint_SSRF(t *testing.T) {
+	blockedEndpoints := []struct {
+		name     string
+		endpoint string
+	}{
+		{"aws/azure metadata ip", "http://169.254.169.254/latest/meta-data/"},
+		{"aws metadata ip with port", "http://169.254.169.254:8080/latest"},
+		{"link-local ipv4 range", "http://169.254.1.2:80/v1"},
+		{"link-local ipv6 range", "http://[fe80::1]/messages"},
+		{"google metadata hostname", "http://metadata.google.internal/computeMetadata/v1/"},
+		{"subdomain google metadata", "http://sub.metadata.google.internal/v1"},
+		{"instance-data hostname", "http://instance-data/latest/meta-data/"},
+		{"subdomain instance-data", "http://api.instance-data/v1"},
+		{"non-http scheme ftp", "ftp://api.openai.com/v1"},
+		{"non-http scheme file", "file:///etc/passwd"},
+		{"missing host", "http:///v1/chat"},
+	}
+
+	for _, tc := range blockedEndpoints {
+		t.Run("blocked_"+tc.name, func(t *testing.T) {
+			err := validateLLMEndpoint(tc.endpoint)
+			if err == nil {
+				t.Fatalf("expected endpoint %q to be blocked, but validation passed", tc.endpoint)
+			}
+		})
+	}
+
+	allowedEndpoints := []struct {
+		name     string
+		endpoint string
+	}{
+		{"openai public api", "https://api.openai.com/v1/chat/completions"},
+		{"anthropic public api", "https://api.anthropic.com/v1/messages"},
+		{"localhost dev endpoint", "http://127.0.0.1:11434/v1"},
+	}
+
+	for _, tc := range allowedEndpoints {
+		t.Run("allowed_"+tc.name, func(t *testing.T) {
+			err := validateLLMEndpoint(tc.endpoint)
+			if err != nil {
+				t.Fatalf("expected endpoint %q to be allowed, got: %v", tc.endpoint, err)
+			}
+		})
+	}
+}
+
+func TestCallLLM_SSRF_Blocked(t *testing.T) {
+	cfg := LLMConfig{
+		Provider: "openai",
+		Endpoint: "http://169.254.169.254/latest/meta-data",
+		APIKey:   "test",
+	}
+
+	_, err := CallLLM(context.Background(), cfg, "system", "user")
+	if err == nil {
+		t.Fatalf("expected CallLLM to fail on link-local/metadata endpoint")
+	}
+	if !strings.Contains(err.Error(), "blocked") && !strings.Contains(err.Error(), "prohibited") {
+		t.Fatalf("expected SSRF error message, got: %v", err)
+	}
+}

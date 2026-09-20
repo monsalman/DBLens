@@ -50,6 +50,7 @@ test('detectPIIType detects PII by column and value', () => {
   assert(detectPIIType('first_name') === 'name', 'name col')
   assert(detectPIIType('table_name') === '', 'technical table_name not pii')
   assert(detectPIIType('id', '123') === '', 'id not pii')
+  assert(detectPIIType('notes', 'a'.repeat(257) + '@domain.com') === '', 'long string > 256 skipped')
 })
 
 test('maskValue: redact strategy', () => {

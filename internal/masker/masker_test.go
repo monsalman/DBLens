@@ -70,6 +70,7 @@ func TestDetectPIIType(t *testing.T) {
 		{"created_at", "2026-01-01T00:00:00Z", ""},
 		{"status", "active", ""},
 		{"price", "99.99", ""},
+		{"notes", strings.Repeat("a", 257) + "@example.com", ""},
 	}
 
 	for _, tt := range tests {

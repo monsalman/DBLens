@@ -2785,6 +2785,120 @@ func TestPrivilegeEndpoints(t *testing.T) {
 	}
 }
 
+func TestSecurityAndRouteAliasRemediation(t *testing.T) {
+	dbFile := "/tmp/dblens_api_sec_remediation_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE canary (id INTEGER PRIMARY KEY, note TEXT);
+		INSERT INTO canary VALUES (1, 'keep me');
+	`)
+	if err != nil {
+		t.Fatalf("failed to setup canary db: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Route alias POST /api/connect
+	{
+		connectBody := map[string]string{
+			"type": "sqlite",
+			"dsn":  dsn,
+		}
+		cb, _ := json.Marshal(connectBody)
+		req := httptest.NewRequest("POST", "/api/connect", bytes.NewReader(cb))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on POST /api/connect alias, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. SEC-07: Control chars in schema for GetPrivileges
+	{
+		req := httptest.NewRequest("GET", "/api/connections/default/privileges?schema=main%0A_injected", nil)
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request on control chars in GetPrivileges schema, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "schema parameter contains invalid characters") {
+			t.Fatalf("expected invalid characters error, got: %s", rec.Body.String())
+		}
+	}
+
+	// 3. SEC-07: Control chars in schema for GetAssistantSchema
+	{
+		req := httptest.NewRequest("GET", "/api/connections/default/assistant/schema?schema=main%00_null", nil)
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request on control chars in GetAssistantSchema schema, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "schema parameter contains invalid characters") {
+			t.Fatalf("expected invalid characters error, got: %s", rec.Body.String())
+		}
+	}
+
+	// 4. SEC-01: Reject client-supplied Plan in ApplyPrivileges without Changes
+	{
+		maliciousBody := `{
+			"plan": {
+				"dialect": "sqlite",
+				"statements": ["DROP TABLE canary;"]
+			}
+		}`
+		req := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", strings.NewReader(maliciousBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request when changes are missing, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "changes are required") {
+			t.Fatalf("expected 'changes are required' error, got: %s", rec.Body.String())
+		}
+
+		// Verify table canary still exists
+		res, qErr := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM canary;")
+		if qErr != nil || len(res.Rows) == 0 {
+			t.Fatalf("canary table was unexpectedly dropped or query failed: %v", qErr)
+		}
+	}
+
+	// 5. SEC-04: MaxBytesReader on endpoints
+	{
+		oversizedJSON := "{\"prompt\":\"" + strings.Repeat("A", 2<<20) + "\"}"
+		req := httptest.NewRequest("POST", "/api/connections/default/assistant/prompt", strings.NewReader(oversizedJSON))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for oversized payload, got %d", rec.Code)
+		}
+	}
+}
+
 
 
 
