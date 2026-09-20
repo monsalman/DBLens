@@ -2255,6 +2255,144 @@ func TestDumpAndRestoreAPI(t *testing.T) {
 	}
 }
 
+func TestRestAPIEndpoints(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "rest_api_test_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp db: %v", err)
+	}
+	tempFile.Close()
+	defer os.Remove(tempFile.Name())
+
+	dsn := "sqlite://" + tempFile.Name()
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to open test db: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			price REAL NOT NULL,
+			status TEXT DEFAULT 'active'
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create items table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. POST: Insert item
+	body := `{"title": "Mechanical Keyboard", "price": 129.99, "status": "active"}`
+	req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(body))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on REST POST, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var postRes map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &postRes); err != nil {
+		t.Fatalf("failed to parse POST response: %v", err)
+	}
+	if postRes["rowsAffected"].(float64) != 1 {
+		t.Fatalf("expected rowsAffected 1, got %v", postRes["rowsAffected"])
+	}
+
+	// 2. GET: Query items
+	getReq := httptest.NewRequest("GET", "/api/connections/test-conn/rest/items?status=eq.active&select=id,title,price", nil)
+	getReq.Header.Set("X-DBLENS-DSN", dsn)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST GET, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	if getRec.Header().Get("X-Total-Count") != "1" {
+		t.Fatalf("expected X-Total-Count 1, got %q", getRec.Header().Get("X-Total-Count"))
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("failed to parse GET response: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["title"] != "Mechanical Keyboard" {
+		t.Fatalf("unexpected rows: %v", rows)
+	}
+
+	// 3. GET with schema in URL path: /rest/main/items
+	getSchemaReq := httptest.NewRequest("GET", "/api/connections/test-conn/rest/main/items", nil)
+	getSchemaReq.Header.Set("X-DBLENS-DSN", dsn)
+	getSchemaRec := httptest.NewRecorder()
+	router.ServeHTTP(getSchemaRec, getSchemaReq)
+	if getSchemaRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST GET with schema, got %d: %s", getSchemaRec.Code, getSchemaRec.Body.String())
+	}
+
+	// 4. PATCH: Update item
+	patchBody := `{"price": 99.99}`
+	patchReq := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?title=eq.Mechanical%20Keyboard", strings.NewReader(patchBody))
+	patchReq.Header.Set("X-DBLENS-DSN", dsn)
+	patchRec := httptest.NewRecorder()
+	router.ServeHTTP(patchRec, patchReq)
+
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST PATCH, got %d: %s", patchRec.Code, patchRec.Body.String())
+	}
+
+	// 5. Read-only guardrail blocks POST, PATCH, DELETE
+	roPostReq := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(body))
+	roPostReq.Header.Set("X-DBLENS-DSN", dsn)
+	roPostReq.Header.Set("X-DBLENS-READONLY", "true")
+	roPostRec := httptest.NewRecorder()
+	router.ServeHTTP(roPostRec, roPostReq)
+	if roPostRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for POST under read-only, got %d", roPostRec.Code)
+	}
+
+	roPatchReq := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?id=eq.1", strings.NewReader(patchBody))
+	roPatchReq.Header.Set("X-DBLENS-DSN", dsn)
+	roPatchReq.Header.Set("X-DBLENS-READONLY", "true")
+	roPatchRec := httptest.NewRecorder()
+	router.ServeHTTP(roPatchRec, roPatchReq)
+	if roPatchRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for PATCH under read-only, got %d", roPatchRec.Code)
+	}
+
+	roDelReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1", nil)
+	roDelReq.Header.Set("X-DBLENS-DSN", dsn)
+	roDelReq.Header.Set("X-DBLENS-READONLY", "true")
+	roDelRec := httptest.NewRecorder()
+	router.ServeHTTP(roDelRec, roDelReq)
+	if roDelRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for DELETE under read-only, got %d", roDelRec.Code)
+	}
+
+	// Query param ?readonly=true also rejected
+	roParamReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1&readonly=true", nil)
+	roParamReq.Header.Set("X-DBLENS-DSN", dsn)
+	roParamRec := httptest.NewRecorder()
+	router.ServeHTTP(roParamRec, roParamReq)
+	if roParamRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for DELETE with readonly param, got %d", roParamRec.Code)
+	}
+
+	// 6. DELETE item
+	delReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1", nil)
+	delReq.Header.Set("X-DBLENS-DSN", dsn)
+	delRec := httptest.NewRecorder()
+	router.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST DELETE, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+}
+
+
 
 
 
