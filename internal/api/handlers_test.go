@@ -2462,6 +2462,215 @@ func TestRestEndpointsTruthyReadOnlyAndMaxBytesLimit(t *testing.T) {
 	}
 }
 
+func TestMaskedExportStreaming(t *testing.T) {
+	dbFile := "/tmp/dblens_api_mask_export_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE customers (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			email TEXT,
+			credit_card TEXT,
+			balance REAL
+		);
+		INSERT INTO customers (id, name, email, credit_card, balance)
+		VALUES (1, 'Alice Smith', 'alice.smith@example.com', '4532015112830366', 150.00);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create customers table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Export CSV with Redact Strategy
+	reqCSV := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=csv&mask=true&mask_strategy=redact", nil)
+	reqCSV.Header.Set("X-DBLENS-DSN", dsn)
+	recCSV := httptest.NewRecorder()
+	router.ServeHTTP(recCSV, reqCSV)
+
+	if recCSV.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked CSV export, got %d: %s", recCSV.Code, recCSV.Body.String())
+	}
+	rdr := csv.NewReader(recCSV.Body)
+	csvRecords, err := rdr.ReadAll()
+	if err != nil {
+		t.Fatalf("failed to read CSV: %v", err)
+	}
+	if len(csvRecords) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(csvRecords))
+	}
+	// Row 1: id=1 (unmasked), name=[REDACTED], email=[REDACTED], credit_card=[REDACTED], balance=150
+	if csvRecords[1][0] != "1" || csvRecords[1][1] != "[REDACTED]" || csvRecords[1][2] != "[REDACTED]" || csvRecords[1][3] != "[REDACTED]" {
+		t.Fatalf("unexpected redacted row: %v", csvRecords[1])
+	}
+	if csvRecords[1][4] != "150" {
+		t.Fatalf("unexpected balance: %s", csvRecords[1][4])
+	}
+
+	// 2. Export JSON with Partial Strategy
+	reqJSON := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=json&mask=true&mask_strategy=partial", nil)
+	reqJSON.Header.Set("X-DBLENS-DSN", dsn)
+	recJSON := httptest.NewRecorder()
+	router.ServeHTTP(recJSON, reqJSON)
+
+	if recJSON.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked JSON export, got %d", recJSON.Code)
+	}
+	var jsonRows []map[string]interface{}
+	if err := json.Unmarshal(recJSON.Body.Bytes(), &jsonRows); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(jsonRows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(jsonRows))
+	}
+	emailVal, _ := jsonRows[0]["email"].(string)
+	if !strings.HasPrefix(emailVal, "a***@") || !strings.HasSuffix(emailVal, "@example.com") {
+		t.Fatalf("unexpected masked email: %s", emailVal)
+	}
+	ccVal, _ := jsonRows[0]["credit_card"].(string)
+	if !strings.HasSuffix(ccVal, "0366") || !strings.Contains(ccVal, "••••") {
+		t.Fatalf("unexpected masked card: %s", ccVal)
+	}
+
+	// 3. Export SQL with Hash Strategy
+	reqSQL := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=sql&mask=true&mask_strategy=hash", nil)
+	reqSQL.Header.Set("X-DBLENS-DSN", dsn)
+	recSQL := httptest.NewRecorder()
+	router.ServeHTTP(recSQL, reqSQL)
+
+	if recSQL.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked SQL export, got %d", recSQL.Code)
+	}
+	sqlBody := recSQL.Body.String()
+	if !strings.Contains(sqlBody, "hash_") {
+		t.Fatalf("expected hash_ in SQL export, got: %s", sqlBody)
+	}
+	if strings.Contains(sqlBody, "alice.smith@example.com") {
+		t.Fatalf("raw email leaked in masked SQL export: %s", sqlBody)
+	}
+
+	// 4. Export JSON with Faker Strategy
+	reqFaker := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=json&mask=true&mask_strategy=faker", nil)
+	reqFaker.Header.Set("X-DBLENS-DSN", dsn)
+	recFaker := httptest.NewRecorder()
+	router.ServeHTTP(recFaker, reqFaker)
+
+	if recFaker.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on faker JSON export, got %d", recFaker.Code)
+	}
+	var fakerRows []map[string]interface{}
+	if err := json.Unmarshal(recFaker.Body.Bytes(), &fakerRows); err != nil {
+		t.Fatalf("failed to parse faker JSON: %v", err)
+	}
+	fakerEmail := fakerRows[0]["email"].(string)
+	if fakerEmail == "alice.smith@example.com" || !strings.Contains(fakerEmail, "@") {
+		t.Fatalf("unexpected faker email: %s", fakerEmail)
+	}
+}
+
+func TestMaskDetectEndpoint(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	body := map[string]interface{}{
+		"columns": []string{"id", "email", "cell_phone", "ssn", "title", "user_ip"},
+		"samples": map[string]string{
+			"email":      "test@example.com",
+			"cell_phone": "+1-555-123-4567",
+			"ssn":        "123-45-6789",
+			"user_ip":    "10.0.0.1",
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/connections/default/mask/detect", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Detected map[string]string `json:"detected"`
+			Columns  []struct {
+				Column  string `json:"column"`
+				PIIType string `json:"pii_type"`
+				IsPII   bool   `json:"is_pii"`
+			} `json:"columns"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Data.Detected["email"] != "email" {
+		t.Errorf("expected email detection, got: %s", resp.Data.Detected["email"])
+	}
+	if resp.Data.Detected["cell_phone"] != "phone" {
+		t.Errorf("expected phone detection, got: %s", resp.Data.Detected["cell_phone"])
+	}
+	if resp.Data.Detected["ssn"] != "ssn" {
+		t.Errorf("expected ssn detection, got: %s", resp.Data.Detected["ssn"])
+	}
+	if resp.Data.Detected["user_ip"] != "ip" {
+		t.Errorf("expected ip detection, got: %s", resp.Data.Detected["user_ip"])
+	}
+	if _, ok := resp.Data.Detected["id"]; ok {
+		t.Errorf("id should not be detected as PII")
+	}
+}
+
+func TestMaskPreviewEndpoint(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// Test direct rows preview
+	body := map[string]interface{}{
+		"strategy": "redact",
+		"rows": []map[string]interface{}{
+			{"id": 1, "email": "bob@domain.org", "first_name": "Bob"},
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/connections/default/mask/preview", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			Strategy string                   `json:"strategy"`
+			Rows     []map[string]interface{} `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode preview response: %v", err)
+	}
+
+	if len(resp.Data.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(resp.Data.Rows))
+	}
+	if resp.Data.Rows[0]["email"] != "[REDACTED]" || resp.Data.Rows[0]["first_name"] != "[REDACTED]" {
+		t.Fatalf("unexpected preview rows: %v", resp.Data.Rows[0])
+	}
+}
+
 
 
 
