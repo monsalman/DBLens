@@ -1,13 +1,13 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.1.22",
+  "version": "0.1.23",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "node --experimental-strip-types src/features/editor/sqlVariableParser.test.ts && node --experimental-strip-types src/features/grid/stagedMutations.test.ts && node --experimental-strip-types src/features/json/jsonPathHelper.test.ts && node --experimental-strip-types src/features/dump/dumpClient.test.ts && node --experimental-strip-types src/features/rest/codeGenerators.test.ts && node --experimental-strip-types src/lib/masker.test.ts && node --experimental-strip-types src/features/privilege/privilegeHelper.test.ts",
+    "test": "node --experimental-strip-types src/features/editor/sqlVariableParser.test.ts && node --experimental-strip-types src/features/grid/stagedMutations.test.ts && node --experimental-strip-types src/features/json/jsonPathHelper.test.ts && node --experimental-strip-types src/features/dump/dumpClient.test.ts && node --experimental-strip-types src/features/rest/codeGenerators.test.ts && node --experimental-strip-types src/lib/masker.test.ts && node --experimental-strip-types src/features/privilege/privilegeHelper.test.ts && node --experimental-strip-types src/features/editor/aiAssistant.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
