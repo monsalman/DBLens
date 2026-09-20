@@ -30,7 +30,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN", "X-DBLENS-READONLY"},
-		ExposedHeaders:   []string{"Link"},
+		ExposedHeaders:   []string{"Link", "X-Total-Count"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -79,6 +79,14 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/processes", h.GetProcesses)
 	api.Post("/connections/{connId}/processes/kill", h.KillProcess)
 	api.Get("/connections/{connId}/health", h.GetDatabaseHealth)
+	api.Get("/connections/{connId}/rest/{table}", h.RestGet)
+	api.Get("/connections/{connId}/rest/{schema}/{table}", h.RestGet)
+	api.Post("/connections/{connId}/rest/{table}", h.RestPost)
+	api.Post("/connections/{connId}/rest/{schema}/{table}", h.RestPost)
+	api.Patch("/connections/{connId}/rest/{table}", h.RestPatch)
+	api.Patch("/connections/{connId}/rest/{schema}/{table}", h.RestPatch)
+	api.Delete("/connections/{connId}/rest/{table}", h.RestDelete)
+	api.Delete("/connections/{connId}/rest/{schema}/{table}", h.RestDelete)
 
 	r.Mount("/api", api)
 

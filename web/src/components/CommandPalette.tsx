@@ -19,6 +19,7 @@ import {
   Activity,
   ShieldCheck,
   Archive,
+  Code2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -95,6 +96,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   connections,
   activeConnId,
   selectedSchema,
+  selectedTable,
   isDark,
   onSwitchConnection,
   onSelectTable,
@@ -330,6 +332,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         keywords: ['restore', 'import', 'backup', 'sql', 'recover'],
         onSelect: () => {
           useAppStore.getState().setIsDumpModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_rest_playground',
+        title: 'Open REST API Playground',
+        subtitle: 'Instant Table REST API endpoints, filter testbench & code snippets',
+        category: 'Actions',
+        icon: Code2,
+        badge: 'REST',
+        keywords: ['rest', 'api', 'http', 'postgrest', 'curl', 'testbench', 'playground', 'endpoint'],
+        onSelect: () => {
+          useAppStore.getState().openRestModal(selectedTable || undefined, selectedSchema)
           closePalette()
         },
       })

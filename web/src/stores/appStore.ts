@@ -86,6 +86,11 @@ interface AppState {
   setIsAddConnOpen: (open: boolean) => void
   isDumpModalOpen: boolean
   setIsDumpModalOpen: (open: boolean) => void
+  isRestModalOpen: boolean
+  setIsRestModalOpen: (open: boolean) => void
+  restModalTarget: { schema?: string; table?: string } | null
+  openRestModal: (table?: string, schema?: string) => void
+  closeRestModal: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -303,6 +308,15 @@ export const useAppStore = create<AppState>()(
       setIsAddConnOpen: (isAddConnOpen) => set({ isAddConnOpen }),
       isDumpModalOpen: false,
       setIsDumpModalOpen: (isDumpModalOpen) => set({ isDumpModalOpen }),
+      isRestModalOpen: false,
+      setIsRestModalOpen: (isRestModalOpen) => set({ isRestModalOpen }),
+      restModalTarget: null,
+      openRestModal: (table, schema) =>
+        set({
+          isRestModalOpen: true,
+          restModalTarget: table ? { table, schema } : null,
+        }),
+      closeRestModal: () => set({ isRestModalOpen: false, restModalTarget: null }),
 
       peekDrawer: {
         isOpen: false,

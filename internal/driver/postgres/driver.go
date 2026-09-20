@@ -646,12 +646,7 @@ func (p *PostgresDriver) ExecuteQuery(ctx context.Context, rawSql string) (*type
 }
 
 func (p *PostgresDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
-	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-
 	compiledSql := trimmed
 	var args []interface{}
 	var err error
@@ -661,11 +656,19 @@ func (p *PostgresDriver) ExecuteQueryWithParams(ctx context.Context, rawSql stri
 			return nil, err
 		}
 	}
+	return p.ExecuteRaw(ctx, compiledSql, args...)
+}
 
-	upper := strings.ToUpper(compiledSql)
+func (p *PostgresDriver) ExecuteRaw(ctx context.Context, rawSql string, args ...interface{}) (*types.QueryResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	trimmed := strings.TrimSpace(rawSql)
+	upper := strings.ToUpper(trimmed)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "WITH") {
-		rows, err := p.db.QueryContext(ctxTimeout, compiledSql, args...)
+		rows, err := p.db.QueryContext(ctxTimeout, trimmed, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -702,7 +705,7 @@ func (p *PostgresDriver) ExecuteQueryWithParams(ctx context.Context, rawSql stri
 		}, nil
 	}
 
-	res, err := p.db.ExecContext(ctxTimeout, compiledSql, args...)
+	res, err := p.db.ExecContext(ctxTimeout, trimmed, args...)
 	if err != nil {
 		return nil, err
 	}

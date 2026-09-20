@@ -17,6 +17,7 @@ import (
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
+	"github.com/dblens/dblens/internal/rest"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -1890,5 +1891,72 @@ func (h *Handler) GetDatabaseHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	sendJSON(w, http.StatusOK, report)
 }
+
+func getRestTarget(r *http.Request) (string, string) {
+	table := chi.URLParam(r, "table")
+	schema := chi.URLParam(r, "schema")
+	if schema == "" {
+		schema = r.URL.Query().Get("schema")
+	}
+	return schema, table
+}
+
+func (h *Handler) isRestReadOnly(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") ||
+		strings.EqualFold(r.URL.Query().Get("readonly"), "true")
+}
+
+func (h *Handler) RestGet(w http.ResponseWriter, r *http.Request) {
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rest.HandleGet(w, r, entry.Driver, schema, table)
+}
+
+func (h *Handler) RestPost(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rest.HandlePost(w, r, entry.Driver, schema, table)
+}
+
+func (h *Handler) RestPatch(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rest.HandlePatch(w, r, entry.Driver, schema, table)
+}
+
+func (h *Handler) RestDelete(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rest.HandleDelete(w, r, entry.Driver, schema, table)
+}
+
 
 
