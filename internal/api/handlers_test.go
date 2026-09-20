@@ -2136,6 +2136,125 @@ func TestSafeModeReadOnlyEnforcement(t *testing.T) {
 	}
 }
 
+func TestDumpAndRestoreAPI(t *testing.T) {
+	dbFile := "/tmp/dblens_api_dump_test.db"
+	restoreFile := "/tmp/dblens_api_restore_test.db"
+	_ = os.Remove(dbFile)
+	_ = os.Remove(restoreFile)
+	defer os.Remove(dbFile)
+	defer os.Remove(restoreFile)
+
+	dsn := "sqlite://" + dbFile
+	restoreDSN := "sqlite://" + restoreFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create sqlite: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			price REAL
+		);
+		INSERT INTO products (id, name, price) VALUES (1, 'Widget', 19.99);
+		INSERT INTO products (id, name, price) VALUES (2, 'Gadget', 49.95);
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Plain SQL Dump
+	dumpReq := httptest.NewRequest("GET", "/api/connections/default/dump?database=shop", nil)
+	dumpReq.Header.Set("X-DBLENS-DSN", dsn)
+	dumpRec := httptest.NewRecorder()
+	router.ServeHTTP(dumpRec, dumpReq)
+
+	if dumpRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on dump, got %d: %s", dumpRec.Code, dumpRec.Body.String())
+	}
+	if dumpRec.Header().Get("Content-Type") != "application/sql" {
+		t.Fatalf("expected Content-Type application/sql, got %s", dumpRec.Header().Get("Content-Type"))
+	}
+	disposition := dumpRec.Header().Get("Content-Disposition")
+	if !strings.Contains(disposition, "attachment; filename=\"dblens-dump-shop-") || !strings.HasSuffix(disposition, ".sql\"") {
+		t.Fatalf("unexpected Content-Disposition: %s", disposition)
+	}
+	dumpBody := dumpRec.Body.String()
+	if !strings.Contains(dumpBody, "CREATE TABLE") || !strings.Contains(dumpBody, "Widget") {
+		t.Fatalf("expected CREATE TABLE and Widget in dump body, got: %s", dumpBody)
+	}
+
+	// 2. Gzip Dump
+	gzReq := httptest.NewRequest("GET", "/api/connections/default/dump?gzip=true&database=shop", nil)
+	gzReq.Header.Set("X-DBLENS-DSN", dsn)
+	gzRec := httptest.NewRecorder()
+	router.ServeHTTP(gzRec, gzReq)
+
+	if gzRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on gzip dump, got %d: %s", gzRec.Code, gzRec.Body.String())
+	}
+	if gzRec.Header().Get("Content-Type") != "application/gzip" {
+		t.Fatalf("expected Content-Type application/gzip, got %s", gzRec.Header().Get("Content-Type"))
+	}
+	gzDisp := gzRec.Header().Get("Content-Disposition")
+	if !strings.Contains(gzDisp, ".sql.gz\"") {
+		t.Fatalf("expected .sql.gz filename in Content-Disposition, got %s", gzDisp)
+	}
+	gzBytes := gzRec.Body.Bytes()
+	if len(gzBytes) < 2 || gzBytes[0] != 0x1f || gzBytes[1] != 0x8b {
+		t.Fatalf("expected gzip magic bytes in response, got %x", gzBytes[:2])
+	}
+
+	// 3. Restore to new DB using raw stream
+	restoreReq := httptest.NewRequest("POST", "/api/connections/default/restore", bytes.NewReader(gzBytes))
+	restoreReq.Header.Set("X-DBLENS-DSN", restoreDSN)
+	restoreReq.Header.Set("Content-Type", "application/gzip")
+	restoreRec := httptest.NewRecorder()
+	router.ServeHTTP(restoreRec, restoreReq)
+
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on restore, got %d: %s", restoreRec.Code, restoreRec.Body.String())
+	}
+	var restoreResp map[string]interface{}
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreResp); err != nil {
+		t.Fatalf("failed to parse restore JSON: %v", err)
+	}
+	if restoreResp["total"].(float64) == 0 || restoreResp["executed"].(float64) == 0 {
+		t.Fatalf("expected non-zero total and executed: %v", restoreResp)
+	}
+
+	// Verify data restored in restoreDSN
+	restoreEntry, err := mgr.GetByDSN(restoreDSN)
+	if err != nil {
+		t.Fatalf("failed to connect restored db: %v", err)
+	}
+	defer restoreEntry.Driver.Close()
+	rowsRes, err := restoreEntry.Driver.ExecuteQuery(ctx, "SELECT count(*) FROM products;")
+	if err != nil {
+		t.Fatalf("failed to query restored products: %v", err)
+	}
+	if len(rowsRes.Rows) == 0 || rowsRes.Rows[0][0].(int64) != 2 {
+		t.Fatalf("expected 2 restored rows, got %v", rowsRes.Rows)
+	}
+
+	// 4. Restore under Read-Only header must be 403
+	roReq := httptest.NewRequest("POST", "/api/connections/default/restore", strings.NewReader("SELECT 1;"))
+	roReq.Header.Set("X-DBLENS-DSN", restoreDSN)
+	roReq.Header.Set("X-DBLENS-READONLY", "true")
+	roRec := httptest.NewRecorder()
+	router.ServeHTTP(roRec, roReq)
+
+	if roRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for restore under readonly, got %d", roRec.Code)
+	}
+}
+
 
 
 
