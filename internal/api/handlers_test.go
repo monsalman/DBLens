@@ -2671,6 +2671,121 @@ func TestMaskPreviewEndpoint(t *testing.T) {
 	}
 }
 
+func TestPrivilegeEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_privilege_api_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE accounts (
+			id INTEGER PRIMARY KEY,
+			username TEXT NOT NULL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create accounts table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. GET Privileges
+	getReq := httptest.NewRequest("GET", "/api/connections/default/privileges", nil)
+	getReq.Header.Set("X-DBLENS-DSN", dsn)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /privileges, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Dialect string   `json:"dialect"`
+			Roles   []struct {
+				Name string `json:"name"`
+			} `json:"roles"`
+			Tables []string `json:"tables"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("failed to unmarshal GET /privileges: %v", err)
+	}
+	if getResp.Data.Dialect != "sqlite" {
+		t.Errorf("expected dialect sqlite, got %s", getResp.Data.Dialect)
+	}
+	if len(getResp.Data.Roles) == 0 || getResp.Data.Roles[0].Name != "sqlite_admin" {
+		t.Errorf("expected sqlite_admin role, got %+v", getResp.Data.Roles)
+	}
+
+	// 2. POST Preview
+	previewBody := map[string]interface{}{
+		"changes": []map[string]interface{}{
+			{
+				"role":      "sqlite_admin",
+				"schema":    "main",
+				"table":     "accounts",
+				"privilege": "SELECT",
+				"action":    "GRANT",
+			},
+		},
+		"roles": []map[string]interface{}{
+			{"name": "sqlite_admin", "isSuperuser": true},
+		},
+	}
+	pb, _ := json.Marshal(previewBody)
+	prevReq := httptest.NewRequest("POST", "/api/connections/default/privileges/preview", bytes.NewReader(pb))
+	prevReq.Header.Set("X-DBLENS-DSN", dsn)
+	prevRec := httptest.NewRecorder()
+	router.ServeHTTP(prevRec, prevReq)
+
+	if prevRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on POST /privileges/preview, got %d: %s", prevRec.Code, prevRec.Body.String())
+	}
+
+	var prevResp struct {
+		Data struct {
+			Statements []string `json:"statements"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(prevRec.Body.Bytes(), &prevResp); err != nil {
+		t.Fatalf("failed to decode preview response: %v", err)
+	}
+	if len(prevResp.Data.Statements) != 1 {
+		t.Errorf("expected 1 statement in preview, got %d", len(prevResp.Data.Statements))
+	}
+
+	// 3. POST Apply with ReadOnly header -> 403 Forbidden
+	applyReq := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", bytes.NewReader(pb))
+	applyReq.Header.Set("X-DBLENS-DSN", dsn)
+	applyReq.Header.Set("X-DBLENS-READONLY", "true")
+	applyRec := httptest.NewRecorder()
+	router.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden on readonly apply, got %d", applyRec.Code)
+	}
+
+	// 4. POST Apply writable -> 200 OK
+	applyReq2 := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", bytes.NewReader(pb))
+	applyReq2.Header.Set("X-DBLENS-DSN", dsn)
+	applyRec2 := httptest.NewRecorder()
+	router.ServeHTTP(applyRec2, applyReq2)
+
+	if applyRec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on apply, got %d: %s", applyRec2.Code, applyRec2.Body.String())
+	}
+}
+
+
 
 
 
