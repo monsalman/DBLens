@@ -1051,6 +1051,105 @@ export const api = {
     return json.data ?? json
   },
 
+  async downloadDatabaseDump(
+    connId: string,
+    options: {
+      schema?: string
+      tables?: string[]
+      includeSchema?: boolean
+      includeData?: boolean
+      gzip?: boolean
+      database?: string
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<void> {
+    const dsn = this._getDSN(connId, profiles)
+    const params = new URLSearchParams()
+    if (options.schema) params.set('schema', options.schema)
+    if (options.tables && options.tables.length > 0) {
+      params.set('tables', options.tables.join(','))
+    }
+    if (options.includeSchema !== undefined) {
+      params.set('includeSchema', String(options.includeSchema))
+    }
+    if (options.includeData !== undefined) {
+      params.set('includeData', String(options.includeData))
+    }
+    if (options.gzip !== undefined) {
+      params.set('gzip', String(options.gzip))
+    }
+    if (options.database) {
+      params.set('database', options.database)
+    }
+
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+
+    const res = await fetch(`/api/connections/${connId}/dump?${params.toString()}`, {
+      headers,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Dump failed')
+    }
+
+    const disposition = res.headers.get('Content-Disposition')
+    let filename = options.gzip ? 'dblens-dump.sql.gz' : 'dblens-dump.sql'
+    if (disposition) {
+      const match = disposition.match(/filename="?([^";]+)"?/)
+      if (match && match[1]) {
+        filename = match[1]
+      }
+    }
+
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
+
+  async restoreDatabaseDump(
+    connId: string,
+    file: File,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ total: number; executed: number; errors: string[] }> {
+    const dsn = this._getDSN(connId, profiles)
+    const formData = new FormData()
+    formData.append('file', file)
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    const res = await fetch(`/api/connections/${connId}/restore`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Restore failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
   async compareSchema(
     connId: string,
     req: SchemaDiffRequest,

@@ -16,6 +16,7 @@ import (
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/dump"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -1341,6 +1342,163 @@ func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
 		"statementsExecuted": executedCount,
 		"affectedRows":       totalAffected,
 		"message":            fmt.Sprintf("Successfully executed %d SQL statements", executedCount),
+	})
+}
+
+func sanitizeDumpDbName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	res := strings.Trim(b.String(), "_")
+	if res == "" {
+		return "db"
+	}
+	return res
+}
+
+func (h *Handler) DumpDatabase(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	q := r.URL.Query()
+	schema := strings.TrimSpace(q.Get("schema"))
+	tablesParam := strings.TrimSpace(q.Get("tables"))
+	var tables []string
+	if tablesParam != "" {
+		for _, t := range strings.Split(tablesParam, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				if hasControlChars(t) {
+					sendError(w, http.StatusBadRequest, "invalid table parameter")
+					return
+				}
+				tables = append(tables, t)
+			}
+		}
+	}
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "invalid schema parameter")
+		return
+	}
+
+	includeSchema := true
+	if v := q.Get("includeSchema"); v != "" {
+		includeSchema = strings.EqualFold(v, "true") || v == "1"
+	}
+	includeData := true
+	if v := q.Get("includeData"); v != "" {
+		includeData = strings.EqualFold(v, "true") || v == "1"
+	}
+	useGzip := false
+	if v := q.Get("gzip"); v != "" {
+		useGzip = strings.EqualFold(v, "true") || v == "1"
+	}
+
+	dbName := strings.TrimSpace(q.Get("database"))
+	if dbName == "" {
+		dbName = schema
+	}
+	if dbName == "" {
+		dbName = chi.URLParam(r, "connId")
+	}
+	if dbName == "" {
+		dbName = "db"
+	}
+	cleanDb := sanitizeDumpDbName(dbName)
+	timestamp := time.Now().UTC().Format("20060102-150405")
+
+	var filename, contentType string
+	if useGzip {
+		filename = fmt.Sprintf("dblens-dump-%s-%s.sql.gz", cleanDb, timestamp)
+		contentType = "application/gzip"
+	} else {
+		filename = fmt.Sprintf("dblens-dump-%s-%s.sql", cleanDb, timestamp)
+		contentType = "application/sql"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	opts := dump.DumpOptions{
+		Schema:        schema,
+		Tables:        tables,
+		IncludeSchema: includeSchema,
+		IncludeData:   includeData,
+		UseGzip:       useGzip,
+	}
+
+	if err := dump.GenerateDump(r.Context(), entry.Driver, w, opts); err != nil {
+		return
+	}
+}
+
+func (h *Handler) RestoreDatabase(w http.ResponseWriter, r *http.Request) {
+	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20) // 100MB limit
+	var reader io.Reader = r.Body
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			sendError(w, http.StatusBadRequest, "failed to parse multipart form: "+err.Error())
+			return
+		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
+
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			sendError(w, http.StatusBadRequest, "file field is required in multipart form: "+err.Error())
+			return
+		}
+		defer file.Close()
+		reader = file
+	}
+
+	result, err := dump.RestoreDump(r.Context(), entry.Driver, reader)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "restore failed: "+err.Error())
+		return
+	}
+
+	if result.Errors == nil {
+		result.Errors = []string{}
+	}
+
+	payload := map[string]interface{}{
+		"total":    result.Total,
+		"executed": result.Executed,
+		"errors":   result.Errors,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"total":    result.Total,
+		"executed": result.Executed,
+		"errors":   result.Errors,
+		"data":     payload,
 	})
 }
 

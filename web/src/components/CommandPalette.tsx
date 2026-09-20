@@ -18,6 +18,7 @@ import {
   GitCompare,
   Activity,
   ShieldCheck,
+  Archive,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -305,6 +306,34 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     if (activeConnId) {
+      items.push({
+        id: 'action:dump_database',
+        title: 'Database Dump & Snapshot',
+        subtitle: 'Export logical backup (.sql / .sql.gz) with topological ordering',
+        category: 'Actions',
+        icon: Archive,
+        badge: 'BACKUP',
+        keywords: ['dump', 'backup', 'export', 'snapshot', 'sql', 'gzip'],
+        onSelect: () => {
+          useAppStore.getState().setIsDumpModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:restore_database',
+        title: 'Database Restore',
+        subtitle: 'Restore database from .sql or .sql.gz dump',
+        category: 'Actions',
+        icon: Archive,
+        badge: 'RESTORE',
+        keywords: ['restore', 'import', 'backup', 'sql', 'recover'],
+        onSelect: () => {
+          useAppStore.getState().setIsDumpModalOpen(true)
+          closePalette()
+        },
+      })
+
       items.push({
         id: 'action:disconnect',
         title: 'Disconnect Active Connection',

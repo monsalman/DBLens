@@ -84,6 +84,8 @@ interface AppState {
   // Modals & Drawers
   isAddConnOpen: boolean
   setIsAddConnOpen: (open: boolean) => void
+  isDumpModalOpen: boolean
+  setIsDumpModalOpen: (open: boolean) => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -299,6 +301,8 @@ export const useAppStore = create<AppState>()(
 
       isAddConnOpen: false,
       setIsAddConnOpen: (isAddConnOpen) => set({ isAddConnOpen }),
+      isDumpModalOpen: false,
+      setIsDumpModalOpen: (isDumpModalOpen) => set({ isDumpModalOpen }),
 
       peekDrawer: {
         isOpen: false,

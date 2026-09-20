@@ -18,6 +18,7 @@ type ColumnMeta struct {
 
 type ForeignKey struct {
 	Name        string `json:"name,omitempty"`
+	Table       string `json:"table,omitempty"`
 	Column      string `json:"column"`
 	RefTable    string `json:"refTable"`
 	RefColumn   string `json:"refColumn"`

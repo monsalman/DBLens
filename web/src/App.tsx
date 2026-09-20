@@ -13,6 +13,7 @@ import { DatabaseAdvisorView } from './features/advisor/DatabaseAdvisorView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
+import { DatabaseDumpModal } from './features/dump/DatabaseDumpModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -326,6 +327,7 @@ export function App() {
       />
       <PeekDrawer />
       <DryRunModal />
+      <DatabaseDumpModal />
     </QueryClientProvider>
   )
 }
