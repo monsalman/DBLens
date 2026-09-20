@@ -950,14 +950,23 @@ export const api = {
     schema: string,
     table: string,
     format: 'csv' | 'json' | 'sql',
-    profiles?: ConnectionConfig[]
+    profiles?: ConnectionConfig[],
+    mask?: boolean,
+    maskStrategy?: string
   ): Promise<void> {
     const dsn = this._getDSN(connId, profiles)
-    const params = new URLSearchParams({
+    const queryParams: Record<string, string> = {
       table,
       schema: schema || '',
       format,
-    })
+    }
+    if (mask) {
+      queryParams.mask = 'true'
+      if (maskStrategy) {
+        queryParams.mask_strategy = maskStrategy
+      }
+    }
+    const params = new URLSearchParams(queryParams)
     const headers: Record<string, string> = {}
     if (dsn) {
       headers['X-DBLENS-DSN'] = dsn
@@ -1291,4 +1300,85 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async detectPII(
+    connId: string,
+    columns: string[],
+    samples?: Record<string, string>,
+    profiles?: ConnectionConfig[]
+  ): Promise<DetectPIIResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/mask/detect`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ columns, samples }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to detect PII')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async previewMask(
+    connId: string,
+    payload: PreviewMaskPayload,
+    profiles?: ConnectionConfig[]
+  ): Promise<PreviewMaskResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/mask/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to preview masked data')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+}
+
+export interface ColumnPIIInfo {
+  column: string
+  pii_type: string
+  is_pii: boolean
+}
+
+export interface DetectPIIResponse {
+  detected: Record<string, string>
+  columns: ColumnPIIInfo[]
+}
+
+export interface PreviewMaskPayload {
+  strategy?: string
+  columns?: string[]
+  rows?: Record<string, any>[]
+  table?: string
+  schema?: string
+  limit?: number
+}
+
+export interface PreviewMaskResponse {
+  strategy: string
+  columns?: string[]
+  rows: Record<string, any>[]
 }

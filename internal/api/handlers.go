@@ -17,6 +17,7 @@ import (
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
+	"github.com/dblens/dblens/internal/masker"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/go-chi/chi/v5"
 )
@@ -789,6 +790,13 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	maskParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mask")))
+	isMasking := maskParam == "true" || maskParam == "1"
+	maskStrategy := masker.Strategy(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mask_strategy"))))
+	if maskStrategy == "" {
+		maskStrategy = masker.StrategyPartial
+	}
+
 	rows, err := entry.Driver.QueryTableStream(r.Context(), schema, table)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
@@ -847,7 +855,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			_ = csvWriter.Write(record)
+			rowOut := record
+			if isMasking {
+				rowOut = masker.MaskRecord(cols, record, maskStrategy)
+			}
+			_ = csvWriter.Write(rowOut)
 			count++
 			if count%500 == 0 {
 				csvWriter.Flush()
@@ -882,6 +894,9 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 			rowMap := make(map[string]interface{}, len(cols))
 			for i, col := range cols {
 				val := colVals[i]
+				if isMasking {
+					val = masker.MaskValue(col, val, maskStrategy)
+				}
 				if b, ok := val.([]byte); ok {
 					rowMap[col] = string(b)
 				} else if t, ok := val.(time.Time); ok {
@@ -951,7 +966,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 			}
 			valStrs := make([]string, len(cols))
 			for i, val := range colVals {
-				valStrs[i] = formatSQLValue(dialect, val)
+				v := val
+				if isMasking {
+					v = masker.MaskValue(cols[i], val, maskStrategy)
+				}
+				valStrs[i] = formatSQLValue(dialect, v)
 			}
 
 			stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colsHeader, strings.Join(valStrs, ", "))
@@ -1964,6 +1983,152 @@ func (h *Handler) RestDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	rest.HandleDelete(w, r, entry.Driver, schema, table)
 }
+
+type DetectMaskRequest struct {
+	Columns []string          `json:"columns"`
+	Samples map[string]string `json:"samples"`
+}
+
+type ColumnPIIInfo struct {
+	Column  string `json:"column"`
+	PIIType string `json:"pii_type"`
+	IsPII   bool   `json:"is_pii"`
+}
+
+type DetectMaskResponse struct {
+	Detected map[string]string `json:"detected"`
+	Columns  []ColumnPIIInfo   `json:"columns"`
+}
+
+// DetectMaskPII analyzes a list of columns and optional sample values to identify PII.
+func (h *Handler) DetectMaskPII(w http.ResponseWriter, r *http.Request) {
+	var req DetectMaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	detected := make(map[string]string)
+	colInfos := make([]ColumnPIIInfo, 0, len(req.Columns))
+
+	for _, col := range req.Columns {
+		var sample string
+		if req.Samples != nil {
+			sample = req.Samples[col]
+		}
+		pii := masker.DetectPIIType(col, sample)
+		if pii != "" {
+			detected[col] = pii
+			colInfos = append(colInfos, ColumnPIIInfo{
+				Column:  col,
+				PIIType: pii,
+				IsPII:   true,
+			})
+		} else {
+			colInfos = append(colInfos, ColumnPIIInfo{
+				Column:  col,
+				PIIType: "",
+				IsPII:   false,
+			})
+		}
+	}
+
+	sendJSON(w, http.StatusOK, DetectMaskResponse{
+		Detected: detected,
+		Columns:  colInfos,
+	})
+}
+
+type PreviewMaskRequest struct {
+	Strategy string                   `json:"strategy"`
+	Columns  []string                 `json:"columns"`
+	Rows     []map[string]interface{} `json:"rows"`
+	Table    string                   `json:"table"`
+	Schema   string                   `json:"schema"`
+	Limit    int                      `json:"limit"`
+}
+
+// PreviewMaskData previews masked data using provided rows or live sample query.
+// ponytail: in-memory preview capped at 100 rows; upgrade to stream preview if multi-MB payloads requested.
+func (h *Handler) PreviewMaskData(w http.ResponseWriter, r *http.Request) {
+	var req PreviewMaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	strat := masker.Strategy(strings.ToLower(strings.TrimSpace(req.Strategy)))
+	if strat == "" {
+		strat = masker.StrategyPartial
+	}
+
+	// 1. Direct rows preview
+	if len(req.Rows) > 0 {
+		maskedRows := make([]map[string]interface{}, len(req.Rows))
+		for i, row := range req.Rows {
+			mRow := make(map[string]interface{}, len(row))
+			for k, v := range row {
+				mRow[k] = masker.MaskValue(k, v, strat)
+			}
+			maskedRows[i] = mRow
+		}
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"strategy": strat,
+			"rows":     maskedRows,
+		})
+		return
+	}
+
+	// 2. Query table preview
+	if req.Table != "" {
+		entry, err := h.resolveDriver(r)
+		if err != nil {
+			sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		limit := req.Limit
+		if limit <= 0 || limit > 100 {
+			limit = 5
+		}
+
+		res, err := entry.Driver.QueryTableData(r.Context(), types.QueryOptions{
+			Schema: req.Schema,
+			Table:  req.Table,
+			Limit:  limit,
+		})
+		if err != nil {
+			sendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		maskedRows := make([]map[string]interface{}, len(res.Rows))
+		for i, row := range res.Rows {
+			mRow := make(map[string]interface{}, len(res.Columns))
+			for j, col := range res.Columns {
+				var val interface{}
+				if j < len(row) {
+					val = row[j]
+				}
+				mRow[col] = masker.MaskValue(col, val, strat)
+			}
+			maskedRows[i] = mRow
+		}
+
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"strategy": strat,
+			"columns":  res.Columns,
+			"rows":     maskedRows,
+		})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"strategy": strat,
+		"rows":     []interface{}{},
+	})
+}
+
 
 
 

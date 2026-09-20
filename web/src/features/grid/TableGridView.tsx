@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2 } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
+import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
 import { useAppStore } from '../../stores/appStore'
 import { AddRowModal } from './AddRowModal'
 import { MockDataModal } from './MockDataModal'
@@ -47,6 +48,11 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
   const [showDiffModal, setShowDiffModal] = useState(false)
   const [isApplyingStaged, setIsApplyingStaged] = useState(false)
+  const [privacyMode, setPrivacyMode] = useState<boolean>(false)
+  const [privacyStrategy, setPrivacyStrategy] = useState<MaskStrategy>('partial')
+  const [showPrivacyMenu, setShowPrivacyMenu] = useState<boolean>(false)
+  const [maskExport, setMaskExport] = useState<boolean>(true)
+  const privacyMenuRef = useRef<HTMLDivElement>(null)
   const [jsonModal, setJsonModal] = useState<{
     isOpen: boolean
     row: Record<string, any>
@@ -60,10 +66,25 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const cancelledRef = useRef(false)
   const isCommittingRef = useRef(false)
 
+  // Keyboard shortcut Alt+M for Privacy Mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        setPrivacyMode((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setShowExportMenu(false)
+      }
+      if (privacyMenuRef.current && !privacyMenuRef.current.contains(e.target as Node)) {
+        setShowPrivacyMenu(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -182,13 +203,39 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedRows({})
   }
 
+  const colPIIMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const c of metaCols) {
+      let sample = ''
+      for (const r of rows) {
+        if (r[c.name] !== null && r[c.name] !== undefined && String(r[c.name]).trim() !== '') {
+          sample = String(r[c.name])
+          break
+        }
+      }
+      const pii = detectPIIType(c.name, sample)
+      if (pii) {
+        map.set(c.name, pii)
+      }
+    }
+    return map
+  }, [metaCols, rows])
+
   const handleExport = async (format: 'csv' | 'json' | 'sql') => {
     setShowExportMenu(false)
     if (!table) return
     setExportLoading(true)
     setInlineError(null)
     try {
-      await api.exportTableBlob(connId, schema, table, format)
+      await api.exportTableBlob(
+        connId,
+        schema,
+        table,
+        format,
+        undefined,
+        maskExport,
+        privacyStrategy
+      )
     } catch (err: any) {
       setInlineError(`Export failed: ${err?.message ?? 'Unknown error'}`)
     } finally {
@@ -203,10 +250,14 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     nullable: col.isNullable ?? true,
     isPk: !!(col.isPrimaryKey || col.isPrimary),
     fk: fkMap.get(col.name),
+    pii: colPIIMap.get(col.name),
   }))
 
-  const formatValue = (val: any) => {
+  const formatValue = (val: any, colName?: string) => {
     if (val === null || val === undefined) return <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">null</span>
+    if (privacyMode && colName && colPIIMap.has(colName)) {
+      val = maskValue(colName, val, privacyStrategy)
+    }
     if (typeof val === 'object') return JSON.stringify(val)
     return String(val)
   }
@@ -465,6 +516,65 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             
             {/* Actions */}
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Privacy Mode Toggle & Strategy Selector */}
+              <div className="relative" ref={privacyMenuRef}>
+                <div className="inline-flex items-center rounded border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setPrivacyMode(!privacyMode)}
+                    className={`flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono transition-colors cursor-pointer ${
+                      privacyMode
+                        ? 'bg-purple-500/20 text-purple-300 font-medium'
+                        : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                    }`}
+                    title="Toggle Privacy Mode (Alt+M): Mask PII columns dynamically"
+                  >
+                    <Shield className={`w-3.5 h-3.5 ${privacyMode ? 'text-purple-400' : 'text-[var(--muted)]'}`} />
+                    <span>Privacy: {privacyMode ? 'ON' : 'OFF'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPrivacyMenu(!showPrivacyMenu)}
+                    className={`px-1 py-0.5 border-l border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] transition-colors ${
+                      privacyMode ? 'bg-purple-500/20 text-purple-300' : ''
+                    }`}
+                    title="Privacy Masking Strategy"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {showPrivacyMenu && (
+                  <div className="absolute left-0 mt-1 w-44 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                    <div className="px-3 py-1 text-[10px] text-[var(--muted)] uppercase tracking-wider font-semibold border-b border-[var(--border)] mb-1">
+                      Masking Strategy
+                    </div>
+                    {(['partial', 'redact', 'hash', 'faker'] as MaskStrategy[]).map((strat) => (
+                      <button
+                        key={strat}
+                        type="button"
+                        onClick={() => {
+                          setPrivacyStrategy(strat)
+                          setPrivacyMode(true)
+                          setShowPrivacyMenu(false)
+                        }}
+                        className={`w-full text-left px-3 py-1.5 flex items-center justify-between transition-colors ${
+                          privacyStrategy === strat
+                            ? 'bg-purple-500/15 text-purple-300 font-medium'
+                            : 'text-[var(--fg)] hover:bg-[var(--hover)]'
+                        }`}
+                      >
+                        <span className="capitalize">{strat}</span>
+                        {privacyStrategy === strat && <span className="text-[10px] text-purple-400">●</span>}
+                      </button>
+                    ))}
+                    <div className="px-3 py-1 mt-1 border-t border-[var(--border)] text-[10px] text-[var(--muted)]">
+                      Shortcut: <kbd className="px-1 py-0.5 rounded bg-[var(--surface)] text-[var(--fg)]">Alt+M</kbd>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Staged Mode Toggle */}
               <button
                 type="button"
@@ -541,7 +651,19 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showExportMenu && (
-                  <div className="absolute right-0 mt-1 w-36 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                  <div className="absolute right-0 mt-1 w-48 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                    <label className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--border)] text-[11px] text-[var(--fg)] cursor-pointer hover:bg-[var(--hover)] select-none">
+                      <span className="flex items-center gap-1.5">
+                        <Shield className="w-3 h-3 text-purple-400" />
+                        <span>Sanitize / Mask PII</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={maskExport}
+                        onChange={(e) => setMaskExport(e.target.checked)}
+                        className="rounded border-[var(--border)] bg-[var(--surface)] text-purple-500 w-3.5 h-3.5"
+                      />
+                    </label>
                     <button
                       onClick={() => handleExport('csv')}
                       className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
@@ -611,6 +733,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                         <span>FK</span>
                       </span>
                     )}
+                    {c.pii && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-mono bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0"
+                        title={`PII Column: ${c.pii}`}
+                      >
+                        <Shield className="w-2.5 h-2.5" />
+                        <span>{c.pii}</span>
+                      </span>
+                    )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
@@ -646,17 +777,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     const isJsonType = !!(c.type && c.type.toLowerCase().includes('json'))
                     const jsonCheck = parseJsonSafely(val)
                     const isJson = isJsonType || jsonCheck.isJson
+                    const isMaskedPII = privacyMode && colPIIMap.has(c.name)
 
                     return (
                       <td
                         key={c.name}
                         title={
-                          isStaged
+                          isMaskedPII
+                            ? `Masked PII (${colPIIMap.get(c.name)})`
+                            : isStaged
                             ? `Staged change: ${String(staged.oldVal ?? 'NULL')} ➔ ${String(staged.newVal ?? 'NULL')}`
                             : (!hasPk ? 'Inline edit requires a primary key' : undefined)
                         }
                         className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] relative transition-colors ${
-                          hasPk && !isFkValue ? 'cursor-text' : ''
+                          hasPk && !isFkValue && !isMaskedPII ? 'cursor-text' : ''
                         } ${isPending && isEditing ? 'opacity-50' : ''} ${
                           isStaged
                             ? 'bg-amber-500/15 text-amber-300 font-semibold border border-amber-500/40 rounded-xs'
@@ -665,6 +799,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                         onDoubleClick={() => {
                           if (!hasPk) return
                           if (isFkValue) return
+                          if (isMaskedPII) return
                           startEdit(i, c.name, val)
                         }}
                       >
@@ -696,9 +831,9 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                               openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
                             }}
                             className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
-                            title={`Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
+                            title={isMaskedPII ? 'Peek disabled in Privacy Mode' : `Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
                           >
-                            <span className="truncate">{formatValue(val)}</span>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
                             <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
                           </button>
                         ) : isJson ? (
@@ -727,7 +862,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                               <span className="font-bold">{'{ }'}</span>
                               <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
                             </button>
-                            <span className="truncate">{formatValue(val)}</span>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
                           </span>
                         ) : (
                           <span className="flex items-center gap-1.5 truncate">
@@ -737,7 +872,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                                 title="Pending staged update"
                               />
                             )}
-                            <span className="truncate">{formatValue(val)}</span>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
                           </span>
                         )}
                       </td>
