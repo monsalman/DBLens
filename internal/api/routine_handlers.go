@@ -78,6 +78,13 @@ func (h *Handler) InvokeRoutine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		if strings.ToUpper(strings.TrimSpace(req.RoutineType)) == "PROCEDURE" {
+			sendError(w, http.StatusForbidden, "Connection is read-only. Procedure execution blocked by Safe Mode.")
+			return
+		}
+	}
+
 	if hasControlChars(req.Schema) || hasControlChars(req.Name) {
 		sendError(w, http.StatusBadRequest, "schema or name contains invalid control characters")
 		return

@@ -147,6 +147,7 @@ func (h *Handler) RollbackMigration(w http.ResponseWriter, r *http.Request) {
 
 	var req RollbackMigrationRequest
 	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 

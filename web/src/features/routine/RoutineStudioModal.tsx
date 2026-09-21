@@ -193,6 +193,10 @@ export const RoutineStudioModal: React.FC<Props> = ({ isOpen, onClose }) => {
   // Handle Routine Invocation
   const handleInvokeRoutine = async () => {
     if (!activeConnId || !selectedRoutine) return
+    if (isReadOnly && (selectedRoutine.routineType || '').toUpperCase() === 'PROCEDURE') {
+      showStatus('Connection is read-only. Procedure execution blocked by Safe Mode.', 'error')
+      return
+    }
     setInvoking(true)
     setInvokeResult(null)
     try {

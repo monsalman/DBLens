@@ -181,10 +181,25 @@ func (r *wkbReader) readFloat64(order binary.ByteOrder) (float64, error) {
 	return math.Float64frombits(bits), nil
 }
 
+const (
+	maxWKBItems          = 1_000_000
+	maxWKBRecursionDepth = 32
+)
+
+func checkWKBAllocation(n uint32, minBytesPerItem int, remaining int) error {
+	if n > maxWKBItems {
+		return fmt.Errorf("element count %d exceeds maximum allowed limit %d", n, maxWKBItems)
+	}
+	if remaining < 0 || uint64(n)*uint64(minBytesPerItem) > uint64(remaining) {
+		return fmt.Errorf("insufficient buffer for %d elements (requires at least %d bytes, remaining: %d)", n, uint64(n)*uint64(minBytesPerItem), remaining)
+	}
+	return nil
+}
+
 // ParseWKB parses binary WKB or PostGIS EWKB or MySQL spatial binary data.
 func ParseWKB(data []byte, defaultSRID int) (*Geometry, error) {
-	if len(data) < 5 {
-		return nil, errors.New("WKB data too short")
+	if len(data) == 0 {
+		return nil, errors.New("empty WKB data")
 	}
 
 	// Detect MySQL Spatial format: 4-byte SRID prefix + standard WKB
@@ -193,7 +208,7 @@ func ParseWKB(data []byte, defaultSRID int) (*Geometry, error) {
 	if len(data) >= 9 && (data[4] == 0 || data[4] == 1) && (data[0] != 0 && data[0] != 1) {
 		mySRID := int(binary.LittleEndian.Uint32(data[0:4]))
 		r := &wkbReader{data: data[4:], pos: 0}
-		geom, err := parseWKBGeometry(r, mySRID)
+		geom, err := parseWKBGeometry(r, mySRID, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +220,7 @@ func ParseWKB(data []byte, defaultSRID int) (*Geometry, error) {
 	}
 
 	r := &wkbReader{data: data, pos: 0}
-	geom, err := parseWKBGeometry(r, defaultSRID)
+	geom, err := parseWKBGeometry(r, defaultSRID, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +228,11 @@ func ParseWKB(data []byte, defaultSRID int) (*Geometry, error) {
 	return geom, nil
 }
 
-func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
+func parseWKBGeometry(r *wkbReader, inheritSRID int, depth int) (*Geometry, error) {
+	if depth > maxWKBRecursionDepth {
+		return nil, errors.New("maximum WKB recursion depth exceeded")
+	}
+
 	byteOrderByte, err := r.readByte()
 	if err != nil {
 		return nil, err
@@ -305,6 +324,16 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		if err != nil {
 			return nil, err
 		}
+		pointSize := 16
+		if hasZ {
+			pointSize += 8
+		}
+		if hasM {
+			pointSize += 8
+		}
+		if err := checkWKBAllocation(n, pointSize, r.remaining()); err != nil {
+			return nil, err
+		}
 		coords := make([][]float64, n)
 		for i := 0; i < int(n); i++ {
 			pt, err := readPoint()
@@ -321,10 +350,23 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkWKBAllocation(numRings, 4, r.remaining()); err != nil {
+			return nil, err
+		}
 		rings := make([][][]float64, numRings)
+		pointSize := 16
+		if hasZ {
+			pointSize += 8
+		}
+		if hasM {
+			pointSize += 8
+		}
 		for ringIdx := 0; ringIdx < int(numRings); ringIdx++ {
 			n, err := r.readUint32(order)
 			if err != nil {
+				return nil, err
+			}
+			if err := checkWKBAllocation(n, pointSize, r.remaining()); err != nil {
 				return nil, err
 			}
 			ring := make([][]float64, n)
@@ -345,9 +387,12 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkWKBAllocation(n, 21, r.remaining()); err != nil {
+			return nil, err
+		}
 		coords := make([][]float64, n)
 		for i := 0; i < int(n); i++ {
-			sub, err := parseWKBGeometry(r, srid)
+			sub, err := parseWKBGeometry(r, srid, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -365,9 +410,12 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkWKBAllocation(n, 9, r.remaining()); err != nil {
+			return nil, err
+		}
 		lines := make([][][]float64, n)
 		for i := 0; i < int(n); i++ {
-			sub, err := parseWKBGeometry(r, srid)
+			sub, err := parseWKBGeometry(r, srid, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -385,9 +433,12 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := checkWKBAllocation(n, 9, r.remaining()); err != nil {
+			return nil, err
+		}
 		polys := make([][][][]float64, n)
 		for i := 0; i < int(n); i++ {
-			sub, err := parseWKBGeometry(r, srid)
+			sub, err := parseWKBGeometry(r, srid, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -400,14 +451,20 @@ func parseWKBGeometry(r *wkbReader, inheritSRID int) (*Geometry, error) {
 		geom.Coordinates = polys
 
 	case 7: // GeometryCollection
+		if depth >= maxWKBRecursionDepth {
+			return nil, errors.New("maximum WKB recursion depth exceeded for GeometryCollection")
+		}
 		geom.Type = TypeGeometryCollection
 		n, err := r.readUint32(order)
 		if err != nil {
 			return nil, err
 		}
+		if err := checkWKBAllocation(n, 5, r.remaining()); err != nil {
+			return nil, err
+		}
 		geoms := make([]Geometry, n)
 		for i := 0; i < int(n); i++ {
-			sub, err := parseWKBGeometry(r, srid)
+			sub, err := parseWKBGeometry(r, srid, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -1152,6 +1209,9 @@ func calculatePathLength(pts [][]float64, isGeo bool) float64 {
 	for i := 0; i < len(pts)-1; i++ {
 		p1 := pts[i]
 		p2 := pts[i+1]
+		if len(p1) < 2 || len(p2) < 2 {
+			continue
+		}
 		if isGeo {
 			dist += haversine(p1[0], p1[1], p2[0], p2[1])
 		} else {
@@ -1199,6 +1259,11 @@ func shoelaceArea(ring [][]float64) float64 {
 	n := len(ring)
 	if n < 3 {
 		return 0
+	}
+	for _, pt := range ring {
+		if len(pt) < 2 {
+			return 0
+		}
 	}
 	var sum float64
 	for i := 0; i < n-1; i++ {

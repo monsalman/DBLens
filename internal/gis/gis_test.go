@@ -1,6 +1,8 @@
 package gis
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"strings"
 	"testing"
@@ -224,5 +226,97 @@ func TestInvalidInput(t *testing.T) {
 	_, err = Parse("POINT(invalid coordinates)", 4326)
 	if err == nil {
 		t.Errorf("expected error for malformed WKT")
+	}
+}
+
+func TestMalformedCoordinates(t *testing.T) {
+	// 1. LineString with points having len < 2
+	malformedLineJSON := `{"type":"LineString","coordinates":[[10],[20]]}`
+	geom, err := Parse(malformedLineJSON, 4326)
+	if err != nil {
+		t.Fatalf("unexpected error parsing malformed LineString: %v", err)
+	}
+	if geom.Length != 0 {
+		t.Errorf("expected 0 length for malformed coords, got %f", geom.Length)
+	}
+
+	// 2. Polygon with points having len < 2
+	malformedPolyJSON := `{"type":"Polygon","coordinates":[[[10],[20],[30]]]}`
+	geomPoly, err := Parse(malformedPolyJSON, 4326)
+	if err != nil {
+		t.Fatalf("unexpected error parsing malformed Polygon: %v", err)
+	}
+	if geomPoly.Area != 0 || geomPoly.Length != 0 {
+		t.Errorf("expected 0 area and perimeter for malformed coords, got area=%f, len=%f", geomPoly.Area, geomPoly.Length)
+	}
+
+	// 3. Direct function checks
+	if l := calculatePathLength([][]float64{{1.0}, {2.0}}, false); l != 0 {
+		t.Errorf("expected 0 path length, got %f", l)
+	}
+	if a := shoelaceArea([][]float64{{1.0}, {2.0}, {3.0}}); a != 0 {
+		t.Errorf("expected 0 shoelace area, got %f", a)
+	}
+}
+
+func TestOversizedWKBCountRejection(t *testing.T) {
+	// 1. LineString claimed count > maxWKBItems (1_000_000)
+	buf := new(bytes.Buffer)
+	buf.WriteByte(1) // LittleEndian
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2)) // LineString
+	_ = binary.Write(buf, binary.LittleEndian, uint32(1_000_001))
+	_, err := ParseWKB(buf.Bytes(), 4326)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum allowed limit") {
+		t.Fatalf("expected max count error, got: %v", err)
+	}
+
+	// 2. LineString claimed count requires more buffer than remaining
+	buf.Reset()
+	buf.WriteByte(1) // LittleEndian
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2)) // LineString
+	_ = binary.Write(buf, binary.LittleEndian, uint32(10_000)) // requires 160_000 bytes, but buffer ends
+	_, err = ParseWKB(buf.Bytes(), 4326)
+	if err == nil || !strings.Contains(err.Error(), "insufficient buffer") {
+		t.Fatalf("expected insufficient buffer error, got: %v", err)
+	}
+
+	// 3. Polygon claimed rings requires more buffer than remaining
+	buf.Reset()
+	buf.WriteByte(1)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(3)) // Polygon
+	_ = binary.Write(buf, binary.LittleEndian, uint32(100_000))
+	_, err = ParseWKB(buf.Bytes(), 4326)
+	if err == nil || !strings.Contains(err.Error(), "insufficient buffer") {
+		t.Fatalf("expected insufficient buffer error for polygon, got: %v", err)
+	}
+
+	// 4. MultiPoint claimed items exceeds buffer
+	buf.Reset()
+	buf.WriteByte(1)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(4)) // MultiPoint
+	_ = binary.Write(buf, binary.LittleEndian, uint32(50_000))
+	_, err = ParseWKB(buf.Bytes(), 4326)
+	if err == nil || !strings.Contains(err.Error(), "insufficient buffer") {
+		t.Fatalf("expected insufficient buffer error for multipoint, got: %v", err)
+	}
+}
+
+func TestDeepRecursionRejection(t *testing.T) {
+	// Construct nested GeometryCollections: depth > 32
+	var buf bytes.Buffer
+	for i := 0; i < 35; i++ {
+		buf.WriteByte(1)
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(7))
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(1))
+	}
+	// Innermost Point
+	buf.WriteByte(1)
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(1))
+	_ = binary.Write(&buf, binary.LittleEndian, float64(10.0))
+	_ = binary.Write(&buf, binary.LittleEndian, float64(20.0))
+
+	_, err := ParseWKB(buf.Bytes(), 4326)
+	if err == nil || !strings.Contains(err.Error(), "recursion depth exceeded") {
+		t.Fatalf("expected recursion depth error, got: %v", err)
 	}
 }

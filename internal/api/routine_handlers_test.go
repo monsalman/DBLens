@@ -109,6 +109,24 @@ func TestRoutineEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("Invoke Routine Procedure ReadOnly Block", func(t *testing.T) {
+		body, _ := json.Marshal(routine.InvokeRoutineRequest{
+			Name:        "my_proc",
+			RoutineType: "PROCEDURE",
+			Parameters:  []interface{}{},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/connections/c1/routines/invoke", bytes.NewReader(body))
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		req.Header.Set("X-DBLENS-READONLY", "true")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	// 4. ReadOnly Guardrail on SaveRoutine
 	t.Run("Save Routine ReadOnly Block", func(t *testing.T) {
 		body, _ := json.Marshal(api.SaveRoutinePayload{
