@@ -191,4 +191,25 @@ func TestFederationEndpoints(t *testing.T) {
 			t.Fatalf("expected 403 Forbidden, got %d: %s", rr.Code, rr.Body.String())
 		}
 	})
+
+	t.Run("Data Pipe ReadOnly Query Param Forbidden", func(t *testing.T) {
+		reqBody := api.DataPipeAPIRequest{
+			SourceConnID: "dbA",
+			SourceDSN:    dsnA,
+			SourceTable:  "users",
+			TargetConnID: "dbB",
+			TargetDSN:    dsnB,
+			TargetTable:  "users_readonly_query_fail",
+			CreateTable:  true,
+		}
+		data, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest("POST", "/api/federation/pipe?readonly=1", bytes.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden with readonly query param, got %d: %s", rr.Code, rr.Body.String())
+		}
+	})
 }

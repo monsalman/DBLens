@@ -436,3 +436,71 @@ func TestManager_DispatchEventFiltering(t *testing.T) {
 		t.Fatalf("expected 0 deliveries for unmatched UPDATE, got %d", len(deliveries))
 	}
 }
+
+func TestWebhook_SecretRetainOnUpdate(t *testing.T) {
+	mgr := NewManager()
+	connID := "conn_secret_test"
+
+	wh, err := mgr.Create(connID, Webhook{
+		Name:    "Secret Hook",
+		URL:     "https://example.com/webhook",
+		Secret:  "original-secret-123",
+		Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create webhook: %v", err)
+	}
+	if !wh.HasSecret {
+		t.Fatal("expected HasSecret to be true")
+	}
+
+	// Update with empty secret
+	wh.Name = "Secret Hook Renamed"
+	wh.Secret = ""
+	updated, err := mgr.Update(connID, wh.ID, wh)
+	if err != nil {
+		t.Fatalf("failed to update webhook: %v", err)
+	}
+	if updated.Secret != "original-secret-123" {
+		t.Fatalf("expected secret to be retained, got %q", updated.Secret)
+	}
+	if !updated.HasSecret {
+		t.Fatal("expected HasSecret to remain true")
+	}
+
+	// Update with mask "••••••••"
+	wh.Secret = "••••••••"
+	updated2, err := mgr.Update(connID, wh.ID, wh)
+	if err != nil {
+		t.Fatalf("failed to update webhook: %v", err)
+	}
+	if updated2.Secret != "original-secret-123" {
+		t.Fatalf("expected secret to be retained with mask, got %q", updated2.Secret)
+	}
+
+	// Update with new non-empty secret
+	wh.Secret = "new-secret-456"
+	updated3, err := mgr.Update(connID, wh.ID, wh)
+	if err != nil {
+		t.Fatalf("failed to update webhook: %v", err)
+	}
+	if updated3.Secret != "new-secret-456" {
+		t.Fatalf("expected secret to update, got %q", updated3.Secret)
+	}
+}
+
+func TestWebhook_SocketLevelSSRF(t *testing.T) {
+	mgr := NewManager() // uses NewSafeHTTPTransport
+
+	// 1. Dispatch to cloud metadata IP
+	log := mgr.Dispatch(context.Background(), "http://169.254.169.254/meta-data", "", nil, []byte("{}"), "INSERT", "", "", "c1")
+	if log.Error == "" {
+		t.Fatal("expected dispatch to 169.254.169.254 to fail")
+	}
+
+	// 2. Dispatch to link-local IP
+	log2 := mgr.Dispatch(context.Background(), "http://169.254.1.2/hook", "", nil, []byte("{}"), "INSERT", "", "", "c1")
+	if log2.Error == "" {
+		t.Fatal("expected dispatch to 169.254.1.2 to fail")
+	}
+}

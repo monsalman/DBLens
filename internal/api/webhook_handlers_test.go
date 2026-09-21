@@ -133,6 +133,12 @@ func TestWebhookEndpoints(t *testing.T) {
 		if resp.Data[0].ID != createdID {
 			t.Fatalf("expected ID %s, got %s", createdID, resp.Data[0].ID)
 		}
+		if resp.Data[0].Secret != "••••••••" {
+			t.Fatalf("expected masked secret ••••••••, got %q", resp.Data[0].Secret)
+		}
+		if !resp.Data[0].HasSecret {
+			t.Fatal("expected HasSecret to be true")
+		}
 	})
 
 	// 4. Test PUT /api/connections/{connId}/webhooks/{id}

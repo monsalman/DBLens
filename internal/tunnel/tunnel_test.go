@@ -310,9 +310,18 @@ func TestSSHAgentAuth(t *testing.T) {
 		AuthMethod: "agent",
 	}
 
+	// 1. By default, agent auth should be blocked by policy
+	_ = os.Unsetenv("DBLENS_ALLOW_SSH_AGENT")
+	_, err = TestTunnel(cfg)
+	if err == nil || err.Error() != "SSH agent authentication disabled by server policy" {
+		t.Fatalf("expected SSH agent authentication disabled by server policy, got: %v", err)
+	}
+
+	// 2. When enabled via env var, agent auth succeeds
+	t.Setenv("DBLENS_ALLOW_SSH_AGENT", "true")
 	res, err := TestTunnel(cfg)
 	if err != nil {
-		t.Fatalf("expected agent auth to succeed, got: %v", err)
+		t.Fatalf("expected agent auth to succeed with env flag, got: %v", err)
 	}
 	if !res.Success {
 		t.Fatalf("expected res.Success == true, got: %+v", res)
@@ -457,5 +466,61 @@ func TestExtractTargetAndRewriteDSN(t *testing.T) {
 				t.Errorf("RewriteDSN got %q, want %q", rewritten, tt.wantRewritten)
 			}
 		})
+	}
+}
+
+func TestValidateTunnelHost(t *testing.T) {
+	tests := []struct {
+		host    string
+		blocked bool
+	}{
+		{"127.0.0.1", false},
+		{"bastion.example.com", false},
+		{"10.0.0.1", false},
+		{"169.254.169.254", true},
+		{"169.254.1.1", true},
+		{"169.254.254.254", true},
+		{"metadata.google.internal", true},
+		{"foo.metadata.google.internal", true},
+		{"instance-data", true},
+		{"api.instance-data", true},
+		{"", true},
+	}
+
+	for _, tc := range tests {
+		err := ValidateTunnelHost(tc.host)
+		if tc.blocked && err == nil {
+			t.Errorf("expected host %q to be blocked, but was allowed", tc.host)
+		}
+		if !tc.blocked && err != nil {
+			t.Errorf("expected host %q to be allowed, but got: %v", tc.host, err)
+		}
+	}
+}
+
+func TestForwarderKey_Isolation(t *testing.T) {
+	tm := NewTunnelManager()
+
+	cfg1 := SSHTunnelConfig{
+		Host:       "10.0.0.1",
+		Port:       22,
+		User:       "user",
+		AuthMethod: "key",
+		PrivateKey: "key-A",
+	}
+
+	cfg2 := SSHTunnelConfig{
+		Host:       "10.0.0.1",
+		Port:       22,
+		User:       "user",
+		AuthMethod: "key",
+		PrivateKey: "key-B",
+	}
+
+	k1 := tm.forwarderKey(cfg1, "remote:5432")
+	k2 := tm.forwarderKey(cfg2, "remote:5432")
+
+	if k1 == k2 {
+		t.Fatalf("expected different forwarder keys for different private keys, got %s", k1)
 	}
 }

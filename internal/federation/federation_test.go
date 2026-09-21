@@ -335,3 +335,17 @@ func TestMapColumnType(t *testing.T) {
 		t.Errorf("expected TIMESTAMP, got %s", res)
 	}
 }
+
+func TestFederatedQuery_IdentifierValidation(t *testing.T) {
+	ctx := context.Background()
+	resolver := func(ctx context.Context, connID string) (types.Driver, error) {
+		return nil, nil
+	}
+
+	// Invalid table identifier with embedded quote injection
+	query := `SELECT * FROM [conn1]."users""drop"`
+	_, err := federation.ExecuteFederatedQuery(ctx, query, resolver, federation.QueryConfig{})
+	if err == nil {
+		t.Fatal("expected error for invalid table identifier, got nil")
+	}
+}

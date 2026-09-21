@@ -131,6 +131,35 @@ func TestTestTunnelHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("blocked metadata host returns success=false", func(t *testing.T) {
+		body, _ := json.Marshal(tunnel.SSHTunnelConfig{
+			Enabled: true,
+			Host:    "169.254.169.254",
+			User:    "bastionuser",
+		})
+		req := httptest.NewRequest("POST", "/api/tunnel/test", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var resp struct {
+			Data struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp.Data.Success {
+			t.Fatalf("expected success=false for metadata host")
+		}
+	})
+
 	t.Run("valid credentials returns success=true and latency", func(t *testing.T) {
 		body, _ := json.Marshal(tunnel.SSHTunnelConfig{
 			Enabled:    true,
