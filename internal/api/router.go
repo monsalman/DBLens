@@ -29,7 +29,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN", "X-DBLENS-READONLY"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN", "X-DBLENS-READONLY", "X-DBLENS-SSH-TUNNEL"},
 		ExposedHeaders:   []string{"Link", "X-Total-Count"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -53,6 +53,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api := chi.NewRouter()
 	api.Get("/profiles/global", h.ListGlobalProfiles)
 
+	api.Post("/tunnel/test", h.TestTunnelHandler)
 	api.Post("/connections/test", h.TestConnection)
 	api.Post("/connect", h.TestConnection)
 	api.Get("/connections/{connId}/databases", h.GetDatabases)

@@ -22,6 +22,7 @@ import (
 	"github.com/dblens/dblens/internal/masker"
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
+	"github.com/dblens/dblens/internal/tunnel"
 	"github.com/dblens/dblens/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
@@ -257,21 +258,30 @@ func (h *Handler) WebhookManager() *webhook.Manager {
 }
 
 type TestConnectionRequest struct {
-	DSN string `json:"dsn"`
+	DSN       string                 `json:"dsn"`
+	SSHTunnel *tunnel.SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
 }
 
 // resolveDriver extracts DSN from X-DBLENS-DSN header first,
 // and falls back to resolving global server-seeded connections by connId param.
 func (h *Handler) resolveDriver(r *http.Request) (*connection.PoolEntry, error) {
 	dsn := strings.TrimSpace(r.Header.Get("X-DBLENS-DSN"))
+	var tunnelCfg *tunnel.SSHTunnelConfig
+	if th := strings.TrimSpace(r.Header.Get("X-DBLENS-SSH-TUNNEL")); th != "" {
+		var tc tunnel.SSHTunnelConfig
+		if err := json.Unmarshal([]byte(th), &tc); err == nil && tc.Enabled {
+			tunnelCfg = &tc
+		}
+	}
+
 	if dsn != "" {
-		return h.mgr.GetByDSN(dsn)
+		return h.mgr.GetByDSNWithTunnel(dsn, tunnelCfg)
 	}
 
 	connID := chi.URLParam(r, "connId")
 	if connID != "" {
 		if globalDSN, ok := h.mgr.GetGlobalDSNByID(connID); ok {
-			return h.mgr.GetByDSN(globalDSN)
+			return h.mgr.GetByDSNWithTunnel(globalDSN, tunnelCfg)
 		}
 	}
 
@@ -294,7 +304,7 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dialect, err := h.mgr.TestDSN(req.DSN)
+	dialect, err := h.mgr.TestDSNWithTunnel(req.DSN, req.SSHTunnel)
 	if err != nil {
 		sendJSON(w, http.StatusOK, map[string]interface{}{
 			"success": false,

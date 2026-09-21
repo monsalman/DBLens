@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table2 } from 'lucide-react'
+import { Table2, Shield } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 
@@ -82,9 +82,20 @@ export const Sidebar: React.FC<Props> = ({
       {/* Active Connection Info */}
       {activeConn && (
         <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between gap-2 bg-[var(--surface)]/40 shrink-0">
-          <span className="font-mono text-xs font-semibold text-[var(--fg)] truncate">
-            {activeConn.label || activeConn.name || activeConn.id}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-mono text-xs font-semibold text-[var(--fg)] truncate">
+              {activeConn.label || activeConn.name || activeConn.id}
+            </span>
+            {activeConn.ssh_tunnel?.enabled && (
+              <span
+                className="inline-flex items-center gap-0.5 px-1 py-0.5 text-[9px] font-mono font-semibold rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0"
+                title="Connected via SSH Bastion Tunnel"
+              >
+                <Shield className="w-2.5 h-2.5" />
+                <span>SSH</span>
+              </span>
+            )}
+          </div>
           <EnvironmentBadge env={activeConn.environment} />
         </div>
       )}

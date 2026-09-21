@@ -72,6 +72,15 @@ export const Header: React.FC<Props> = ({
                     : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
                 }`}>
                 <span>{c.label || c.name || c.id}</span>
+                {c.ssh_tunnel?.enabled && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1 py-0.2 text-[9px] font-mono font-semibold rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                    title="SSH Bastion Tunnel Enabled"
+                  >
+                    <Shield className="w-2.5 h-2.5" />
+                    <span>SSH</span>
+                  </span>
+                )}
                 <EnvironmentBadge env={c.environment} />
                 <span className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 ${c.id === activeConnId ? 'opacity-100' : ''}`}>
                   <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(c); }} className="hover:text-[var(--fg)] p-0.5" title="Edit">

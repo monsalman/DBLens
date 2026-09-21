@@ -4,13 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/tunnel"
 )
 
 type PoolEntry struct {
@@ -20,13 +23,15 @@ type PoolEntry struct {
 }
 
 type Manager struct {
-	mu    sync.Mutex
-	pools map[string]*PoolEntry // key: SHA256(dsn)
+	mu        sync.Mutex
+	pools     map[string]*PoolEntry // key: SHA256(dsn)
+	tunnelMgr *tunnel.TunnelManager
 }
 
 func NewManager(dataDir ...string) *Manager {
 	m := &Manager{
-		pools: make(map[string]*PoolEntry),
+		pools:     make(map[string]*PoolEntry),
+		tunnelMgr: tunnel.NewTunnelManager(),
 	}
 	// Load server-seeded global connections from DBLENS_CONNECTIONS env
 	envConns := os.Getenv("DBLENS_CONNECTIONS")
@@ -66,13 +71,48 @@ func (m *Manager) openPool(dsn string) error {
 	return nil
 }
 
+func (m *Manager) TunnelManager() *tunnel.TunnelManager {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tunnelMgr == nil {
+		m.tunnelMgr = tunnel.NewTunnelManager()
+	}
+	return m.tunnelMgr
+}
+
 // GetByDSN returns (or creates on-demand) a driver for the given DSN.
 // This is the primary method for stateless per-request DSN routing.
 func (m *Manager) GetByDSN(dsn string) (*PoolEntry, error) {
+	return m.GetByDSNWithTunnel(dsn, nil)
+}
+
+// GetByDSNWithTunnel returns (or creates on-demand) a driver for the given DSN and optional SSHTunnelConfig.
+func (m *Manager) GetByDSNWithTunnel(dsn string, tunnelCfg *tunnel.SSHTunnelConfig) (*PoolEntry, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("X-DBLENS-DSN header is required")
 	}
-	key := poolKey(dsn)
+
+	effectiveDSN := dsn
+	keyDsn := dsn
+	if tunnelCfg != nil && tunnelCfg.Enabled {
+		targetHost, targetPort, err := tunnel.ExtractTarget(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("invalid DSN for SSH tunnel: %w", err)
+		}
+		targetAddr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+		fwd, err := m.TunnelManager().GetOrCreateForwarder(*tunnelCfg, targetAddr)
+		if err != nil {
+			return nil, fmt.Errorf("ssh tunnel failed: %w", err)
+		}
+		rewritten, err := tunnel.RewriteDSN(dsn, "127.0.0.1", fwd.LocalPort)
+		if err != nil {
+			return nil, fmt.Errorf("failed to rewrite DSN through SSH tunnel: %w", err)
+		}
+		effectiveDSN = rewritten
+		keyDsn = fmt.Sprintf("%s|ssh:%s:%d:%s", dsn, tunnelCfg.Host, tunnelCfg.Port, tunnelCfg.User)
+	}
+
+	key := poolKey(keyDsn)
 
 	m.mu.Lock()
 	entry, exists := m.pools[key]
@@ -84,7 +124,7 @@ func (m *Manager) GetByDSN(dsn string) (*PoolEntry, error) {
 		defer cancel()
 		if err := entry.Driver.Ping(ctx); err != nil {
 			_ = entry.Driver.Close()
-			newDrv, rErr := driver.NewDriver(dsn)
+			newDrv, rErr := driver.NewDriver(effectiveDSN)
 			if rErr != nil {
 				m.mu.Lock()
 				delete(m.pools, key)
@@ -100,7 +140,7 @@ func (m *Manager) GetByDSN(dsn string) (*PoolEntry, error) {
 	m.mu.Unlock()
 
 	// Open new pool on-demand
-	drv, err := driver.NewDriver(dsn)
+	drv, err := driver.NewDriver(effectiveDSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -110,7 +150,7 @@ func (m *Manager) GetByDSN(dsn string) (*PoolEntry, error) {
 		_ = drv.Close()
 		return nil, fmt.Errorf("database ping failed: %w", err)
 	}
-	newEntry := &PoolEntry{Driver: drv, DSN: dsn, LastUsed: time.Now()}
+	newEntry := &PoolEntry{Driver: drv, DSN: effectiveDSN, LastUsed: time.Now()}
 	m.mu.Lock()
 	m.pools[key] = newEntry
 	m.mu.Unlock()
@@ -170,7 +210,30 @@ func (m *Manager) GetGlobalDSNByID(id string) (string, bool) {
 
 // TestDSN tries to connect to a DSN without persisting, returns dialect.
 func (m *Manager) TestDSN(dsn string) (string, error) {
-	drv, err := driver.NewDriver(dsn)
+	return m.TestDSNWithTunnel(dsn, nil)
+}
+
+// TestDSNWithTunnel tries to connect to a DSN (optionally via SSH tunnel) without persisting, returns dialect.
+func (m *Manager) TestDSNWithTunnel(dsn string, tunnelCfg *tunnel.SSHTunnelConfig) (string, error) {
+	effectiveDSN := dsn
+	if tunnelCfg != nil && tunnelCfg.Enabled {
+		targetHost, targetPort, err := tunnel.ExtractTarget(dsn)
+		if err != nil {
+			return "", fmt.Errorf("invalid DSN for SSH tunnel: %w", err)
+		}
+		targetAddr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+		fwd, err := m.TunnelManager().GetOrCreateForwarder(*tunnelCfg, targetAddr)
+		if err != nil {
+			return "", fmt.Errorf("ssh tunnel failed: %w", err)
+		}
+		rewritten, err := tunnel.RewriteDSN(dsn, "127.0.0.1", fwd.LocalPort)
+		if err != nil {
+			return "", fmt.Errorf("failed to rewrite DSN through SSH tunnel: %w", err)
+		}
+		effectiveDSN = rewritten
+	}
+
+	drv, err := driver.NewDriver(effectiveDSN)
 	if err != nil {
 		return "", err
 	}

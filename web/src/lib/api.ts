@@ -4,6 +4,24 @@ import type { AIAssistantConfig } from '../features/editor/aiAssistant'
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
 
+export interface SSHTunnelConfig {
+  enabled: boolean
+  host: string
+  port: number
+  user: string
+  auth_method: 'password' | 'key' | 'agent'
+  password?: string
+  private_key?: string
+  passphrase?: string
+}
+
+export interface TunnelTestResult {
+  success: boolean
+  message: string
+  latency_ms?: number
+  banner?: string
+}
+
 export interface Profile {
   id: string
   label: string
@@ -12,6 +30,7 @@ export interface Profile {
   readOnly?: boolean
   dialect?: string   // cached after test
   environment?: 'production' | 'staging' | 'development' | 'local'
+  ssh_tunnel?: SSHTunnelConfig
 }
 
 export interface ConnectionConfig {
@@ -24,6 +43,7 @@ export interface ConnectionConfig {
   name?: string
   driver?: DatabaseDriver
   environment?: 'production' | 'staging' | 'development' | 'local'
+  ssh_tunnel?: SSHTunnelConfig
 }
 
 export interface ForeignKeyTarget {
@@ -393,14 +413,15 @@ export const api = {
     label: string = '',
     color: string = '#818cf8',
     readOnly: boolean = false,
-    environment?: 'production' | 'staging' | 'development' | 'local'
+    environment?: 'production' | 'staging' | 'development' | 'local',
+    ssh_tunnel?: SSHTunnelConfig
   ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       // Test connection first
       fetch('/api/connections/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dsn, label }),
+        body: JSON.stringify({ dsn, label, ssh_tunnel }),
       })
         .then(r => r.json())
         .then(json => {
@@ -418,6 +439,7 @@ export const api = {
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
             environment: environment || (readOnly ? 'production' : 'development'),
+            ssh_tunnel,
           }
           const existing = api.getProfiles()
           api.saveProfiles([...existing, profile])
@@ -433,13 +455,14 @@ export const api = {
     label: string = '',
     color: string = '#818cf8',
     readOnly: boolean = false,
-    environment?: 'production' | 'staging' | 'development' | 'local'
+    environment?: 'production' | 'staging' | 'development' | 'local',
+    ssh_tunnel?: SSHTunnelConfig
   ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       fetch('/api/connections/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dsn, label }),
+        body: JSON.stringify({ dsn, label, ssh_tunnel }),
       })
         .then(r => r.json())
         .then(json => {
@@ -458,6 +481,7 @@ export const api = {
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
             environment: environment || (readOnly ? 'production' : 'development'),
+            ssh_tunnel,
           }
           api.saveProfiles(profiles.map(p => (p.id === id ? updated : p)))
           resolve(updated)
@@ -471,14 +495,24 @@ export const api = {
     api.saveProfiles(profiles)
   },
 
-  testConnection(dsn: string, label: string = ''): Promise<TestConnectionResult> {
+  testConnection(dsn: string, label: string = '', ssh_tunnel?: SSHTunnelConfig): Promise<TestConnectionResult> {
     return fetch('/api/connections/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dsn, label }),
+      body: JSON.stringify({ dsn, label, ssh_tunnel }),
     })
       .then(r => r.json())
       .then(json => json.data ?? json)
+  },
+
+  async testSSHTunnel(config: SSHTunnelConfig): Promise<TunnelTestResult> {
+    const res = await fetch('/api/tunnel/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    const json = await res.json()
+    return json.data ?? json
   },
 
   // Global profiles from server env DBLENS_CONNECTIONS
@@ -527,6 +561,9 @@ export const api = {
       : allProfiles.find(p => p.dsn === dsn)
     if (match?.readOnly) {
       headers['X-DBLENS-READONLY'] = 'true'
+    }
+    if (match?.ssh_tunnel?.enabled) {
+      headers['X-DBLENS-SSH-TUNNEL'] = JSON.stringify(match.ssh_tunnel)
     }
     return headers
   },
