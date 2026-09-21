@@ -120,6 +120,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/gis/parse", h.ParseGISData)
 	api.Post("/gis/convert", h.ConvertGISData)
 
+	// ── Automated Schema Migration Generator & Changelog Hub ──
+	api.Get("/connections/{connId}/migrations", h.GetMigrations)
+	api.Post("/connections/{connId}/migrations/init", h.InitMigrationTracker)
+	api.Post("/connections/{connId}/migrations/generate", h.GenerateMigration)
+	api.Post("/connections/{connId}/migrations/apply", h.ApplyMigration)
+	api.Post("/connections/{connId}/migrations/rollback", h.RollbackMigration)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

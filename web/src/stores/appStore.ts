@@ -98,6 +98,8 @@ interface AppState {
   federationInitialTab?: 'query' | 'pipe' | 'reconcile'
   openFederationModal: (tab?: 'query' | 'pipe' | 'reconcile') => void
   closeFederationModal: () => void
+  isMigrationModalOpen: boolean
+  setIsMigrationModalOpen: (open: boolean) => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -335,6 +337,8 @@ export const useAppStore = create<AppState>()(
           federationInitialTab: tab,
         }),
       closeFederationModal: () => set({ isFederationModalOpen: false }),
+      isMigrationModalOpen: false,
+      setIsMigrationModalOpen: (isMigrationModalOpen) => set({ isMigrationModalOpen }),
 
       peekDrawer: {
         isOpen: false,

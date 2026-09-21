@@ -23,6 +23,7 @@ import {
   Code2,
   Webhook,
   Network,
+  GitBranch,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -391,6 +392,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         keywords: ['federation', 'federated', 'cross-db', 'pipe', 'data pipe', 'reconcile', 'sqlite', 'multi-connection', 'runner', 'stream'],
         onSelect: () => {
           useAppStore.getState().setIsFederationModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_migration_hub',
+        title: 'Schema Migration Generator & Changelog Hub',
+        subtitle: 'Generate reversible migrations (Goose, Flyway, Golang-Migrate, DB-Mate, Prisma) & manage changelog',
+        category: 'Actions',
+        icon: GitBranch,
+        badge: 'MIGRATION',
+        keywords: ['migration', 'migrate', 'changelog', 'goose', 'flyway', 'dbmate', 'prisma', 'rollback', 'schema version'],
+        onSelect: () => {
+          useAppStore.getState().setIsMigrationModalOpen(true)
           closePalette()
         },
       })

@@ -1851,6 +1851,154 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async getMigrations(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationListResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch migrations (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async initMigrationTracker(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string; initialized: boolean }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/init`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to initialize migration tracker (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async generateMigration(
+    connId: string,
+    req: GenerateMigrationRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationBundle> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/generate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate migration bundle (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyMigration(
+    connId: string,
+    req: ApplyMigrationRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationRecord> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/apply`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to apply migration (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async rollbackMigration(
+    connId: string,
+    version?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationRecord> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/rollback`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ version }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to rollback migration (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+}
+
+export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
+
+export interface MigrationRecord {
+  id: number
+  version: string
+  name: string
+  appliedAt: string
+  checksum: string
+  executionTimeMs: number
+  upSql: string
+  downSql: string
+}
+
+export interface MigrationFile {
+  fileName: string
+  content: string
+}
+
+export interface MigrationBundle {
+  format: MigrationFormat
+  version: string
+  name: string
+  checksum: string
+  files: MigrationFile[]
+  fileMap: Record<string, string>
+}
+
+export interface MigrationListResponse {
+  initialized: boolean
+  dialect: string
+  migrations: MigrationRecord[]
+}
+
+export interface GenerateMigrationRequest {
+  name: string
+  upSql: string
+  downSql?: string
+  format: string
+  version?: string
+}
+
+export interface ApplyMigrationRequest {
+  version?: string
+  name: string
+  upSql: string
+  downSql?: string
+  checksum?: string
 }
 
 export interface ColumnPIIInfo {

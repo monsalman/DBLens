@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield } from 'lucide-react'
+import { Table2, Shield, GitBranch } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
+import { useAppStore } from '../../stores/appStore'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -152,6 +153,23 @@ export const Sidebar: React.FC<Props> = ({
             <span className="truncate">{name}</span>
           </div>
         ))}
+      </div>
+
+      {/* Migration Hub Trigger */}
+      <div className="p-2 border-t border-[var(--border)] bg-[var(--surface)]/20 shrink-0">
+        <button
+          onClick={() => useAppStore.getState().setIsMigrationModalOpen(true)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-blue-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"
+          title="Open Schema Migration Generator & Changelog Hub"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <GitBranch className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+            <span className="truncate">Migration Hub</span>
+          </div>
+          <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 shrink-0">
+            CI/CD
+          </span>
+        </button>
       </div>
     </aside>
   )
