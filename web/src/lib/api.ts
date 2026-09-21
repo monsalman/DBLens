@@ -1924,6 +1924,7 @@ export interface Webhook {
   name: string
   url: string
   secret?: string
+  has_secret?: boolean
   events: string[]
   tables: string[]
   enabled: boolean

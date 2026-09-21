@@ -800,7 +800,7 @@ export const WebhookModal: React.FC<Props> = ({ isOpen, onClose }) => {
                           />
                           <h4 className="text-xs font-semibold text-[var(--fg)]">{wh.name}</h4>
                           <span className="text-[10px] text-[var(--muted)] font-mono">({wh.id})</span>
-                          {wh.secret && (
+                          {(wh.secret || wh.has_secret) && (
                             <span className="flex items-center gap-1 text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.2 rounded font-mono">
                               <ShieldCheck className="w-3 h-3" />
                               HMAC-SHA256

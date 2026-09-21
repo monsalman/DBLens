@@ -22,7 +22,38 @@ import (
 
 var (
 	reMySQLTCP = regexp.MustCompile(`@?tcp\(([^:]+):(\d+)\)`)
+
+	_, tunnelLinkLocalV4, _ = net.ParseCIDR("169.254.0.0/16")
+	_, tunnelLinkLocalV6, _ = net.ParseCIDR("fe80::/10")
 )
+
+// ValidateTunnelHost validates that the bastion host is not a prohibited cloud metadata or link-local address.
+func ValidateTunnelHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return errors.New("bastion host is required")
+	}
+
+	hostLower := strings.ToLower(host)
+	if hostLower == "169.254.169.254" ||
+		hostLower == "metadata.google.internal" ||
+		hostLower == "instance-data" ||
+		strings.HasSuffix(hostLower, ".metadata.google.internal") ||
+		strings.HasSuffix(hostLower, ".instance-data") {
+		return fmt.Errorf("bastion host blocked: cloud metadata access prohibited (%s)", host)
+	}
+
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.String() == "169.254.169.254" ||
+			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			(tunnelLinkLocalV4 != nil && tunnelLinkLocalV4.Contains(ip)) ||
+			(tunnelLinkLocalV6 != nil && tunnelLinkLocalV6.Contains(ip)) {
+			return fmt.Errorf("bastion host blocked: link-local or metadata address prohibited (%s)", ip.String())
+		}
+	}
+	return nil
+}
 
 type SSHTunnelConfig struct {
 	Enabled    bool   `json:"enabled"`
@@ -171,6 +202,9 @@ func BuildSSHClientConfig(cfg SSHTunnelConfig) (*ssh.ClientConfig, error) {
 		}
 		auth = append(auth, ssh.PublicKeys(signer))
 	case "agent":
+		if os.Getenv("DBLENS_ALLOW_SSH_AGENT") != "true" {
+			return nil, errors.New("SSH agent authentication disabled by server policy")
+		}
 		sock := os.Getenv("SSH_AUTH_SOCK")
 		if sock == "" {
 			return nil, errors.New("SSH_AUTH_SOCK environment variable not set")
@@ -207,9 +241,9 @@ func BuildSSHClientConfig(cfg SSHTunnelConfig) (*ssh.ClientConfig, error) {
 // TestTunnel tests SSH bastion connectivity and measures round-trip handshake latency.
 func TestTunnel(cfg SSHTunnelConfig) (*TunnelTestResult, error) {
 	host := strings.TrimSpace(cfg.Host)
-	if host == "" {
-		res := &TunnelTestResult{Success: false, Message: "Bastion host is required"}
-		return res, errors.New(res.Message)
+	if err := ValidateTunnelHost(host); err != nil {
+		res := &TunnelTestResult{Success: false, Message: err.Error()}
+		return res, err
 	}
 	port := cfg.Port
 	if port <= 0 {
@@ -260,7 +294,11 @@ func NewTunnelManager() *TunnelManager {
 }
 
 func (tm *TunnelManager) forwarderKey(cfg SSHTunnelConfig, remoteTarget string) string {
-	raw := fmt.Sprintf("%s:%d:%s:%s:%s:%s", cfg.Host, cfg.Port, cfg.User, cfg.AuthMethod, cfg.Password, remoteTarget)
+	pkHash := sha256.Sum256([]byte(cfg.PrivateKey))
+	passphraseHash := sha256.Sum256([]byte(cfg.Passphrase))
+	raw := fmt.Sprintf("%s:%d:%s:%s:%s:%x:%x:%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.AuthMethod, cfg.Password,
+		pkHash[:], passphraseHash[:], remoteTarget)
 	h := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(h[:])
 }
@@ -268,8 +306,8 @@ func (tm *TunnelManager) forwarderKey(cfg SSHTunnelConfig, remoteTarget string) 
 // StartForwarder starts an ephemeral local TCP listener forwarding traffic to remoteTarget via SSH.
 func (tm *TunnelManager) StartForwarder(cfg SSHTunnelConfig, remoteTarget string) (*ActiveForwarder, error) {
 	host := strings.TrimSpace(cfg.Host)
-	if host == "" {
-		return nil, errors.New("bastion host is required")
+	if err := ValidateTunnelHost(host); err != nil {
+		return nil, err
 	}
 	port := cfg.Port
 	if port <= 0 {

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type Webhook struct {
 	Name         string            `json:"name"`
 	URL          string            `json:"url"`
 	Secret       string            `json:"secret,omitempty"`
+	HasSecret    bool              `json:"has_secret"`
 	Events       []string          `json:"events"` // "INSERT", "UPDATE", "DELETE", or "*"
 	Tables       []string          `json:"tables"` // table names or "*"
 	Enabled      bool              `json:"enabled"`
@@ -192,13 +194,69 @@ type Manager struct {
 	httpTimeout time.Duration
 }
 
+// NewSafeHTTPTransport returns an http.Transport with socket-level IP validation
+// blocking cloud metadata, link-local addresses, and (unless allowed) loopback.
+func NewSafeHTTPTransport() *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+
+			hostLower := strings.ToLower(host)
+			if hostLower == "169.254.169.254" ||
+				hostLower == "metadata.google.internal" ||
+				hostLower == "instance-data" ||
+				strings.HasSuffix(hostLower, ".metadata.google.internal") ||
+				strings.HasSuffix(hostLower, ".instance-data") {
+				return nil, fmt.Errorf("webhook connection blocked: cloud metadata access prohibited (%s)", host)
+			}
+
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("no IP address resolved for host %s", host)
+			}
+
+			allowLocal := os.Getenv("DBLENS_ALLOW_LOCAL_WEBHOOKS") == "true"
+			for _, ip := range ips {
+				if ip.String() == "169.254.169.254" ||
+					ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+					(linkLocalV4 != nil && linkLocalV4.Contains(ip)) ||
+					(linkLocalV6 != nil && linkLocalV6.Contains(ip)) {
+					return nil, fmt.Errorf("webhook connection blocked: cloud metadata or link-local address prohibited (%s)", ip.String())
+				}
+				if ip.IsLoopback() && !allowLocal {
+					return nil, fmt.Errorf("webhook connection blocked: loopback addresses prohibited (%s)", ip.String())
+				}
+			}
+
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 // NewManager creates a new thread-safe Webhook Manager.
 func NewManager() *Manager {
 	return &Manager{
 		webhooks:   make(map[string]map[string]Webhook),
 		deliveries: make([]DeliveryLog, 0, MaxDeliveryHistory),
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Transport: NewSafeHTTPTransport(),
+			Timeout:   10 * time.Second,
 		},
 		httpTimeout: 10 * time.Second,
 	}
@@ -254,6 +312,7 @@ func (m *Manager) Create(connID string, wh Webhook) (Webhook, error) {
 	if m.webhooks[connID] == nil {
 		m.webhooks[connID] = make(map[string]Webhook)
 	}
+	wh.HasSecret = wh.Secret != ""
 	m.webhooks[connID][wh.ID] = wh
 	return wh, nil
 }
@@ -271,6 +330,7 @@ func (m *Manager) Get(connID, id string) (Webhook, error) {
 	if !ok {
 		return Webhook{}, errors.New("webhook not found")
 	}
+	wh.HasSecret = wh.Secret != ""
 	return wh, nil
 }
 
@@ -282,6 +342,7 @@ func (m *Manager) List(connID string) []Webhook {
 	whMap := m.webhooks[connID]
 	result := make([]Webhook, 0, len(whMap))
 	for _, wh := range whMap {
+		wh.HasSecret = wh.Secret != ""
 		result = append(result, wh)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -327,6 +388,12 @@ func (m *Manager) Update(connID, id string, wh Webhook) (Webhook, error) {
 	if len(wh.Tables) == 0 {
 		wh.Tables = existing.Tables
 	}
+
+	// Retain secret on empty update or masked secret
+	if strings.TrimSpace(wh.Secret) == "" || wh.Secret == "••••••••" {
+		wh.Secret = existing.Secret
+	}
+	wh.HasSecret = wh.Secret != ""
 
 	whMap[id] = wh
 	return wh, nil
@@ -424,7 +491,10 @@ func (m *Manager) Dispatch(ctx context.Context, targetURL, secret string, header
 		timeout = 10 * time.Second
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{
+			Transport: NewSafeHTTPTransport(),
+			Timeout:   timeout,
+		}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)

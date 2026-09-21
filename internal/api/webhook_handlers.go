@@ -12,11 +12,20 @@ import (
 func (h *Handler) GetWebhooks(w http.ResponseWriter, r *http.Request) {
 	connID := chi.URLParam(r, "connId")
 	list := h.WebhookManager().List(connID)
-	sendJSON(w, http.StatusOK, list)
+	masked := make([]webhook.Webhook, len(list))
+	for i, wh := range list {
+		if wh.Secret != "" {
+			wh.HasSecret = true
+			wh.Secret = "••••••••"
+		}
+		masked[i] = wh
+	}
+	sendJSON(w, http.StatusOK, masked)
 }
 
 // CreateWebhook registers a new webhook endpoint under connId.
 func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	connID := chi.URLParam(r, "connId")
 	var wh webhook.Webhook
 	if err := json.NewDecoder(r.Body).Decode(&wh); err != nil {
@@ -34,6 +43,7 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 
 // UpdateWebhook updates an existing webhook under connId.
 func (h *Handler) UpdateWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	connID := chi.URLParam(r, "connId")
 	id := chi.URLParam(r, "id")
 
@@ -83,6 +93,7 @@ func (h *Handler) RetryWebhookDelivery(w http.ResponseWriter, r *http.Request) {
 
 // SimulateWebhook sends a synthetic database change event without mutating actual data.
 func (h *Handler) SimulateWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	connID := chi.URLParam(r, "connId")
 	var req webhook.SimulateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

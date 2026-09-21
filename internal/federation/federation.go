@@ -15,9 +15,38 @@ import (
 )
 
 const (
-	DefaultMaxRowsPerTable = 10000
+	DefaultMaxRowsPerTable  = 10000
 	AbsoluteMaxRowsPerTable = 20000
+	MaxFederatedResultRows  = 50000
 )
+
+var validIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+func quoteIdentifier(dialect, ident string) (string, error) {
+	if !validIdentifier.MatchString(ident) {
+		return "", fmt.Errorf("invalid identifier: %q", ident)
+	}
+	d := strings.ToLower(dialect)
+	if d == "mysql" || d == "mariadb" {
+		return "`" + ident + "`", nil
+	}
+	return `"` + ident + `"`, nil
+}
+
+func quoteTable(dialect, schema, table string) (string, error) {
+	qTable, err := quoteIdentifier(dialect, table)
+	if err != nil {
+		return "", err
+	}
+	if schema != "" {
+		qSchema, err := quoteIdentifier(dialect, schema)
+		if err != nil {
+			return "", err
+		}
+		return qSchema + "." + qTable, nil
+	}
+	return qTable, nil
+}
 
 // TableRef represents a parsed connection reference in a federated query.
 type TableRef struct {
@@ -196,8 +225,26 @@ func ExecuteFederatedQuery(ctx context.Context, query string, resolver DriverRes
 			defer wg.Done()
 			fetchStart := time.Now()
 
+			if !validIdentifier.MatchString(r.Table) {
+				results[idx] = fetchedTableData{
+					Ref: r,
+					Err: fmt.Errorf("invalid table identifier: %q", r.Table),
+				}
+				return
+			}
+			if r.Schema != "" && !validIdentifier.MatchString(r.Schema) {
+				results[idx] = fetchedTableData{
+					Ref: r,
+					Err: fmt.Errorf("invalid schema identifier: %q", r.Schema),
+				}
+				return
+			}
+
 			drv, dErr := resolver(ctxTimeout, r.ConnID)
-			if dErr != nil {
+			if dErr != nil || drv == nil {
+				if dErr == nil {
+					dErr = fmt.Errorf("nil driver returned")
+				}
 				results[idx] = fetchedTableData{
 					Ref: r,
 					Err: fmt.Errorf("connection %q resolution failed: %w", r.ConnID, dErr),
@@ -214,11 +261,13 @@ func ExecuteFederatedQuery(ctx context.Context, query string, resolver DriverRes
 			qr, qErr := drv.QueryTableData(ctxTimeout, opts)
 			if qErr != nil {
 				// Fallback to simple SELECT query
-				var targetTable string
-				if r.Schema != "" {
-					targetTable = fmt.Sprintf("%s.%s", r.Schema, r.Table)
-				} else {
-					targetTable = r.Table
+				targetTable, err := quoteTable(drv.Dialect(), r.Schema, r.Table)
+				if err != nil {
+					results[idx] = fetchedTableData{
+						Ref: r,
+						Err: err,
+					}
+					return
 				}
 				fallbackSQL := fmt.Sprintf("SELECT * FROM %s LIMIT %d", targetTable, maxRows)
 				qr, qErr = drv.ExecuteQuery(ctxTimeout, fallbackSQL)
@@ -337,6 +386,9 @@ func ExecuteFederatedQuery(ctx context.Context, query string, resolver DriverRes
 
 	var outputRows [][]interface{}
 	for rows.Next() {
+		if len(outputRows) >= MaxFederatedResultRows {
+			break
+		}
 		vals := make([]interface{}, len(cols))
 		ptrs := make([]interface{}, len(cols))
 		for i := range vals {

@@ -56,7 +56,7 @@ type ReconcileAPIRequest struct {
 
 // FederatedQueryHandler executes a cross-connection federated query in ephemeral SQLite.
 func (h *Handler) FederatedQueryHandler(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20) // 2MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5MB limit
 	var req FederatedQueryAPIRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -133,7 +133,7 @@ func (h *Handler) FederatedQueryHandler(w http.ResponseWriter, r *http.Request) 
 
 // DataPipeHandler clones or streams a table from source connection to target connection.
 func (h *Handler) DataPipeHandler(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5MB limit
 	var req DataPipeAPIRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -152,7 +152,7 @@ func (h *Handler) DataPipeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Safe Mode / ReadOnly check on target
-	if r.Header.Get("X-DBLENS-READONLY") == "true" {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) || isTruthy(r.URL.Query().Get("readonly")) {
 		sendError(w, http.StatusForbidden, "target connection is in read-only safe mode; data pipe write blocked")
 		return
 	}
@@ -194,7 +194,7 @@ func (h *Handler) DataPipeHandler(w http.ResponseWriter, r *http.Request) {
 
 // ReconcileHandler compares schema, row counts, and checksums between two connections.
 func (h *Handler) ReconcileHandler(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // 5MB limit
 	var req ReconcileAPIRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
