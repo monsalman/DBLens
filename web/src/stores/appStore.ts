@@ -93,6 +93,11 @@ interface AppState {
   closeRestModal: () => void
   isWebhookModalOpen: boolean
   setIsWebhookModalOpen: (open: boolean) => void
+  isFederationModalOpen: boolean
+  setIsFederationModalOpen: (open: boolean) => void
+  federationInitialTab?: 'query' | 'pipe' | 'reconcile'
+  openFederationModal: (tab?: 'query' | 'pipe' | 'reconcile') => void
+  closeFederationModal: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -321,6 +326,15 @@ export const useAppStore = create<AppState>()(
       closeRestModal: () => set({ isRestModalOpen: false, restModalTarget: null }),
       isWebhookModalOpen: false,
       setIsWebhookModalOpen: (isWebhookModalOpen) => set({ isWebhookModalOpen }),
+      isFederationModalOpen: false,
+      setIsFederationModalOpen: (isFederationModalOpen) => set({ isFederationModalOpen }),
+      federationInitialTab: 'query',
+      openFederationModal: (tab = 'query') =>
+        set({
+          isFederationModalOpen: true,
+          federationInitialTab: tab,
+        }),
+      closeFederationModal: () => set({ isFederationModalOpen: false }),
 
       peekDrawer: {
         isOpen: false,

@@ -22,6 +22,7 @@ import {
   Archive,
   Code2,
   Webhook,
+  Network,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -376,6 +377,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         keywords: ['webhook', 'events', 'simulator', 'cdc', 'dispatch', 'delivery', 'hmac', 'signature', 'payload', 'notification'],
         onSelect: () => {
           useAppStore.getState().setIsWebhookModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_federation_modal',
+        title: 'Cross-Database Query Federation & Data Pipe',
+        subtitle: 'Virtual SQLite query runner, streaming data pipe & cross-connection table reconciliation',
+        category: 'Actions',
+        icon: Network,
+        badge: 'CROSS-DB',
+        keywords: ['federation', 'federated', 'cross-db', 'pipe', 'data pipe', 'reconcile', 'sqlite', 'multi-connection', 'runner', 'stream'],
+        onSelect: () => {
+          useAppStore.getState().setIsFederationModalOpen(true)
           closePalette()
         },
       })

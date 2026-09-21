@@ -1694,6 +1694,76 @@ export const api = {
     const json = await r.json()
     return json.data ?? json
   },
+
+  async executeFederatedQuery(
+    req: FederatedQueryRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<FederatedQueryResponse> {
+    const connections: FederatedConnectionProfile[] = (req.connections || profiles || []).map((p) => ({
+      id: p.id,
+      dsn: p.dsn,
+      label: p.label || p.id,
+    }))
+    const res = await fetch('/api/federation/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...req, connections }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Federated query failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async executeDataPipe(
+    req: DataPipeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<DataPipeResponse> {
+    const srcDsn = req.sourceDsn || (req.sourceConnId ? this._getDSN(req.sourceConnId, profiles) : '')
+    const tgtDsn = req.targetDsn || (req.targetConnId ? this._getDSN(req.targetConnId, profiles) : '')
+    const payload: DataPipeRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const res = await fetch('/api/federation/pipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Data pipe execution failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async reconcileTables(
+    req: ReconcileRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ReconcileResponse> {
+    const srcDsn = req.sourceDsn || (req.sourceConnId ? this._getDSN(req.sourceConnId, profiles) : '')
+    const tgtDsn = req.targetDsn || (req.targetConnId ? this._getDSN(req.targetConnId, profiles) : '')
+    const payload: ReconcileRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const res = await fetch('/api/federation/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Reconciliation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
 }
 
 export interface ColumnPIIInfo {
@@ -1855,4 +1925,109 @@ export interface SimulateWebhookResponse {
   success: boolean
   error?: string
 }
+
+// ── Multi-Connection Query Federation & Data Pipe ──
+
+export interface FederatedConnectionProfile {
+  id: string
+  dsn: string
+  label?: string
+}
+
+export interface FederatedTableStat {
+  connId: string
+  schema?: string
+  table: string
+  tempTable: string
+  rowCount: number
+  elapsedMs: number
+}
+
+export interface FederatedQueryRequest {
+  query: string
+  limit?: number
+  connections?: FederatedConnectionProfile[]
+  dsns?: Record<string, string>
+}
+
+export interface FederatedQueryResponse {
+  result: QueryResult
+  tableStats: FederatedTableStat[]
+  rewrittenSql: string
+  elapsedMs: number
+}
+
+export interface DataPipeRequest {
+  sourceConnId: string
+  sourceDsn?: string
+  sourceSchema?: string
+  sourceTable: string
+  targetConnId: string
+  targetDsn?: string
+  targetSchema?: string
+  targetTable?: string
+  createTable?: boolean
+  truncateTable?: boolean
+  batchSize?: number
+}
+
+export interface DataPipeResponse {
+  rowsMigrated: number
+  elapsedMs: number
+  sourceTable: string
+  targetTable: string
+  message: string
+}
+
+export interface ColumnReconcileDiff {
+  name: string
+  sourceType: string
+  targetType: string
+  sourceNullable: boolean
+  targetNullable: boolean
+  sourcePrimary: boolean
+  targetPrimary: boolean
+  match: boolean
+  status: 'MATCH' | 'TYPE_MISMATCH' | 'MISSING_IN_TARGET' | 'MISSING_IN_SOURCE' | 'CONSTRAINT_MISMATCH' | string
+}
+
+export interface RowSampleDiff {
+  rowIndex: number
+  source: Record<string, any>
+  target: Record<string, any>
+  diffCols: string[]
+}
+
+export interface ReconcileRequest {
+  sourceConnId: string
+  sourceDsn?: string
+  sourceSchema?: string
+  sourceTable: string
+  targetConnId: string
+  targetDsn?: string
+  targetSchema?: string
+  targetTable?: string
+  sampleLimit?: number
+}
+
+export interface ReconcileResponse {
+  status: 'IDENTICAL' | 'SCHEMA_MISMATCH' | 'ROW_COUNT_MISMATCH' | 'DATA_MISMATCH' | string
+  sourceTable: string
+  targetTable: string
+  sourceRowCount: number
+  targetRowCount: number
+  rowCountDiff: number
+  sourceChecksum: string
+  targetChecksum: string
+  checksumMatch: boolean
+  columnComparison: ColumnReconcileDiff[]
+  missingInTarget: string[]
+  missingInSource: string[]
+  sampleCompared: number
+  sampleMatched: number
+  sampleMismatched: number
+  sampleDiffs?: RowSampleDiff[]
+  elapsedMs: number
+}
+
 

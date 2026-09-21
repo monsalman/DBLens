@@ -17,6 +17,7 @@ import { DryRunModal } from './components/DryRunModal'
 import { DatabaseDumpModal } from './features/dump/DatabaseDumpModal'
 import { RestPlaygroundModal } from './features/rest/RestPlaygroundModal'
 import { WebhookModal } from './features/webhook/WebhookModal'
+import { FederationModal } from './features/federation/FederationModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -344,6 +345,7 @@ export function App() {
       <DatabaseDumpModal />
       <RestPlaygroundModal />
       <WebhookModal />
+      <FederationModal />
     </QueryClientProvider>
   )
 }

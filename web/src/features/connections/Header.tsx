@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
@@ -154,6 +154,17 @@ export const Header: React.FC<Props> = ({
         >
           <Webhook className="w-3.5 h-3.5" />
           <span className="hidden md:inline">Webhooks</span>
+        </button>
+
+        {/* Cross-DB Query Federation & Data Pipe */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsFederationModalOpen(true)}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer"
+          title="Cross-Database Query Federation & Data Pipe"
+        >
+          <Network className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">Federation</span>
         </button>
 
         {/* Dark/Light Toggle */}

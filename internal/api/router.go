@@ -108,6 +108,11 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/webhooks/deliveries/{id}/retry", h.RetryWebhookDelivery)
 	api.Post("/connections/{connId}/webhooks/simulate", h.SimulateWebhook)
 
+	// ── Multi-Connection Query Federation & Cross-Database Runner ──
+	api.Post("/federation/query", h.FederatedQueryHandler)
+	api.Post("/federation/pipe", h.DataPipeHandler)
+	api.Post("/federation/reconcile", h.ReconcileHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
