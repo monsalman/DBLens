@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/dblens/dblens/internal/masker"
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
+	"github.com/dblens/dblens/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -30,7 +32,75 @@ var (
 	reCteMutation  = regexp.MustCompile(`(?i)\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b`)
 	reAnalyze      = regexp.MustCompile(`(?i)\bANALYZE\b`)
 	reMutating     = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|MERGE|GRANT|REVOKE|DO|CALL|RENAME)\b`)
+	reInsertSQL    = regexp.MustCompile(`(?i)^\s*INSERT\s+INTO\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
+	reUpdateSQL    = regexp.MustCompile(`(?i)^\s*UPDATE\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
+	reDeleteSQL    = regexp.MustCompile(`(?i)^\s*DELETE\s+FROM\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
 )
+
+func cleanSQLComments(sql string) string {
+	s := reBlockComment.ReplaceAllString(sql, " ")
+	s = reLineComment.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+func trimIdentifierQuotes(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "`\"'")
+	return s
+}
+
+func parseMutationEvent(rawSQL string) (webhook.EventPayload, bool) {
+	clean := cleanSQLComments(rawSQL)
+	var event, target string
+
+	if m := reInsertSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "INSERT"
+		target = m[1]
+	} else if m := reUpdateSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "UPDATE"
+		target = m[1]
+	} else if m := reDeleteSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "DELETE"
+		target = m[1]
+	} else {
+		return webhook.EventPayload{}, false
+	}
+
+	target = strings.TrimSpace(target)
+	var schema, table string
+	if strings.Contains(target, ".") {
+		parts := strings.SplitN(target, ".", 2)
+		schema = trimIdentifierQuotes(parts[0])
+		table = trimIdentifierQuotes(parts[1])
+	} else {
+		table = trimIdentifierQuotes(target)
+	}
+
+	return webhook.EventPayload{
+		ID:        webhook.GenerateID("evt_"),
+		Event:     event,
+		Schema:    schema,
+		Table:     table,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}, true
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
+func (sr *statusRecorder) Write(b []byte) (int, error) {
+	if sr.status == 0 {
+		sr.status = http.StatusOK
+	}
+	return sr.ResponseWriter.Write(b)
+}
 
 func splitStatements(sql string) []string {
 	var stmts []string
@@ -168,11 +238,22 @@ func sendError(w http.ResponseWriter, status int, msg string) {
 }
 
 type Handler struct {
-	mgr *connection.Manager
+	mgr        *connection.Manager
+	webhookMgr *webhook.Manager
 }
 
 func NewHandler(mgr *connection.Manager) *Handler {
-	return &Handler{mgr: mgr}
+	return &Handler{
+		mgr:        mgr,
+		webhookMgr: webhook.NewManager(),
+	}
+}
+
+func (h *Handler) WebhookManager() *webhook.Manager {
+	if h.webhookMgr == nil {
+		h.webhookMgr = webhook.NewManager()
+	}
+	return h.webhookMgr
 }
 
 type TestConnectionRequest struct {
@@ -578,6 +659,10 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if evt, ok := parseMutationEvent(sql); ok {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
+	}
 	sendJSON(w, http.StatusOK, res)
 }
 
@@ -661,6 +746,23 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	connID := chi.URLParam(r, "connId")
+	evt := webhook.EventPayload{
+		ID:        webhook.GenerateID("evt_"),
+		Event:     string(mut.Type),
+		Schema:    mut.Schema,
+		Table:     mut.Table,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	if mut.Type == driver.MutationInsert {
+		evt.NewRecord = mut.Data
+	} else if mut.Type == driver.MutationUpdate {
+		evt.OldRecord = mut.Where
+		evt.NewRecord = mut.Data
+	} else if mut.Type == driver.MutationDelete {
+		evt.OldRecord = mut.Where
+	}
+	go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
 	sendJSON(w, http.StatusOK, res)
 }
 
@@ -701,6 +803,18 @@ func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	connID := chi.URLParam(r, "connId")
+	for _, row := range req.Rows {
+		evt := webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "INSERT",
+			Schema:    req.Schema,
+			Table:     req.Table,
+			NewRecord: row,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
 	}
 	sendJSON(w, http.StatusOK, res)
 }
@@ -1954,7 +2068,18 @@ func (h *Handler) RestPost(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rest.HandlePost(w, r, entry.Driver, schema, table)
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandlePost(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "INSERT",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 func (h *Handler) RestPatch(w http.ResponseWriter, r *http.Request) {
@@ -1969,7 +2094,18 @@ func (h *Handler) RestPatch(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rest.HandlePatch(w, r, entry.Driver, schema, table)
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandlePatch(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "UPDATE",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 func (h *Handler) RestDelete(w http.ResponseWriter, r *http.Request) {
@@ -1983,7 +2119,18 @@ func (h *Handler) RestDelete(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rest.HandleDelete(w, r, entry.Driver, schema, table)
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandleDelete(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "DELETE",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 type DetectMaskRequest struct {

@@ -99,6 +99,15 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Delete("/connections/{connId}/rest/{table}", h.RestDelete)
 	api.Delete("/connections/{connId}/rest/{schema}/{table}", h.RestDelete)
 
+	// ── Webhooks & Change Event Simulator ──
+	api.Get("/connections/{connId}/webhooks", h.GetWebhooks)
+	api.Post("/connections/{connId}/webhooks", h.CreateWebhook)
+	api.Put("/connections/{connId}/webhooks/{id}", h.UpdateWebhook)
+	api.Delete("/connections/{connId}/webhooks/{id}", h.DeleteWebhook)
+	api.Get("/connections/{connId}/webhooks/deliveries", h.GetWebhookDeliveries)
+	api.Post("/connections/{connId}/webhooks/deliveries/{id}/retry", h.RetryWebhookDelivery)
+	api.Post("/connections/{connId}/webhooks/simulate", h.SimulateWebhook)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

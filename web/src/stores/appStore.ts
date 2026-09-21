@@ -91,6 +91,8 @@ interface AppState {
   restModalTarget: { schema?: string; table?: string } | null
   openRestModal: (table?: string, schema?: string) => void
   closeRestModal: () => void
+  isWebhookModalOpen: boolean
+  setIsWebhookModalOpen: (open: boolean) => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -317,6 +319,8 @@ export const useAppStore = create<AppState>()(
           restModalTarget: table ? { table, schema } : null,
         }),
       closeRestModal: () => set({ isRestModalOpen: false, restModalTarget: null }),
+      isWebhookModalOpen: false,
+      setIsWebhookModalOpen: (isWebhookModalOpen) => set({ isWebhookModalOpen }),
 
       peekDrawer: {
         isOpen: false,

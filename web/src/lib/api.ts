@@ -1562,6 +1562,138 @@ export const api = {
     const json = await r.json()
     return json.data ?? json
   },
+
+  async getWebhooks(connId: string, profiles?: ConnectionConfig[]): Promise<Webhook[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch webhooks (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async createWebhook(
+    connId: string,
+    data: Partial<Webhook>,
+    profiles?: ConnectionConfig[]
+  ): Promise<Webhook> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to create webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async updateWebhook(
+    connId: string,
+    id: string,
+    data: Partial<Webhook>,
+    profiles?: ConnectionConfig[]
+  ): Promise<Webhook> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/${id}`, {
+      method: 'PUT',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to update webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async deleteWebhook(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean }> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/${id}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async getWebhookDeliveries(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<WebhookDelivery[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/deliveries`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch deliveries (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async retryWebhookDelivery(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<WebhookDelivery> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/deliveries/${id}/retry`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to retry delivery (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async simulateWebhook(
+    connId: string,
+    payload: SimulateWebhookRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SimulateWebhookResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/simulate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to simulate webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
 }
 
 export interface ColumnPIIInfo {
@@ -1677,5 +1809,50 @@ export interface AssistantFixResponse {
 export interface AssistantExplainResponse {
   explanation: string
   raw?: string
+}
+
+export interface Webhook {
+  id: string
+  connection_id: string
+  name: string
+  url: string
+  secret?: string
+  events: string[]
+  tables: string[]
+  enabled: boolean
+  headers?: Record<string, string>
+  created_at?: string
+}
+
+export interface WebhookDelivery {
+  id: string
+  webhook_id?: string
+  webhook_name?: string
+  connection_id?: string
+  event: string
+  url: string
+  request_payload: string
+  response_status_code: number
+  response_body: string
+  latency_ms: number
+  error?: string
+  timestamp: string
+}
+
+export interface SimulateWebhookRequest {
+  webhook_id?: string
+  url?: string
+  secret?: string
+  event: 'INSERT' | 'UPDATE' | 'DELETE' | string
+  schema?: string
+  table: string
+  old_record?: Record<string, any>
+  new_record?: Record<string, any>
+}
+
+export interface SimulateWebhookResponse {
+  delivery: WebhookDelivery
+  success: boolean
+  error?: string
 }
 

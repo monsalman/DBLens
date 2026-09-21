@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
@@ -142,6 +142,18 @@ export const Header: React.FC<Props> = ({
         >
           <Archive className="w-3.5 h-3.5" />
           <span className="hidden md:inline">Dump / Restore</span>
+        </button>
+
+        {/* Database Webhooks & Change Event Simulator */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsWebhookModalOpen(true)}
+          disabled={!activeConnId}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Database Webhook & Change Event Simulator"
+        >
+          <Webhook className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">Webhooks</span>
         </button>
 
         {/* Dark/Light Toggle */}

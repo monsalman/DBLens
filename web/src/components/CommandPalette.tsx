@@ -21,6 +21,7 @@ import {
   Shield,
   Archive,
   Code2,
+  Webhook,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -366,6 +367,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       })
 
       items.push({
+        id: 'action:open_webhook_simulator',
+        title: 'Database Webhooks & Event Simulator',
+        subtitle: 'Manage endpoints, delivery log with retry, and simulate change events',
+        category: 'Actions',
+        icon: Webhook,
+        badge: 'WEBHOOK',
+        keywords: ['webhook', 'events', 'simulator', 'cdc', 'dispatch', 'delivery', 'hmac', 'signature', 'payload', 'notification'],
+        onSelect: () => {
+          useAppStore.getState().setIsWebhookModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
         id: 'action:disconnect',
         title: 'Disconnect Active Connection',
         subtitle: 'Unset active connection session',
@@ -465,6 +480,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     connections,
     activeConnId,
     selectedSchema,
+    selectedTable,
     isDark,
     onTabChange,
     onToggleTheme,
