@@ -24,6 +24,7 @@ import {
   Webhook,
   Network,
   GitBranch,
+  Zap,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -406,6 +407,48 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         keywords: ['migration', 'migrate', 'changelog', 'goose', 'flyway', 'dbmate', 'prisma', 'rollback', 'schema version'],
         onSelect: () => {
           useAppStore.getState().setIsMigrationModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_routine_studio',
+        title: 'Stored Procedure, Function, View & Trigger Studio',
+        subtitle: 'Inspect catalogs, invoke routines with parameters, toggle triggers, and refresh views',
+        category: 'Actions',
+        icon: Zap,
+        badge: 'ROUTINE',
+        keywords: ['routine', 'procedure', 'function', 'trigger', 'view', 'materialized', 'stored procedure', 'invoke', 'triggers', 'views'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('routines')
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_triggers_studio',
+        title: 'Triggers Inspector & Toggle',
+        subtitle: 'Inspect firing timing, table events, definitions, and toggle triggers',
+        category: 'Actions',
+        icon: Activity,
+        badge: 'TRIGGER',
+        keywords: ['trigger', 'triggers', 'before', 'after', 'toggle', 'events', 'enable', 'disable'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('triggers')
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_views_studio',
+        title: 'Views & Materialized Views Studio',
+        subtitle: 'Inspect SQL view queries and 1-click refresh PostgreSQL materialized views',
+        category: 'Actions',
+        icon: Eye,
+        badge: 'VIEW',
+        keywords: ['view', 'views', 'materialized', 'matview', 'refresh view', 'pg_matviews'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('views')
           closePalette()
         },
       })

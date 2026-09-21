@@ -1,6 +1,17 @@
 export type DatabaseDriver = 'postgres' | 'mysql' | 'sqlite'
 import type { AIAssistantConfig } from '../features/editor/aiAssistant'
 import type { GISParseResponse, GISConvertResponse } from '../features/gis/gisHelper'
+import type {
+  RoutineItem,
+  RoutineArg,
+  TriggerItem,
+  ViewItem,
+  InvokeRoutineRequest,
+  InvokeRoutineResponse,
+  SaveRoutinePayload,
+  ToggleTriggerRequest,
+  RefreshViewRequest,
+} from '../features/routine/routineHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -1950,6 +1961,213 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  // ── Feature-29: Stored Procedure, Function, View & Trigger Studio ──
+  async getRoutines(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<RoutineItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const res = await fetch(`/api/connections/${connId}/routines${schemaParam}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch routines (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getRoutineDetail(
+    connId: string,
+    schema: string,
+    name: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<RoutineItem> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch routine detail (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async invokeRoutine(
+    connId: string,
+    req: InvokeRoutineRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<InvokeRoutineResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/invoke`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Routine invocation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async saveRoutine(
+    connId: string,
+    ddl: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/save`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ddl }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to save routine (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async deleteRoutine(
+    connId: string,
+    schema: string,
+    name: string,
+    routineType?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const typeParam = routineType ? `?type=${encodeURIComponent(routineType)}` : ''
+    const res = await fetch(`/api/connections/${connId}/routines/${encodeURIComponent(schema)}/${encodeURIComponent(name)}${typeParam}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete routine (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getTriggers(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<TriggerItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const params = new URLSearchParams()
+    if (schema) params.set('schema', schema)
+    if (table) params.set('table', table)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    const res = await fetch(`/api/connections/${connId}/triggers${qs}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch triggers (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async toggleTrigger(
+    connId: string,
+    req: ToggleTriggerRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/triggers/toggle`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to toggle trigger (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async deleteTrigger(
+    connId: string,
+    schema: string,
+    name: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const tableParam = table ? `?table=${encodeURIComponent(table)}` : ''
+    const res = await fetch(`/api/connections/${connId}/triggers/${encodeURIComponent(schema)}/${encodeURIComponent(name)}${tableParam}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete trigger (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getViews(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ViewItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const res = await fetch(`/api/connections/${connId}/views${schemaParam}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch views (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async refreshView(
+    connId: string,
+    req: RefreshViewRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/views/refresh`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to refresh view (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2264,6 +2482,18 @@ export interface ReconcileResponse {
   sampleMismatched: number
   sampleDiffs?: RowSampleDiff[]
   elapsedMs: number
+}
+
+export type {
+  RoutineItem,
+  RoutineArg,
+  TriggerItem,
+  ViewItem,
+  InvokeRoutineRequest,
+  InvokeRoutineResponse,
+  SaveRoutinePayload,
+  ToggleTriggerRequest,
+  RefreshViewRequest,
 }
 
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield, GitBranch } from 'lucide-react'
+import { Table2, Shield, GitBranch, Zap } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 import { useAppStore } from '../../stores/appStore'
@@ -155,8 +155,22 @@ export const Sidebar: React.FC<Props> = ({
         ))}
       </div>
 
-      {/* Migration Hub Trigger */}
-      <div className="p-2 border-t border-[var(--border)] bg-[var(--surface)]/20 shrink-0">
+      {/* Studio & Hub Triggers */}
+      <div className="p-2 border-t border-[var(--border)] bg-[var(--surface)]/20 shrink-0 space-y-1.5">
+        <button
+          onClick={() => useAppStore.getState().openRoutineStudio('routines')}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-purple-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"
+          title="Open Routine, Function, View & Trigger Studio"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Zap className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+            <span className="truncate">Routine Studio</span>
+          </div>
+          <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-purple-500/10 text-purple-500 border border-purple-500/20 shrink-0">
+            SQL
+          </span>
+        </button>
+
         <button
           onClick={() => useAppStore.getState().setIsMigrationModalOpen(true)}
           className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-blue-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"

@@ -100,6 +100,11 @@ interface AppState {
   closeFederationModal: () => void
   isMigrationModalOpen: boolean
   setIsMigrationModalOpen: (open: boolean) => void
+  isRoutineStudioOpen: boolean
+  setIsRoutineStudioOpen: (open: boolean) => void
+  routineStudioInitialTab?: 'routines' | 'triggers' | 'views'
+  openRoutineStudio: (tab?: 'routines' | 'triggers' | 'views') => void
+  closeRoutineStudio: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -339,6 +344,15 @@ export const useAppStore = create<AppState>()(
       closeFederationModal: () => set({ isFederationModalOpen: false }),
       isMigrationModalOpen: false,
       setIsMigrationModalOpen: (isMigrationModalOpen) => set({ isMigrationModalOpen }),
+      isRoutineStudioOpen: false,
+      setIsRoutineStudioOpen: (isRoutineStudioOpen) => set({ isRoutineStudioOpen }),
+      routineStudioInitialTab: 'routines',
+      openRoutineStudio: (tab = 'routines') =>
+        set({
+          isRoutineStudioOpen: true,
+          routineStudioInitialTab: tab,
+        }),
+      closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
 
       peekDrawer: {
         isOpen: false,

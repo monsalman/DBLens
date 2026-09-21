@@ -127,6 +127,18 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/migrations/apply", h.ApplyMigration)
 	api.Post("/connections/{connId}/migrations/rollback", h.RollbackMigration)
 
+	// ── Feature-29: Stored Procedure, Function, View & Trigger Studio ──
+	api.Get("/connections/{connId}/routines", h.GetRoutines)
+	api.Get("/connections/{connId}/routines/{schema}/{name}", h.GetRoutineDetail)
+	api.Post("/connections/{connId}/routines/invoke", h.InvokeRoutine)
+	api.Post("/connections/{connId}/routines/save", h.SaveRoutine)
+	api.Delete("/connections/{connId}/routines/{schema}/{name}", h.DeleteRoutine)
+	api.Get("/connections/{connId}/triggers", h.GetTriggers)
+	api.Post("/connections/{connId}/triggers/toggle", h.ToggleTrigger)
+	api.Delete("/connections/{connId}/triggers/{schema}/{name}", h.DeleteTrigger)
+	api.Get("/connections/{connId}/views", h.GetViews)
+	api.Post("/connections/{connId}/views/refresh", h.RefreshView)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
