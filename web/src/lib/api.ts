@@ -1,5 +1,6 @@
 export type DatabaseDriver = 'postgres' | 'mysql' | 'sqlite'
 import type { AIAssistantConfig } from '../features/editor/aiAssistant'
+import type { GISParseResponse, GISConvertResponse } from '../features/gis/gisHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -1797,6 +1798,55 @@ export const api = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       throw new Error(err.error || `Reconciliation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async parseGIS(
+    connId: string,
+    data: string,
+    srid?: number,
+    profiles?: ConnectionConfig[]
+  ): Promise<GISParseResponse> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const url = connId ? `/api/connections/${connId}/gis/parse` : '/api/gis/parse'
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify({ data, srid }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `GIS parse failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async convertGIS(
+    connId: string,
+    data: string,
+    targetFormat: string,
+    targetSrid?: number,
+    dialect?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<GISConvertResponse> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const url = connId ? `/api/connections/${connId}/gis/convert` : '/api/gis/convert'
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify({
+        data,
+        target_format: targetFormat,
+        target_srid: targetSrid,
+        dialect,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `GIS convert failed (${res.status})`)
     }
     const json = await res.json()
     return json.data ?? json

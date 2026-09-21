@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -12,6 +12,8 @@ import { TableSchemaView } from './TableSchemaView'
 import { generateStagedSQL, type StagedChange } from './stagedMutations'
 import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
+import { SpatialMapDrawer } from '../gis/SpatialMapDrawer'
+import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
 
 interface Props {
   connId: string
@@ -54,6 +56,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [maskExport, setMaskExport] = useState<boolean>(true)
   const privacyMenuRef = useRef<HTMLDivElement>(null)
   const [jsonModal, setJsonModal] = useState<{
+    isOpen: boolean
+    row: Record<string, any>
+    col: string
+    val: any
+    rowIdx: number
+  } | null>(null)
+  const [spatialDrawer, setSpatialDrawer] = useState<{
     isOpen: boolean
     row: Record<string, any>
     col: string
@@ -339,6 +348,44 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const handleJsonModalSave = async (newValue: string) => {
     if (!jsonModal) return
     const { row, col, rowIdx, val: oldVal } = jsonModal
+    const rowKey = getRowKey(row, rowIdx)
+    const cellKey = `${rowKey}:${col}`
+    const where: Record<string, any> = {}
+    for (const pk of pkCols) {
+      where[pk.name] = row[pk.name]
+    }
+
+    if (stagedMode) {
+      setStagedChanges((prev) => ({
+        ...prev,
+        [cellKey]: {
+          key: cellKey,
+          row,
+          col,
+          oldVal,
+          newVal: newValue,
+          where,
+        },
+      }))
+    } else {
+      try {
+        await mutateM.mutateAsync({
+          schema,
+          table,
+          type: 'UPDATE',
+          data: { [col]: newValue },
+          where,
+        })
+      } catch (err: any) {
+        setInlineError(`Update failed: ${err?.message ?? 'Unknown error'}`)
+      }
+    }
+  }
+
+  const handleSpatialDrawerSave = async (newValue: string) => {
+    if (!spatialDrawer) return
+    const { row, col, rowIdx, val: oldVal } = spatialDrawer
+    if (!row || !col) return
     const rowKey = getRowKey(row, rowIdx)
     const cellKey = `${rowKey}:${col}`
     const where: Record<string, any> = {}
@@ -742,6 +789,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                         <span>{c.pii}</span>
                       </span>
                     )}
+                    {isSpatialColumn(c.name, c.type) && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0"
+                        title="Spatial / GIS Column"
+                      >
+                        <Globe className="w-2.5 h-2.5" />
+                        <span>GIS</span>
+                      </span>
+                    )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
@@ -778,6 +834,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     const jsonCheck = parseJsonSafely(val)
                     const isJson = isJsonType || jsonCheck.isJson
                     const isMaskedPII = privacyMode && colPIIMap.has(c.name)
+                    const isSpatial = !isMaskedPII && (isSpatialValue(val) || isSpatialColumn(c.name, c.type)) && val !== null && val !== undefined && String(val).trim() !== ''
 
                     return (
                       <td
@@ -865,6 +922,34 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                             >
                               <span className="font-bold">{'{ }'}</span>
                               <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
+                            </button>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
+                          </span>
+                        ) : isSpatial ? (
+                          <span className="flex items-center gap-1.5 truncate group/spatial">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setSpatialDrawer({
+                                  isOpen: true,
+                                  row,
+                                  col: c.name,
+                                  val,
+                                  rowIdx: i,
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-[10px] font-mono border border-emerald-500/30 cursor-pointer shrink-0 transition-colors"
+                              title="Open in Spatial & PostGIS Studio"
+                            >
+                              <Globe className="w-2.5 h-2.5" />
+                              <span className="text-[9px] uppercase tracking-wider font-semibold">GIS</span>
                             </button>
                             <span className="truncate">{formatValue(val, c.name)}</span>
                           </span>
@@ -1063,6 +1148,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           readOnly={!hasPk || activeConn?.readOnly}
           onClose={() => setJsonModal(null)}
           onSave={handleJsonModalSave}
+        />
+      )}
+
+      {spatialDrawer && (
+        <SpatialMapDrawer
+          isOpen={spatialDrawer.isOpen}
+          initialValue={spatialDrawer.val}
+          columnName={spatialDrawer.col}
+          tableName={table}
+          connId={connId}
+          dialect={activeConn?.dialect || activeConn?.driver || 'postgres'}
+          readOnly={!hasPk || activeConn?.readOnly}
+          onClose={() => setSpatialDrawer(null)}
+          onSave={handleSpatialDrawerSave}
         />
       )}
     </div>

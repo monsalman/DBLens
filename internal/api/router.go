@@ -114,6 +114,12 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/federation/pipe", h.DataPipeHandler)
 	api.Post("/federation/reconcile", h.ReconcileHandler)
 
+	// ── Visual Spatial & PostGIS / GIS Map Studio ──
+	api.Post("/connections/{connId}/gis/parse", h.ParseGISData)
+	api.Post("/connections/{connId}/gis/convert", h.ConvertGISData)
+	api.Post("/gis/parse", h.ParseGISData)
+	api.Post("/gis/convert", h.ConvertGISData)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
