@@ -139,6 +139,12 @@ interface AppState {
   // Audit Log
   isAuditLogOpen: boolean
   setIsAuditLogOpen: (open: boolean) => void
+
+  // Live Feed (Feature-32)
+  isLiveFeedOpen: boolean
+  liveFeedConfig: { connId: string; schema: string; table: string } | null
+  openLiveFeed: (connId: string, schema: string, table: string) => void
+  closeLiveFeed: () => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -430,6 +436,12 @@ export const useAppStore = create<AppState>()(
 
       isAuditLogOpen: false,
       setIsAuditLogOpen: (isAuditLogOpen) => set({ isAuditLogOpen }),
+
+      isLiveFeedOpen: false,
+      liveFeedConfig: null,
+      openLiveFeed: (connId, schema, table) =>
+        set({ isLiveFeedOpen: true, liveFeedConfig: { connId, schema, table } }),
+      closeLiveFeed: () => set({ isLiveFeedOpen: false, liveFeedConfig: null }),
     }),
     {
       name: 'dblens-storage',

@@ -14,6 +14,7 @@ import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { SpatialMapDrawer } from '../gis/SpatialMapDrawer'
 import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
+import { LiveFeedDrawer } from '../livefeed/LiveFeedDrawer'
 
 interface Props {
   connId: string
@@ -69,6 +70,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     val: any
     rowIdx: number
   } | null>(null)
+  const [showLiveFeed, setShowLiveFeed] = useState(false)
 
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -680,6 +682,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 <Code2 className="w-3.5 h-3.5 text-blue-400" />
                 <span className="hidden sm:inline">REST API</span>
               </button>
+
+              {/* Live Feed */}
+              {table && (
+                <button
+                  onClick={() => setShowLiveFeed(true)}
+                  title="Live Table Feed — watch rows change in real time"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-green-400 hover:border-green-500/40 hover:bg-green-500/10 transition-colors"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                  <span>Live Feed ▶</span>
+                </button>
+              )}
               
               <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -1164,6 +1178,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           onSave={handleSpatialDrawerSave}
         />
       )}
+      <LiveFeedDrawer
+        isOpen={showLiveFeed}
+        onClose={() => setShowLiveFeed(false)}
+        connId={connId}
+        schema={schema}
+        table={table}
+      />
     </div>
   )
 }

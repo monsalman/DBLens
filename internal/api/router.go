@@ -158,6 +158,10 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/audit/verify", h.VerifyAuditChain)
 	api.Get("/audit/export.csv", h.ExportAuditCSV)
 
+	// ── Feature-32: Live Table Feed & WAL Change Stream Viewer ──
+	api.Get("/connections/{connId}/live-feed", h.LiveTableFeed)
+	api.Get("/live-feed/status", h.LiveFeedStatus)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

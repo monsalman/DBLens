@@ -2243,6 +2243,13 @@ export const api = {
     const json = await r.json()
     return json.data ?? json
   },
+
+  // Feature-32: Live Feed
+  async liveFeedStatus(): Promise<{ active_feeds: number }> {
+    const r = await fetch('/api/live-feed/status')
+    if (!r.ok) throw new Error(`Failed to get live feed status (${r.status})`)
+    return r.json()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
