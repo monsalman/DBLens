@@ -32,9 +32,6 @@ export const AnnotationPanel: React.FC<Props> = ({ connId = '', schema, table })
       <div className="px-3 py-2 border-b border-[var(--border)] space-y-1.5 shrink-0">
         <div className="flex items-center gap-1.5">
           <StickyNote className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-          <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider">
-            Schema Notes
-          </label>
           <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">
             {annotations.length}
           </span>
