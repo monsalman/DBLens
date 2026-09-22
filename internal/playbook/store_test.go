@@ -122,12 +122,19 @@ func TestConcurrentReadsAndUpdates(t *testing.T) {
 			defer wg.Done()
 			<-start
 			for i := 0; i < iters; i++ {
-				if _, err := s.Update(ids[i%len(ids)], &Entry{
-					Title:       fmt.Sprintf("writer %d title %d", worker, i),
-					Description: "updated",
+				title := fmt.Sprintf("writer %d title %d", worker, i)
+				desc := "updated"
+				dialect := "postgres"
+				query := fmt.Sprintf("SELECT %d, %d", worker, i)
+				author := "writer"
+				if _, err := s.Update(ids[i%len(ids)], &UpdatePatch{
+					Title:       &title,
+					Description: &desc,
 					Tags:        []string{"ops", "updated"},
-					Query:       fmt.Sprintf("SELECT %d, %d", worker, i),
+					Dialect:     &dialect,
+					Query:       &query,
 					Parameters:  []Parameter{{Name: "id", Type: "int", Default: "1"}},
+					Author:      &author,
 				}); err != nil {
 					t.Errorf("Update: %v", err)
 					return
@@ -235,7 +242,9 @@ func TestVersionHistoryIsCapped(t *testing.T) {
 	ids := seedEntries(t, s, 1)
 
 	for i := 0; i < maxVersionHistory+15; i++ {
-		if _, err := s.Update(ids[0], &Entry{Title: "t", Query: fmt.Sprintf("SELECT %d", i)}); err != nil {
+		title := "t"
+		query := fmt.Sprintf("SELECT %d", i)
+		if _, err := s.Update(ids[0], &UpdatePatch{Title: &title, Query: &query}); err != nil {
 			t.Fatalf("Update %d: %v", i, err)
 		}
 	}
@@ -280,7 +289,8 @@ func TestImportCapsVersionHistory(t *testing.T) {
 // relies on (L7): classification must not depend on message text.
 func TestStoreErrorSentinels(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.Update("missing", &Entry{Title: "x"}); !errors.Is(err, ErrNotFound) {
+	titleX := "x"
+	if _, err := s.Update("missing", &UpdatePatch{Title: &titleX}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update missing err = %v, want ErrNotFound", err)
 	}
 	if err := s.Delete("missing"); !errors.Is(err, ErrNotFound) {
@@ -291,5 +301,89 @@ func TestStoreErrorSentinels(t *testing.T) {
 	}
 	if _, err := s.Update("missing", nil); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Update(nil) err = %v, want ErrValidation", err)
+	}
+}
+
+// TestUpdateIsPartial guards the destructive-update regression: a client that
+// PUTs only {"query": "..."} (as the SQL Studio "update this entry" flow does)
+// must not have its title, tags, dialect or author wiped.
+func TestUpdateIsPartial(t *testing.T) {
+	s := newTestStore(t)
+	e := &Entry{
+		Title:       "Incident runbook",
+		Description: "how we recover",
+		Tags:        []string{"runbook", "oncall"},
+		Dialect:     "postgres",
+		Query:       "SELECT 1;",
+		Author:      "alice",
+	}
+	if err := s.Create(e); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	onlyQuery := "SELECT 2; -- revised"
+	updated, err := s.Update(e.ID, &UpdatePatch{Query: &onlyQuery})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.Query != onlyQuery {
+		t.Errorf("query = %q, want %q", updated.Query, onlyQuery)
+	}
+	if updated.Title != "Incident runbook" {
+		t.Errorf("title was wiped: %q", updated.Title)
+	}
+	if updated.Description != "how we recover" {
+		t.Errorf("description was wiped: %q", updated.Description)
+	}
+	if len(updated.Tags) != 2 || updated.Tags[0] != "runbook" {
+		t.Errorf("tags were wiped: %v", updated.Tags)
+	}
+	if updated.Dialect != "postgres" {
+		t.Errorf("dialect was wiped: %q", updated.Dialect)
+	}
+	if updated.Author != "alice" {
+		t.Errorf("author was wiped: %q", updated.Author)
+	}
+	if len(updated.VersionHistory) != 1 {
+		t.Errorf("version history = %d, want 1", len(updated.VersionHistory))
+	}
+
+	// Durable: the change must survive a reload from disk.
+	reloaded, err := NewStore(s.path)
+	if err != nil {
+		t.Fatalf("NewStore reload: %v", err)
+	}
+	got := reloaded.Get(e.ID)
+	if got == nil {
+		t.Fatal("entry lost after reload")
+	}
+	if got.Title != "Incident runbook" || len(got.Tags) != 2 {
+		t.Errorf("reloaded entry lost fields: title=%q tags=%v", got.Title, got.Tags)
+	}
+
+	// An explicit empty title is still rejected rather than silently stored.
+	empty := "   "
+	if _, err := s.Update(e.ID, &UpdatePatch{Title: &empty}); !errors.Is(err, ErrValidation) {
+		t.Errorf("empty title err = %v, want ErrValidation", err)
+	}
+}
+
+// TestUpdateTagsCanBeCleared proves an explicitly supplied empty tag list is
+// honoured (nil means "unchanged", [] means "clear").
+func TestUpdateTagsCanBeCleared(t *testing.T) {
+	s := newTestStore(t)
+	e := &Entry{Title: "tagged", Tags: []string{"a", "b"}, Query: "SELECT 1;"}
+	if err := s.Create(e); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	updated, err := s.Update(e.ID, &UpdatePatch{Tags: []string{}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(updated.Tags) != 0 {
+		t.Errorf("tags = %v, want cleared", updated.Tags)
+	}
+	if updated.Title != "tagged" {
+		t.Errorf("title changed unexpectedly: %q", updated.Title)
 	}
 }

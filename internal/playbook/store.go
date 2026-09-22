@@ -54,6 +54,20 @@ type Entry struct {
 	VersionHistory []VersionSnapshot `json:"version_history"`
 }
 
+// UpdatePatch is a partial update for an entry: nil pointer fields are left
+// unchanged, so a client can PATCH just the query without wiping the title,
+// tags or author.
+type UpdatePatch struct {
+	Title       *string     `json:"title,omitempty"`
+	Description *string     `json:"description,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
+	Dialect     *string     `json:"dialect,omitempty"`
+	Query       *string     `json:"query,omitempty"`
+	Parameters  []Parameter `json:"parameters,omitempty"`
+	Author      *string     `json:"author,omitempty"`
+	Slug        *string     `json:"slug,omitempty"`
+}
+
 // Store holds entries in memory and persists to a JSON-lines file.
 type Store struct {
 	mu      sync.RWMutex
@@ -214,9 +228,9 @@ func (s *Store) Create(e *Entry) error {
 
 // Update modifies an entry by id, appending a version snapshot capped at
 // maxVersionHistory entries (newest kept).
-func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
+func (s *Store) Update(id string, patch *UpdatePatch) (*Entry, error) {
 	if patch == nil {
-		return nil, fmt.Errorf("%w: entry is required", ErrValidation)
+		return nil, fmt.Errorf("%w: patch is required", ErrValidation)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -231,15 +245,34 @@ func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
 			UpdatedAt:     e.UpdatedAt,
 		})
 		e.VersionHistory = truncateVersionHistory(e.VersionHistory)
-		e.Title = patch.Title
-		e.Description = patch.Description
-		e.Tags = append([]string{}, patch.Tags...)
-		e.Dialect = patch.Dialect
-		e.Query = patch.Query
-		e.Parameters = append([]Parameter{}, patch.Parameters...)
-		e.Author = patch.Author
-		if patch.Slug != "" {
-			e.Slug = patch.Slug
+		// Only fields present in the patch are applied; omitted fields keep
+		// their stored value so a partial update is never destructive.
+		if patch.Title != nil {
+			if strings.TrimSpace(*patch.Title) == "" {
+				return nil, fmt.Errorf("%w: title cannot be empty", ErrValidation)
+			}
+			e.Title = *patch.Title
+		}
+		if patch.Description != nil {
+			e.Description = *patch.Description
+		}
+		if patch.Tags != nil {
+			e.Tags = append([]string{}, patch.Tags...)
+		}
+		if patch.Dialect != nil {
+			e.Dialect = *patch.Dialect
+		}
+		if patch.Query != nil {
+			e.Query = *patch.Query
+		}
+		if patch.Parameters != nil {
+			e.Parameters = append([]Parameter{}, patch.Parameters...)
+		}
+		if patch.Author != nil {
+			e.Author = *patch.Author
+		}
+		if patch.Slug != nil && *patch.Slug != "" {
+			e.Slug = *patch.Slug
 		}
 		e.UpdatedAt = now()
 		return deepCopyEntry(e), s.save()

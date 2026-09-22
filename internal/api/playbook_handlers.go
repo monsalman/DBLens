@@ -98,7 +98,7 @@ func (h *Handler) PlaybookUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var patch playbook.Entry
+	var patch playbook.UpdatePatch
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return
