@@ -105,6 +105,12 @@ func (h *Handler) LiveTableFeed(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&activeFeeds, 1)
 	defer atomic.AddInt64(&activeFeeds, -1)
 
+	// The server sets WriteTimeout (60s), which would sever this long-lived
+	// stream. Clear the write deadline for this response before the first
+	// frame; unsupported writers return an error we deliberately ignore.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
 	ctx := r.Context()
 	events := make(chan livefeed.ChangeEvent, 64)
 	errs := make(chan livefeed.ErrorEvent, 4)

@@ -51,6 +51,13 @@ func (h *Handler) HealthStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The server sets WriteTimeout (60s), which would sever this long-lived
+	// stream and send EventSource into a reconnect loop. Clear the write
+	// deadline for this response; a ResponseWriter that cannot do so is fine
+	// (the error is deliberately ignored).
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
