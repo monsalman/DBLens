@@ -2307,6 +2307,46 @@ export const api = {
     if (!r.ok) throw new Error(json.error || `Failed to import (${r.status})`)
     return json.data ?? json
   },
+
+  // ── Feature-34: Table Annotations & Collaborative Notes ─────────────────
+  async listAnnotations(filters?: { conn?: string; schema?: string; table?: string; q?: string }): Promise<Annotation[]> {
+    const params = new URLSearchParams()
+    if (filters?.conn) params.set('conn', filters.conn)
+    if (filters?.schema) params.set('schema', filters.schema)
+    if (filters?.table) params.set('table', filters.table)
+    if (filters?.q) params.set('q', filters.q)
+    const r = await fetch(`/api/annotations?${params}`)
+    if (!r.ok) throw new Error(`Failed to list annotations (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+  async createAnnotation(annotation: Partial<Annotation>): Promise<Annotation> {
+    const r = await fetch('/api/annotations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(annotation),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create annotation (${r.status})`)
+    return json.data ?? json
+  },
+  async updateAnnotation(id: string, patch: Partial<Annotation>): Promise<Annotation> {
+    const r = await fetch(`/api/annotations/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update annotation (${r.status})`)
+    return json.data ?? json
+  },
+  async deleteAnnotation(id: string): Promise<void> {
+    const r = await fetch(`/api/annotations/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete annotation (${r.status})`)
+  },
+  annotationExportUrl(): string {
+    return '/api/annotations/export.md'
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2717,6 +2757,24 @@ export interface PlaybookEntry {
   created_at: string
   updated_at: string
   version_history: PlaybookVersionSnapshot[]
+}
+
+// ── Feature-34: Table Annotation types ────────────────────────────────────
+
+export type AnnotationTargetType = 'table' | 'column' | 'connection'
+
+export interface Annotation {
+  id: string
+  target_type: AnnotationTargetType
+  connection_id: string
+  schema?: string
+  table?: string
+  column?: string
+  note: string
+  author?: string
+  pinned: boolean
+  created_at: string
+  updated_at: string
 }
 
 

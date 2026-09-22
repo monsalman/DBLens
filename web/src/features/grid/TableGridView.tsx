@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -15,6 +15,8 @@ import { parseJsonSafely } from '../json/jsonPathHelper'
 import { SpatialMapDrawer } from '../gis/SpatialMapDrawer'
 import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
 import { LiveFeedDrawer } from '../livefeed/LiveFeedDrawer'
+import { AnnotationBadge } from '../annotations/AnnotationBadge'
+import { useAnnotations } from '../annotations/useAnnotations'
 
 interface Props {
   connId: string
@@ -46,6 +48,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const { openPeekDrawer, connections, openRestModal } = useAppStore()
   const activeConn = connections.find((c) => c.id === connId)
   const isProd = activeConn?.environment === 'production'
+
+  // Feature-34: annotations for the current table (column badges + pinned banner)
+  const { annotations: tableNotes } = useAnnotations(
+    { conn: connId, table, schema },
+    !!connId && !!table,
+  )
+  const pinnedNotes = useMemo(() => tableNotes.filter(n => n.pinned), [tableNotes])
 
   const [stagedMode, setStagedMode] = useState<boolean>(() => isProd)
   const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
@@ -491,6 +500,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
 
   return (
     <div className="flex-1 flex flex-col bg-[var(--bg)] overflow-hidden">
+      {pinnedNotes.length > 0 && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 text-amber-500 text-[11px] px-3 py-1.5 font-mono shrink-0 space-y-1">
+          {pinnedNotes.map(n => (
+            <div key={n.id} className="flex items-start gap-1.5">
+              <StickyNote className="w-3 h-3 mt-0.5 shrink-0" />
+              <span className="shrink-0 font-semibold">
+                {n.column ? `${n.column}:` : 'Table note:'}
+              </span>
+              <span className="whitespace-pre-wrap break-words text-[var(--fg)]">{n.note}</span>
+              {n.author && <span className="ml-auto shrink-0 opacity-70">— {n.author}</span>}
+            </div>
+          ))}
+        </div>
+      )}
       {inlineError && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-xs px-3 py-1.5 flex items-center justify-between font-mono shrink-0">
           <span>{inlineError}</span>
@@ -750,6 +773,14 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 )}
               </div>
             </div>
+
+            {/* Feature-34: table-level notes */}
+            <AnnotationBadge
+              connId={connId}
+              schema={schema}
+              table={table}
+              annotations={tableNotes}
+            />
           </>
         ) : (
           <div className="text-xs font-mono text-[var(--muted)] flex items-center gap-2">
@@ -814,6 +845,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
+                    <AnnotationBadge
+                      connId={connId}
+                      schema={schema}
+                      table={table}
+                      column={c.name}
+                      annotations={tableNotes}
+                    />
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
                   </div>
                 </th>

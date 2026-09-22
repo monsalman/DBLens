@@ -176,6 +176,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/playbook/import", h.PlaybookImport)
 	api.Get("/playbook/entries/{id}/share", h.PlaybookShare)
 
+	// ── Feature-34: Database Table Annotations & Collaborative Notes ──
+	api.Get("/annotations", h.AnnotationsList)
+	api.Post("/annotations", h.AnnotationCreate)
+	api.Put("/annotations/{id}", h.AnnotationUpdate)
+	api.Delete("/annotations/{id}", h.AnnotationDelete)
+	api.Get("/annotations/export.md", h.AnnotationsExportMD)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

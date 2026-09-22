@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen } from 'lucide-react'
+import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen, StickyNote } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 import { useAppStore } from '../../stores/appStore'
+import { AnnotationPanel } from '../annotations/AnnotationPanel'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -27,6 +28,7 @@ export const Sidebar: React.FC<Props> = ({
   const [databases, setDatabases] = useState<string[]>([])
   const [selectedDb, setSelectedDb] = useState<string>('')
   const [dbLoading, setDbLoading] = useState(false)
+  const [showNotes, setShowNotes] = useState(false)
 
   const loadTables = (connId: string, schema: string) => {
     setLoading(true)
@@ -138,21 +140,42 @@ export const Sidebar: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Tables List */}
+      {/* Tables List / Schema Notes */}
       <div className="flex-1 overflow-y-auto p-2">
-        <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider ml-1 mb-1 block">Tables</label>
-        {loading && <div className="ml-1 text-[11px] text-[var(--muted)]">Loading...</div>}
-        {!loading && tables.length === 0 && <div className="ml-1 text-[11px] text-[var(--muted)]">No tables found</div>}
-        {tables.map(name => (
-          <div
-            key={name}
-            onClick={() => onSelectTable?.(name)}
-            className={`sidebar-item ${selectedTable === name ? 'sidebar-item-active' : ''}`}
+        <div className="flex items-center gap-1 mb-1">
+          <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider ml-1">
+            {showNotes ? 'Schema Notes' : 'Tables'}
+          </label>
+          <button
+            onClick={() => setShowNotes(v => !v)}
+            title={showNotes ? 'Back to tables' : 'Open Schema Notes panel'}
+            className={`ml-auto p-0.5 rounded border transition-colors ${
+              showNotes
+                ? 'border-sky-500/40 bg-sky-500/15 text-sky-400'
+                : 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+            }`}
           >
-            <Table2 className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{name}</span>
-          </div>
-        ))}
+            <StickyNote className="w-3 h-3" />
+          </button>
+        </div>
+        {showNotes ? (
+          <AnnotationPanel connId={activeConnId} schema={selectedSchema} table={selectedTable ?? undefined} />
+        ) : (
+          <>
+            {loading && <div className="ml-1 text-[11px] text-[var(--muted)]">Loading...</div>}
+            {!loading && tables.length === 0 && <div className="ml-1 text-[11px] text-[var(--muted)]">No tables found</div>}
+            {tables.map(name => (
+              <div
+                key={name}
+                onClick={() => onSelectTable?.(name)}
+                className={`sidebar-item ${selectedTable === name ? 'sidebar-item-active' : ''}`}
+              >
+                <Table2 className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{name}</span>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Studio & Hub Triggers */}

@@ -14,16 +14,17 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/annotations"
 	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/audit"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/cron"
-	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
 	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/dblens/dblens/internal/tunnel"
@@ -243,12 +244,13 @@ func sendError(w http.ResponseWriter, status int, msg string) {
 }
 
 type Handler struct {
-	mgr           *connection.Manager
-	webhookMgr    *webhook.Manager
-	cronScheduler *cron.Scheduler
-	auditLogger   *audit.AuditLogger
-	auditLogPath  string
-	playbookStore *playbook.Store
+	mgr              *connection.Manager
+	webhookMgr       *webhook.Manager
+	cronScheduler    *cron.Scheduler
+	auditLogger      *audit.AuditLogger
+	auditLogPath     string
+	playbookStore    *playbook.Store
+	annotationsStore *annotations.Store
 }
 
 func NewHandler(mgr *connection.Manager) (*Handler, error) {
@@ -313,6 +315,14 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 				return nil
 			}
 			return ps
+		}(),
+		annotationsStore: func() *annotations.Store {
+			as, err := annotations.NewStore(auditDir + "/annotations.json")
+			if err != nil {
+				// non-fatal: return nil store (handlers will fail gracefully)
+				return nil
+			}
+			return as
 		}(),
 	}, nil
 }
