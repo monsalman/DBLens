@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen, StickyNote } from 'lucide-react'
+import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen, StickyNote, Activity } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 import { useAppStore } from '../../stores/appStore'
 import { AnnotationPanel } from '../annotations/AnnotationPanel'
+import { HealthStatusDot } from '../health/HealthStatusDot'
+import { useHealth } from '../health/useHealth'
+import { findHealth } from '../health/healthHelper'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -29,6 +32,7 @@ export const Sidebar: React.FC<Props> = ({
   const [selectedDb, setSelectedDb] = useState<string>('')
   const [dbLoading, setDbLoading] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
+  const { connections: healthConns } = useHealth(true)
 
   const loadTables = (connId: string, schema: string) => {
     setLoading(true)
@@ -79,6 +83,7 @@ export const Sidebar: React.FC<Props> = ({
   }
 
   const activeConn = connections.find(c => c.id === activeConnId)
+  const activeHealth = activeConn ? findHealth(activeConn, healthConns) : undefined
 
   return (
     <aside className="w-56 bg-[var(--bg)] border-r border-[var(--border)] flex flex-col shrink-0 overflow-hidden">
@@ -86,6 +91,9 @@ export const Sidebar: React.FC<Props> = ({
       {activeConn && (
         <div className="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between gap-2 bg-[var(--surface)]/40 shrink-0">
           <div className="flex items-center gap-1.5 min-w-0">
+            {activeHealth && (
+              <HealthStatusDot status={activeHealth.status} label="Connection health" />
+            )}
             <span className="font-mono text-xs font-semibold text-[var(--fg)] truncate">
               {activeConn.label || activeConn.name || activeConn.id}
             </span>
@@ -234,6 +242,20 @@ export const Sidebar: React.FC<Props> = ({
             🔒
           </span>
         </button>
+        <button
+          onClick={() => useAppStore.getState().setIsHealthOpen(true)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-emerald-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"
+          title="Open Database Observatory — connection health & latency monitor"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Activity className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+            <span className="truncate">Observatory</span>
+          </div>
+          <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 shrink-0">
+            {activeHealth ? `${activeHealth.last_ping_ms}ms` : '·'}
+          </span>
+        </button>
+
         <button
           onClick={() => useAppStore.getState().setIsPlaybookOpen(true)}
           className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-indigo-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"

@@ -144,6 +144,10 @@ interface AppState {
   isPlaybookOpen: boolean
   setIsPlaybookOpen: (open: boolean) => void
 
+  // Feature-35: Connection Health Dashboard
+  isHealthOpen: boolean
+  setIsHealthOpen: (open: boolean) => void
+
   // Live Feed (Feature-32)
   isLiveFeedOpen: boolean
   liveFeedConfig: { connId: string; schema: string; table: string } | null
@@ -443,6 +447,9 @@ export const useAppStore = create<AppState>()(
 
       isPlaybookOpen: false,
       setIsPlaybookOpen: (isPlaybookOpen) => set({ isPlaybookOpen }),
+
+      isHealthOpen: false,
+      setIsHealthOpen: (isHealthOpen) => set({ isHealthOpen }),
 
       isLiveFeedOpen: false,
       liveFeedConfig: null,

@@ -2347,6 +2347,20 @@ export const api = {
   annotationExportUrl(): string {
     return '/api/annotations/export.md'
   },
+
+  // ── Feature-35: Connection Health Dashboard ──────────────────────────────
+  async getConnectionHealth(): Promise<HealthPayload> {
+    const r = await fetch('/api/health/connections')
+    if (!r.ok) throw new Error(`Failed to load connection health (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  /** SSE endpoint for live health pushes (EventSource sends no headers, and the
+   *  server-side monitor needs no DSN: it probes the pool the server already holds). */
+  healthStreamUrl(): string {
+    return '/api/health/stream'
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2775,6 +2789,46 @@ export interface Annotation {
   pinned: boolean
   created_at: string
   updated_at: string
+}
+
+// ── Feature-35: Connection Health types ────────────────────────────────────
+
+export type HealthStatus = 'green' | 'yellow' | 'red' | 'unknown'
+
+export interface HealthSample {
+  at: string
+  ms: number
+  ok: boolean
+}
+
+export interface ConnectionHealth {
+  connection_id: string
+  label?: string
+  status: HealthStatus
+  last_ping_ms: number
+  avg_ping_ms_1m: number
+  max_ping_ms_5m: number
+  consecutive_failures: number
+  samples: HealthSample[]
+  last_checked_at: string
+  total_checks: number
+  success_count: number
+}
+
+export interface HealthSummary {
+  healthy: number
+  degraded: number
+  down: number
+  unknown: number
+  total: number
+  total_checks: number
+  success_count: number
+  success_rate: number
+}
+
+export interface HealthPayload {
+  connections: ConnectionHealth[]
+  summary: HealthSummary
 }
 
 

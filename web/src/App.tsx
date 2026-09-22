@@ -23,6 +23,7 @@ import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
 import { CronStudio } from './features/cron/CronStudio'
 import { AuditLogPanel } from './features/audit/AuditLogPanel'
 import { PlaybookPanel } from './features/playbook/PlaybookPanel'
+import { HealthDashboard } from './features/health/HealthDashboard'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
@@ -89,6 +90,8 @@ export function App() {
   const setIsCronStudioOpen = useAppStore((s) => s.setIsCronStudioOpen)
   const isPlaybookOpen = useAppStore((s) => s.isPlaybookOpen)
   const setIsPlaybookOpen = useAppStore((s) => s.setIsPlaybookOpen)
+  const isHealthOpen = useAppStore((s) => s.isHealthOpen)
+  const setIsHealthOpen = useAppStore((s) => s.setIsHealthOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -381,6 +384,7 @@ export function App() {
       />
       <AuditLogPanel />
       <PlaybookPanel isOpen={isPlaybookOpen} onClose={() => setIsPlaybookOpen(false)} />
+      <HealthDashboard isOpen={isHealthOpen} onClose={() => setIsHealthOpen(false)} />
       <GlobalLiveFeedDrawer />
     </QueryClientProvider>
   )

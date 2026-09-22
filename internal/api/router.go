@@ -183,6 +183,10 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Delete("/annotations/{id}", h.AnnotationDelete)
 	api.Get("/annotations/export.md", h.AnnotationsExportMD)
 
+	// ── Feature-35: Connection Health Dashboard & Latency Monitor ──
+	api.Get("/health/connections", h.HealthConnections)
+	api.Get("/health/stream", h.HealthStream)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

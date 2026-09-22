@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
@@ -23,6 +24,7 @@ import (
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
+	"github.com/dblens/dblens/internal/healthmon"
 	"github.com/dblens/dblens/internal/masker"
 	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
@@ -251,6 +253,10 @@ type Handler struct {
 	auditLogPath     string
 	playbookStore    *playbook.Store
 	annotationsStore *annotations.Store
+	healthMon        *healthmon.Monitor
+	healthCancel     context.CancelFunc
+	shutdownCh       chan struct{}
+	shutdownOnce     sync.Once
 }
 
 func NewHandler(mgr *connection.Manager) (*Handler, error) {
@@ -302,12 +308,22 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 		return nil, fmt.Errorf("failed to open audit log %s: %w", auditPath, err)
 	}
 
-	return &Handler{
+	// Feature-35: connection health prober. The context is cancelled in
+	// Shutdown; the loop is a no-op until the pool holds at least one
+	// connection, so an idle server never dials anything.
+	healthCtx, healthCancel := context.WithCancel(context.Background())
+	healthMon := healthmon.New()
+	healthMon.Start(healthCtx, mgr, healthInterval())
+
+	h := &Handler{
 		mgr:           mgr,
 		webhookMgr:    webhook.NewManager(),
 		cronScheduler: sched,
 		auditLogger:   auditLog,
 		auditLogPath:  auditPath,
+		healthMon:     healthMon,
+		healthCancel:  healthCancel,
+		shutdownCh:    make(chan struct{}),
 		playbookStore: func() *playbook.Store {
 			ps, err := playbook.NewStore(auditDir + "/playbook.json")
 			if err != nil {
@@ -324,7 +340,20 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 			}
 			return as
 		}(),
-	}, nil
+	}
+	return h, nil
+}
+
+// healthInterval is the prober cadence: DBLENS_HEALTH_INTERVAL (seconds) when
+// set to a positive number, otherwise the 30s default. Overridable so
+// deployments can tune probe load without a rebuild.
+func healthInterval() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("DBLENS_HEALTH_INTERVAL")); raw != "" {
+		if secs, err := strconv.ParseFloat(raw, 64); err == nil && secs > 0 {
+			return time.Duration(secs * float64(time.Second))
+		}
+	}
+	return healthmon.DefaultInterval
 }
 
 // Shutdown stops background workers and flushes the audit log. Safe to call
@@ -332,6 +361,12 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 func (h *Handler) Shutdown() {
 	if h == nil {
 		return
+	}
+	if h.shutdownCh != nil {
+		h.shutdownOnce.Do(func() { close(h.shutdownCh) })
+	}
+	if h.healthCancel != nil {
+		h.healthCancel()
 	}
 	if h.cronScheduler != nil {
 		h.cronScheduler.Stop()
