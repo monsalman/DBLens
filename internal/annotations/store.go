@@ -5,12 +5,21 @@ package annotations
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+)
+
+// Sentinel errors let the HTTP layer map store failures to status codes with
+// errors.Is instead of matching on message text, and let it return a generic
+// client message without leaking internal detail.
+var (
+	ErrNotFound   = errors.New("not found")
+	ErrValidation = errors.New("validation")
 )
 
 // Target types accepted on an Annotation.
@@ -97,25 +106,32 @@ func normalizeTargetType(t string) (string, bool) {
 	return "", false
 }
 
-// Create validates and appends a new annotation.
-func (s *Store) Create(a *Annotation) error {
+func validateAnnotation(a *Annotation) error {
 	if a == nil {
-		return fmt.Errorf("annotation is required")
+		return fmt.Errorf("%w: annotation is required", ErrValidation)
 	}
 	tt, ok := normalizeTargetType(a.TargetType)
 	if !ok {
-		return fmt.Errorf("invalid target_type: %s (want table, column or connection)", a.TargetType)
+		return fmt.Errorf("%w: invalid target_type: %s (want table, column or connection)", ErrValidation, a.TargetType)
 	}
 	a.TargetType = tt
 	a.Note = strings.TrimSpace(a.Note)
 	if a.Note == "" {
-		return fmt.Errorf("note is required")
+		return fmt.Errorf("%w: note is required", ErrValidation)
 	}
 	if len(a.Note) > MaxNoteLen {
-		return fmt.Errorf("note exceeds %d characters", MaxNoteLen)
+		return fmt.Errorf("%w: note exceeds %d characters", ErrValidation, MaxNoteLen)
 	}
 	if tt == TargetColumn && strings.TrimSpace(a.Column) == "" {
-		return fmt.Errorf("column is required for a column annotation")
+		return fmt.Errorf("%w: column is required for a column annotation", ErrValidation)
+	}
+	return nil
+}
+
+// Create validates and appends a new annotation.
+func (s *Store) Create(a *Annotation) error {
+	if err := validateAnnotation(a); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -128,10 +144,26 @@ func (s *Store) Create(a *Annotation) error {
 	return s.save()
 }
 
-// Update patches note/author/pinned (and location when supplied) by id.
-func (s *Store) Update(id string, patch *Annotation) (*Annotation, error) {
+// UpdatePatch is the partial-update payload for Update. Non-pointer fields that
+// are left empty are treated as "unchanged"; Pinned is a pointer so that
+// omitting it never silently unpins the record.
+type UpdatePatch struct {
+	TargetType   string `json:"target_type"`
+	ConnectionID string `json:"connection_id"`
+	Schema       string `json:"schema"`
+	Table        string `json:"table"`
+	Column       string `json:"column"`
+	Note         string `json:"note"`
+	Author       string `json:"author"`
+	Pinned       *bool  `json:"pinned"`
+}
+
+// Update patches note/author/pinned (and location when supplied) by id. The
+// merged record is re-validated before it is persisted, so an update cannot
+// leave the store holding a record Create would have rejected.
+func (s *Store) Update(id string, patch *UpdatePatch) (*Annotation, error) {
 	if patch == nil {
-		return nil, fmt.Errorf("annotation is required")
+		return nil, fmt.Errorf("%w: annotation is required", ErrValidation)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,40 +171,41 @@ func (s *Store) Update(id string, patch *Annotation) (*Annotation, error) {
 		if a.ID != id {
 			continue
 		}
-		note := strings.TrimSpace(patch.Note)
-		if note == "" {
-			return nil, fmt.Errorf("note is required")
+		// Build the merged record and validate it as a whole, so an update
+		// cannot leave the store holding an invalid annotation.
+		merged := *a
+		merged.Note = strings.TrimSpace(patch.Note)
+		if merged.Note == "" {
+			return nil, fmt.Errorf("%w: note is required", ErrValidation)
 		}
-		if len(note) > MaxNoteLen {
-			return nil, fmt.Errorf("note exceeds %d characters", MaxNoteLen)
+		merged.Author = strings.TrimSpace(patch.Author)
+		if patch.Pinned != nil {
+			merged.Pinned = *patch.Pinned
 		}
-		a.Note = note
-		a.Author = strings.TrimSpace(patch.Author)
-		a.Pinned = patch.Pinned
 		if patch.TargetType != "" {
-			tt, ok := normalizeTargetType(patch.TargetType)
-			if !ok {
-				return nil, fmt.Errorf("invalid target_type: %s", patch.TargetType)
-			}
-			a.TargetType = tt
+			merged.TargetType = patch.TargetType
 		}
 		if patch.ConnectionID != "" {
-			a.ConnectionID = patch.ConnectionID
+			merged.ConnectionID = patch.ConnectionID
 		}
 		if patch.Schema != "" {
-			a.Schema = patch.Schema
+			merged.Schema = patch.Schema
 		}
 		if patch.Table != "" {
-			a.Table = patch.Table
+			merged.Table = patch.Table
 		}
 		if patch.Column != "" {
-			a.Column = patch.Column
+			merged.Column = patch.Column
 		}
-		a.UpdatedAt = time.Now().UTC()
-		cp := *a
+		if err := validateAnnotation(&merged); err != nil {
+			return nil, err
+		}
+		merged.UpdatedAt = time.Now().UTC()
+		*a = merged
+		cp := merged
 		return &cp, s.save()
 	}
-	return nil, fmt.Errorf("annotation not found: %s", id)
+	return nil, fmt.Errorf("%w: annotation not found: %s", ErrNotFound, id)
 }
 
 // Delete removes an annotation by id.
@@ -185,7 +218,7 @@ func (s *Store) Delete(id string) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("annotation not found: %s", id)
+	return fmt.Errorf("%w: annotation not found: %s", ErrNotFound, id)
 }
 
 // List returns all annotations, pinned first then newest first. Every element
@@ -260,7 +293,7 @@ func (s *Store) Query(connID, schema, table, keyword string) []*Annotation {
 		if table != "" && a.Table != table {
 			continue
 		}
-		out = append(out, copyAnnotation(a))
+		out = append(out, a)
 	}
 	return sortAnnotations(out)
 }

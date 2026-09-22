@@ -81,7 +81,8 @@ func TestUpdateAndDelete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	updated, err := s.Update(a.ID, &Annotation{Note: "new", Author: "grace", Pinned: true})
+	pinned := true
+	updated, err := s.Update(a.ID, &UpdatePatch{Note: "new", Author: "grace", Pinned: &pinned})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestUpdateAndDelete(t *testing.T) {
 		t.Fatal("updated_at should not move backwards")
 	}
 
-	if _, err := s.Update("missing", &Annotation{Note: "x"}); err == nil {
+	if _, err := s.Update("missing", &UpdatePatch{Note: "x"}); err == nil {
 		t.Fatal("expected not-found error")
 	}
 	if err := s.Delete(a.ID); err != nil {

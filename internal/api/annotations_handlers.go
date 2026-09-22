@@ -2,8 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
-	"strings"
 
 	"github.com/dblens/dblens/internal/annotations"
 	"github.com/go-chi/chi/v5"
@@ -20,12 +21,30 @@ func (h *Handler) requireAnnotationStore(w http.ResponseWriter) bool {
 }
 
 // annotationErrorStatus maps a store error to 404 when the record is missing
-// and 400 otherwise (validation failures).
+// and 400 otherwise (validation failures). Classification uses sentinels, never
+// message text.
 func annotationErrorStatus(err error) int {
-	if strings.Contains(err.Error(), "not found") {
+	switch {
+	case errors.Is(err, annotations.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, annotations.ErrValidation):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
 	}
-	return http.StatusBadRequest
+}
+
+// annotationErrorMessage returns a generic client-facing message; the real error
+// is logged server-side.
+func annotationErrorMessage(status int) string {
+	switch status {
+	case http.StatusNotFound:
+		return "annotation not found"
+	case http.StatusBadRequest:
+		return "invalid request"
+	default:
+		return "annotations store error"
+	}
 }
 
 func (h *Handler) AnnotationsList(w http.ResponseWriter, r *http.Request) {
@@ -61,14 +80,16 @@ func (h *Handler) AnnotationUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var patch annotations.Annotation
+	var patch annotations.UpdatePatch
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		sendError(w, http.StatusBadRequest, "invalid body: "+err.Error())
 		return
 	}
 	updated, err := h.annotationsStore.Update(id, &patch)
 	if err != nil {
-		sendError(w, annotationErrorStatus(err), err.Error())
+		status := annotationErrorStatus(err)
+		log.Printf("annotation update failed: %v", err)
+		sendError(w, status, annotationErrorMessage(status))
 		return
 	}
 	sendJSON(w, http.StatusOK, updated)
@@ -80,7 +101,9 @@ func (h *Handler) AnnotationDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	if err := h.annotationsStore.Delete(id); err != nil {
-		sendError(w, annotationErrorStatus(err), err.Error())
+		status := annotationErrorStatus(err)
+		log.Printf("annotation delete failed: %v", err)
+		sendError(w, status, annotationErrorMessage(status))
 		return
 	}
 	sendJSON(w, http.StatusOK, map[string]bool{"ok": true})

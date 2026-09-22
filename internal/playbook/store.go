@@ -2,6 +2,7 @@ package playbook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,18 @@ import (
 	"sync"
 	"time"
 )
+
+// Sentinel errors let the HTTP layer map store failures to status codes with
+// errors.Is instead of matching on message text, and let it return a generic
+// client message without leaking internal detail.
+var (
+	ErrNotFound   = errors.New("not found")
+	ErrValidation = errors.New("validation")
+)
+
+// maxVersionHistory bounds the append-only version history so a long-lived
+// entry cannot grow without limit (one full query copy was kept per PUT).
+const maxVersionHistory = 20
 
 // VersionSnapshot is one entry in append-only version history.
 type VersionSnapshot struct {
@@ -86,12 +99,19 @@ func (s *Store) load() error {
 	return json.Unmarshal(data, &s.entries)
 }
 
+// save writes the entry slice out atomically (tmp file + rename, mode 0600) and
+// is called with the lock held. A crash mid-write can therefore never truncate
+// the live library file.
 func (s *Store) save() error {
 	data, err := json.MarshalIndent(s.entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.path, data, 0600); err != nil {
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
 		return err
 	}
 	s.gitCommit()
@@ -167,8 +187,12 @@ func (s *Store) Get(id string) *Entry {
 	return nil
 }
 
-// Create adds a new entry and persists.
+// Create adds a new entry and persists. The stored value is a deep copy so the
+// caller's payload can never alias the library.
 func (s *Store) Create(e *Entry) error {
+	if e == nil {
+		return fmt.Errorf("%w: entry is required", ErrValidation)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e.ID = genID()
@@ -188,8 +212,12 @@ func (s *Store) Create(e *Entry) error {
 	return s.save()
 }
 
-// Update modifies an entry by id, appending a version snapshot.
+// Update modifies an entry by id, appending a version snapshot capped at
+// maxVersionHistory entries (newest kept).
 func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
+	if patch == nil {
+		return nil, fmt.Errorf("%w: entry is required", ErrValidation)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.entries {
@@ -202,12 +230,13 @@ func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
 			QuerySnapshot: e.Query,
 			UpdatedAt:     e.UpdatedAt,
 		})
+		e.VersionHistory = truncateVersionHistory(e.VersionHistory)
 		e.Title = patch.Title
 		e.Description = patch.Description
-		e.Tags = patch.Tags
+		e.Tags = append([]string{}, patch.Tags...)
 		e.Dialect = patch.Dialect
 		e.Query = patch.Query
-		e.Parameters = patch.Parameters
+		e.Parameters = append([]Parameter{}, patch.Parameters...)
 		e.Author = patch.Author
 		if patch.Slug != "" {
 			e.Slug = patch.Slug
@@ -215,7 +244,15 @@ func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
 		e.UpdatedAt = now()
 		return deepCopyEntry(e), s.save()
 	}
-	return nil, fmt.Errorf("entry not found: %s", id)
+	return nil, fmt.Errorf("%w: entry not found: %s", ErrNotFound, id)
+}
+
+// truncateVersionHistory keeps only the newest maxVersionHistory snapshots.
+func truncateVersionHistory(vh []VersionSnapshot) []VersionSnapshot {
+	if len(vh) <= maxVersionHistory {
+		return vh
+	}
+	return append([]VersionSnapshot{}, vh[len(vh)-maxVersionHistory:]...)
 }
 
 // Delete removes an entry by id.
@@ -228,12 +265,12 @@ func (s *Store) Delete(id string) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("entry not found: %s", id)
+	return fmt.Errorf("%w: entry not found: %s", ErrNotFound, id)
 }
 
 // ExportJSON returns all entries as JSON. The marshal happens inside the RLock
 // section over deep copies, so the encoder never reads a struct that a
-// concurrent Update is mutating - and never over a half-mutated entry.
+// concurrent Update is mutating — and never over a half-mutated entry.
 func (s *Store) ExportJSON() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -268,7 +305,9 @@ func (s *Store) ExportMarkdown() []byte {
 	return []byte(sb.String())
 }
 
-// Import merges entries from a bundle; existing IDs are skipped.
+// Import merges entries from a bundle; existing IDs are skipped. Incoming
+// entries are deep-copied before storage so the request payload cannot keep a
+// live pointer into the library, and their version history is capped.
 func (s *Store) Import(entries []*Entry) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,7 +316,11 @@ func (s *Store) Import(entries []*Entry) (int, error) {
 		existing[e.ID] = true
 	}
 	count := 0
-	for _, e := range entries {
+	for _, in := range entries {
+		if in == nil {
+			continue
+		}
+		e := deepCopyEntry(in)
 		if e.ID != "" && existing[e.ID] {
 			continue
 		}
@@ -293,7 +336,9 @@ func (s *Store) Import(entries []*Entry) (int, error) {
 		if e.VersionHistory == nil {
 			e.VersionHistory = []VersionSnapshot{}
 		}
+		e.VersionHistory = truncateVersionHistory(e.VersionHistory)
 		s.entries = append(s.entries, e)
+		existing[e.ID] = true
 		count++
 	}
 	if count > 0 {
