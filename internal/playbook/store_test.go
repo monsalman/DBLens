@@ -276,9 +276,9 @@ func TestImportCapsVersionHistory(t *testing.T) {
 	}
 }
 
-// TestNotImplementedSentinels pins the error classification contract the HTTP
-// layer relies on (L7): classification must not depend on message text.
-func TestNotImplementedSentinels(t *testing.T) {
+// TestStoreErrorSentinels pins the error classification contract the HTTP layer
+// relies on (L7): classification must not depend on message text.
+func TestStoreErrorSentinels(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.Update("missing", &Entry{Title: "x"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update missing err = %v, want ErrNotFound", err)
