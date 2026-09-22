@@ -1912,6 +1912,995 @@ func TestGetDatabaseHealth(t *testing.T) {
 	}
 }
 
+func TestSafeModeReadOnlyEnforcement(t *testing.T) {
+	dbFile := filepath.Join(t.TempDir(), "safemode_test.db")
+	dsn := "sqlite://" + dbFile
+
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL
+		);
+		INSERT INTO items (name) VALUES ('item1');
+	`)
+	if err != nil {
+		t.Fatalf("failed to init table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. IsNonSelectSQL unit tests
+	if api.IsNonSelectSQL("SELECT * FROM items") {
+		t.Errorf("expected SELECT to be false for IsNonSelectSQL")
+	}
+	if api.IsNonSelectSQL("/* comment */ SELECT 1") {
+		t.Errorf("expected commented SELECT to be false for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("INSERT INTO items (name) VALUES ('item2')") {
+		t.Errorf("expected INSERT to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("UPDATE items SET name = 'updated' WHERE id = 1") {
+		t.Errorf("expected UPDATE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("DELETE FROM items WHERE id = 1") {
+		t.Errorf("expected DELETE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("DROP TABLE items") {
+		t.Errorf("expected DROP TABLE to be true for IsNonSelectSQL")
+	}
+	if !api.IsNonSelectSQL("TRUNCATE TABLE items") {
+		t.Errorf("expected TRUNCATE to be true for IsNonSelectSQL")
+	}
+
+	// 2. ExecuteQuery with Read-Only header: SELECT should succeed (200)
+	selectBody := `{"sql": "SELECT * FROM items"}`
+	req := httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(selectBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected SELECT to succeed with 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. ExecuteQuery with Read-Only header: INSERT should be blocked (403)
+	insertBody := `{"sql": "INSERT INTO items (name) VALUES ('blocked')"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(insertBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected INSERT to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Safe Mode") {
+		t.Fatalf("expected error message to mention Safe Mode, got %s", w.Body.String())
+	}
+
+	// 4. MutateRow with Read-Only header should be blocked (403)
+	mutateBody := `{
+		"schema": "",
+		"table": "items",
+		"type": "UPDATE",
+		"data": {"name": "hacked"},
+		"where": {"id": 1}
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/mutate", strings.NewReader(mutateBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected MutateRow to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 5. BatchInsert with Read-Only header should be blocked (403)
+	batchBody := `{
+		"schema": "",
+		"table": "items",
+		"rows": [{"name": "itemX"}]
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/batch-insert", strings.NewReader(batchBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected BatchInsert to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. AlterTableApply with Read-Only header should be blocked (403)
+	alterBody := `{
+		"table": "items",
+		"addedColumns": [{"name": "price", "type": "REAL"}]
+	}`
+	req = httptest.NewRequest("POST", "/api/connections/default/tables/items/alter", strings.NewReader(alterBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected AlterTableApply to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 7. Extended IsNonSelectSQL tests
+	nonSelectCases := []struct {
+		sql      string
+		expected bool
+		desc     string
+	}{
+		{"SELECT 1; DROP TABLE items;", true, "multi-statement with drop"},
+		{"SELECT * FROM items WHERE name = 'foo; DROP TABLE items;'", false, "semicolon in string literal"},
+		{"(SELECT 1)", false, "parenthesized SELECT"},
+		{"(DROP TABLE items)", true, "parenthesized DROP"},
+		{"(((UPDATE items SET name = 'foo')))", true, "deeply parenthesized UPDATE"},
+		{"WITH cte AS (SELECT 1) SELECT * FROM cte", false, "read-only CTE"},
+		{"WITH cte AS (SELECT 1) INSERT INTO items (name) VALUES ('a')", true, "CTE with INSERT"},
+		{"WITH cte AS (SELECT 1) UPDATE items SET name = 'a'", true, "CTE with UPDATE"},
+		{"WITH cte AS (SELECT 1) DELETE FROM items", true, "CTE with DELETE"},
+		{"DO $$ BEGIN PERFORM 1; END $$;", true, "DO block"},
+		{"CALL my_procedure()", true, "CALL statement"},
+		{"RENAME TABLE a TO b", true, "RENAME statement"},
+		{"EXPLAIN ANALYZE DELETE FROM items", true, "EXPLAIN ANALYZE mutation"},
+		{"EXPLAIN SELECT * FROM items", false, "EXPLAIN plan only"},
+		{"EXPLAIN ANALYZE SELECT * FROM items", false, "EXPLAIN ANALYZE SELECT"},
+	}
+	for _, tc := range nonSelectCases {
+		if api.IsNonSelectSQL(tc.sql) != tc.expected {
+			t.Errorf("IsNonSelectSQL failed for %s: got %v, expected %v", tc.desc, !tc.expected, tc.expected)
+		}
+	}
+
+	// 8. Multi-statement mutation blocked under read-only
+	multiStmtBody := `{"sql": "SELECT 1; DROP TABLE items;"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(multiStmtBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected multi-statement mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 9. CTE mutation blocked under read-only (case-insensitive True)
+	cteMutBody := `{"sql": "WITH cte AS (SELECT 1) DELETE FROM items WHERE id = 1"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(cteMutBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "True")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected CTE mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 10. Parenthesized mutation blocked under read-only
+	parenMutBody := `{"sql": "(((DELETE FROM items WHERE id = 1)))"}`
+	req = httptest.NewRequest("POST", "/api/connections/default/query", strings.NewReader(parenMutBody))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "TRUE")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected parenthesized mutation to be 403 Forbidden, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 11. ImportCSV with Read-Only header should be blocked (403)
+	csvBuf := &bytes.Buffer{}
+	csvWriter := multipart.NewWriter(csvBuf)
+	_ = csvWriter.WriteField("table", "items")
+	csvPart, _ := csvWriter.CreateFormFile("file", "data.csv")
+	_, _ = csvPart.Write([]byte("name\nitem_new\n"))
+	_ = csvWriter.Close()
+
+	req = httptest.NewRequest("POST", "/api/connections/default/import/csv", csvBuf)
+	req.Header.Set("Content-Type", csvWriter.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "true")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected ImportCSV to be 403 Forbidden under read-only, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 12. ImportSQL with Read-Only header should be blocked (403)
+	sqlBuf := &bytes.Buffer{}
+	sqlWriter := multipart.NewWriter(sqlBuf)
+	sqlPart, _ := sqlWriter.CreateFormFile("file", "script.sql")
+	_, _ = sqlPart.Write([]byte("INSERT INTO items (name) VALUES ('script');"))
+	_ = sqlWriter.Close()
+
+	req = httptest.NewRequest("POST", "/api/connections/default/import/sql", sqlBuf)
+	req.Header.Set("Content-Type", sqlWriter.FormDataContentType())
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("X-DBLENS-READONLY", "TRUE")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected ImportSQL to be 403 Forbidden under read-only, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDumpAndRestoreAPI(t *testing.T) {
+	dbFile := "/tmp/dblens_api_dump_test.db"
+	restoreFile := "/tmp/dblens_api_restore_test.db"
+	_ = os.Remove(dbFile)
+	_ = os.Remove(restoreFile)
+	defer os.Remove(dbFile)
+	defer os.Remove(restoreFile)
+
+	dsn := "sqlite://" + dbFile
+	restoreDSN := "sqlite://" + restoreFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create sqlite: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			price REAL
+		);
+		INSERT INTO products (id, name, price) VALUES (1, 'Widget', 19.99);
+		INSERT INTO products (id, name, price) VALUES (2, 'Gadget', 49.95);
+	`)
+	if err != nil {
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Plain SQL Dump
+	dumpReq := httptest.NewRequest("GET", "/api/connections/default/dump?database=shop", nil)
+	dumpReq.Header.Set("X-DBLENS-DSN", dsn)
+	dumpRec := httptest.NewRecorder()
+	router.ServeHTTP(dumpRec, dumpReq)
+
+	if dumpRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on dump, got %d: %s", dumpRec.Code, dumpRec.Body.String())
+	}
+	if dumpRec.Header().Get("Content-Type") != "application/sql" {
+		t.Fatalf("expected Content-Type application/sql, got %s", dumpRec.Header().Get("Content-Type"))
+	}
+	disposition := dumpRec.Header().Get("Content-Disposition")
+	if !strings.Contains(disposition, "attachment; filename=\"dblens-dump-shop-") || !strings.HasSuffix(disposition, ".sql\"") {
+		t.Fatalf("unexpected Content-Disposition: %s", disposition)
+	}
+	dumpBody := dumpRec.Body.String()
+	if !strings.Contains(dumpBody, "CREATE TABLE") || !strings.Contains(dumpBody, "Widget") {
+		t.Fatalf("expected CREATE TABLE and Widget in dump body, got: %s", dumpBody)
+	}
+
+	// 2. Gzip Dump
+	gzReq := httptest.NewRequest("GET", "/api/connections/default/dump?gzip=true&database=shop", nil)
+	gzReq.Header.Set("X-DBLENS-DSN", dsn)
+	gzRec := httptest.NewRecorder()
+	router.ServeHTTP(gzRec, gzReq)
+
+	if gzRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on gzip dump, got %d: %s", gzRec.Code, gzRec.Body.String())
+	}
+	if gzRec.Header().Get("Content-Type") != "application/gzip" {
+		t.Fatalf("expected Content-Type application/gzip, got %s", gzRec.Header().Get("Content-Type"))
+	}
+	gzDisp := gzRec.Header().Get("Content-Disposition")
+	if !strings.Contains(gzDisp, ".sql.gz\"") {
+		t.Fatalf("expected .sql.gz filename in Content-Disposition, got %s", gzDisp)
+	}
+	gzBytes := gzRec.Body.Bytes()
+	if len(gzBytes) < 2 || gzBytes[0] != 0x1f || gzBytes[1] != 0x8b {
+		t.Fatalf("expected gzip magic bytes in response, got %x", gzBytes[:2])
+	}
+
+	// 3. Restore to new DB using raw stream
+	restoreReq := httptest.NewRequest("POST", "/api/connections/default/restore", bytes.NewReader(gzBytes))
+	restoreReq.Header.Set("X-DBLENS-DSN", restoreDSN)
+	restoreReq.Header.Set("Content-Type", "application/gzip")
+	restoreRec := httptest.NewRecorder()
+	router.ServeHTTP(restoreRec, restoreReq)
+
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on restore, got %d: %s", restoreRec.Code, restoreRec.Body.String())
+	}
+	var restoreResp map[string]interface{}
+	if err := json.Unmarshal(restoreRec.Body.Bytes(), &restoreResp); err != nil {
+		t.Fatalf("failed to parse restore JSON: %v", err)
+	}
+	if restoreResp["total"].(float64) == 0 || restoreResp["executed"].(float64) == 0 {
+		t.Fatalf("expected non-zero total and executed: %v", restoreResp)
+	}
+
+	// Verify data restored in restoreDSN
+	restoreEntry, err := mgr.GetByDSN(restoreDSN)
+	if err != nil {
+		t.Fatalf("failed to connect restored db: %v", err)
+	}
+	defer restoreEntry.Driver.Close()
+	rowsRes, err := restoreEntry.Driver.ExecuteQuery(ctx, "SELECT count(*) FROM products;")
+	if err != nil {
+		t.Fatalf("failed to query restored products: %v", err)
+	}
+	if len(rowsRes.Rows) == 0 || rowsRes.Rows[0][0].(int64) != 2 {
+		t.Fatalf("expected 2 restored rows, got %v", rowsRes.Rows)
+	}
+
+	// 4. Restore under Read-Only header must be 403
+	roReq := httptest.NewRequest("POST", "/api/connections/default/restore", strings.NewReader("SELECT 1;"))
+	roReq.Header.Set("X-DBLENS-DSN", restoreDSN)
+	roReq.Header.Set("X-DBLENS-READONLY", "true")
+	roRec := httptest.NewRecorder()
+	router.ServeHTTP(roRec, roReq)
+
+	if roRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for restore under readonly, got %d", roRec.Code)
+	}
+}
+
+func TestRestAPIEndpoints(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "rest_api_test_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp db: %v", err)
+	}
+	tempFile.Close()
+	defer os.Remove(tempFile.Name())
+
+	dsn := "sqlite://" + tempFile.Name()
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to open test db: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			price REAL NOT NULL,
+			status TEXT DEFAULT 'active'
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create items table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. POST: Insert item
+	body := `{"title": "Mechanical Keyboard", "price": 129.99, "status": "active"}`
+	req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(body))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on REST POST, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var postRes map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &postRes); err != nil {
+		t.Fatalf("failed to parse POST response: %v", err)
+	}
+	if postRes["rowsAffected"].(float64) != 1 {
+		t.Fatalf("expected rowsAffected 1, got %v", postRes["rowsAffected"])
+	}
+
+	// 2. GET: Query items
+	getReq := httptest.NewRequest("GET", "/api/connections/test-conn/rest/items?status=eq.active&select=id,title,price", nil)
+	getReq.Header.Set("X-DBLENS-DSN", dsn)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST GET, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	if getRec.Header().Get("X-Total-Count") != "1" {
+		t.Fatalf("expected X-Total-Count 1, got %q", getRec.Header().Get("X-Total-Count"))
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("failed to parse GET response: %v", err)
+	}
+	if len(rows) != 1 || rows[0]["title"] != "Mechanical Keyboard" {
+		t.Fatalf("unexpected rows: %v", rows)
+	}
+
+	// 3. GET with schema in URL path: /rest/main/items
+	getSchemaReq := httptest.NewRequest("GET", "/api/connections/test-conn/rest/main/items", nil)
+	getSchemaReq.Header.Set("X-DBLENS-DSN", dsn)
+	getSchemaRec := httptest.NewRecorder()
+	router.ServeHTTP(getSchemaRec, getSchemaReq)
+	if getSchemaRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST GET with schema, got %d: %s", getSchemaRec.Code, getSchemaRec.Body.String())
+	}
+
+	// 4. PATCH: Update item
+	patchBody := `{"price": 99.99}`
+	patchReq := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?title=eq.Mechanical%20Keyboard", strings.NewReader(patchBody))
+	patchReq.Header.Set("X-DBLENS-DSN", dsn)
+	patchRec := httptest.NewRecorder()
+	router.ServeHTTP(patchRec, patchReq)
+
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST PATCH, got %d: %s", patchRec.Code, patchRec.Body.String())
+	}
+
+	// 5. Read-only guardrail blocks POST, PATCH, DELETE
+	roPostReq := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(body))
+	roPostReq.Header.Set("X-DBLENS-DSN", dsn)
+	roPostReq.Header.Set("X-DBLENS-READONLY", "true")
+	roPostRec := httptest.NewRecorder()
+	router.ServeHTTP(roPostRec, roPostReq)
+	if roPostRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for POST under read-only, got %d", roPostRec.Code)
+	}
+
+	roPatchReq := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?id=eq.1", strings.NewReader(patchBody))
+	roPatchReq.Header.Set("X-DBLENS-DSN", dsn)
+	roPatchReq.Header.Set("X-DBLENS-READONLY", "true")
+	roPatchRec := httptest.NewRecorder()
+	router.ServeHTTP(roPatchRec, roPatchReq)
+	if roPatchRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for PATCH under read-only, got %d", roPatchRec.Code)
+	}
+
+	roDelReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1", nil)
+	roDelReq.Header.Set("X-DBLENS-DSN", dsn)
+	roDelReq.Header.Set("X-DBLENS-READONLY", "true")
+	roDelRec := httptest.NewRecorder()
+	router.ServeHTTP(roDelRec, roDelReq)
+	if roDelRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for DELETE under read-only, got %d", roDelRec.Code)
+	}
+
+	// Query param ?readonly=true also rejected
+	roParamReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1&readonly=true", nil)
+	roParamReq.Header.Set("X-DBLENS-DSN", dsn)
+	roParamRec := httptest.NewRecorder()
+	router.ServeHTTP(roParamRec, roParamReq)
+	if roParamRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for DELETE with readonly param, got %d", roParamRec.Code)
+	}
+
+	// 6. DELETE item
+	delReq := httptest.NewRequest("DELETE", "/api/connections/test-conn/rest/items?id=eq.1", nil)
+	delReq.Header.Set("X-DBLENS-DSN", dsn)
+	delRec := httptest.NewRecorder()
+	router.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on REST DELETE, got %d: %s", delRec.Code, delRec.Body.String())
+	}
+}
+
+func TestRestEndpointsTruthyReadOnlyAndMaxBytesLimit(t *testing.T) {
+	dbPath := "/tmp/test_rest_truthy.db"
+	_ = os.Remove(dbPath)
+	defer os.Remove(dbPath)
+
+	mgr := connection.NewManager()
+	dsn := "sqlite://" + dbPath
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to connect sqlite: %v", err)
+	}
+	defer entry.Driver.Close()
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			title TEXT NOT NULL,
+			price REAL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create items table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Test X-DBLENS-READONLY with "1" and "yes"
+	for _, truthy := range []string{"1", "yes", "true", "TRUE", "Yes"} {
+		req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", strings.NewReader(`{"title": "Test", "price": 10}`))
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		req.Header.Set("X-DBLENS-READONLY", truthy)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for X-DBLENS-READONLY=%q, got %d", truthy, rec.Code)
+		}
+	}
+
+	// 2. Test readonly query param with "1" and "yes"
+	for _, truthy := range []string{"1", "yes", "true", "YES"} {
+		req := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items?readonly="+truthy, strings.NewReader(`{"title": "Test", "price": 10}`))
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for readonly param=%q, got %d", truthy, rec.Code)
+		}
+	}
+
+	// 3. Test MaxBytesReader 10MB limit on RestPost
+	reqLarge := httptest.NewRequest("POST", "/api/connections/test-conn/rest/items", bytes.NewReader(make([]byte, 10<<20+1024)))
+	reqLarge.Header.Set("X-DBLENS-DSN", dsn)
+	recLarge := httptest.NewRecorder()
+	router.ServeHTTP(recLarge, reqLarge)
+	if recLarge.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for body exceeding 10MB limit, got %d", recLarge.Code)
+	}
+
+	// 4. Test MaxBytesReader 10MB limit on RestPatch
+	reqPatchLarge := httptest.NewRequest("PATCH", "/api/connections/test-conn/rest/items?id=eq.1", bytes.NewReader(make([]byte, 10<<20+1024)))
+	reqPatchLarge.Header.Set("X-DBLENS-DSN", dsn)
+	recPatchLarge := httptest.NewRecorder()
+	router.ServeHTTP(recPatchLarge, reqPatchLarge)
+	if recPatchLarge.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for PATCH body exceeding 10MB limit, got %d", recPatchLarge.Code)
+	}
+}
+
+func TestMaskedExportStreaming(t *testing.T) {
+	dbFile := "/tmp/dblens_api_mask_export_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE customers (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			email TEXT,
+			credit_card TEXT,
+			balance REAL
+		);
+		INSERT INTO customers (id, name, email, credit_card, balance)
+		VALUES (1, 'Alice Smith', 'alice.smith@example.com', '4532015112830366', 150.00);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create customers table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Export CSV with Redact Strategy
+	reqCSV := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=csv&mask=true&mask_strategy=redact", nil)
+	reqCSV.Header.Set("X-DBLENS-DSN", dsn)
+	recCSV := httptest.NewRecorder()
+	router.ServeHTTP(recCSV, reqCSV)
+
+	if recCSV.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked CSV export, got %d: %s", recCSV.Code, recCSV.Body.String())
+	}
+	rdr := csv.NewReader(recCSV.Body)
+	csvRecords, err := rdr.ReadAll()
+	if err != nil {
+		t.Fatalf("failed to read CSV: %v", err)
+	}
+	if len(csvRecords) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(csvRecords))
+	}
+	// Row 1: id=1 (unmasked), name=[REDACTED], email=[REDACTED], credit_card=[REDACTED], balance=150
+	if csvRecords[1][0] != "1" || csvRecords[1][1] != "[REDACTED]" || csvRecords[1][2] != "[REDACTED]" || csvRecords[1][3] != "[REDACTED]" {
+		t.Fatalf("unexpected redacted row: %v", csvRecords[1])
+	}
+	if csvRecords[1][4] != "150" {
+		t.Fatalf("unexpected balance: %s", csvRecords[1][4])
+	}
+
+	// 2. Export JSON with Partial Strategy
+	reqJSON := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=json&mask=true&mask_strategy=partial", nil)
+	reqJSON.Header.Set("X-DBLENS-DSN", dsn)
+	recJSON := httptest.NewRecorder()
+	router.ServeHTTP(recJSON, reqJSON)
+
+	if recJSON.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked JSON export, got %d", recJSON.Code)
+	}
+	var jsonRows []map[string]interface{}
+	if err := json.Unmarshal(recJSON.Body.Bytes(), &jsonRows); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if len(jsonRows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(jsonRows))
+	}
+	emailVal, _ := jsonRows[0]["email"].(string)
+	if !strings.HasPrefix(emailVal, "a***@") || !strings.HasSuffix(emailVal, "@example.com") {
+		t.Fatalf("unexpected masked email: %s", emailVal)
+	}
+	ccVal, _ := jsonRows[0]["credit_card"].(string)
+	if !strings.HasSuffix(ccVal, "0366") || !strings.Contains(ccVal, "••••") {
+		t.Fatalf("unexpected masked card: %s", ccVal)
+	}
+
+	// 3. Export SQL with Hash Strategy
+	reqSQL := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=sql&mask=true&mask_strategy=hash", nil)
+	reqSQL.Header.Set("X-DBLENS-DSN", dsn)
+	recSQL := httptest.NewRecorder()
+	router.ServeHTTP(recSQL, reqSQL)
+
+	if recSQL.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on masked SQL export, got %d", recSQL.Code)
+	}
+	sqlBody := recSQL.Body.String()
+	if !strings.Contains(sqlBody, "hash_") {
+		t.Fatalf("expected hash_ in SQL export, got: %s", sqlBody)
+	}
+	if strings.Contains(sqlBody, "alice.smith@example.com") {
+		t.Fatalf("raw email leaked in masked SQL export: %s", sqlBody)
+	}
+
+	// 4. Export JSON with Faker Strategy
+	reqFaker := httptest.NewRequest("GET", "/api/connections/default/export?table=customers&format=json&mask=true&mask_strategy=faker", nil)
+	reqFaker.Header.Set("X-DBLENS-DSN", dsn)
+	recFaker := httptest.NewRecorder()
+	router.ServeHTTP(recFaker, reqFaker)
+
+	if recFaker.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on faker JSON export, got %d", recFaker.Code)
+	}
+	var fakerRows []map[string]interface{}
+	if err := json.Unmarshal(recFaker.Body.Bytes(), &fakerRows); err != nil {
+		t.Fatalf("failed to parse faker JSON: %v", err)
+	}
+	fakerEmail := fakerRows[0]["email"].(string)
+	if fakerEmail == "alice.smith@example.com" || !strings.Contains(fakerEmail, "@") {
+		t.Fatalf("unexpected faker email: %s", fakerEmail)
+	}
+}
+
+func TestMaskDetectEndpoint(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	body := map[string]interface{}{
+		"columns": []string{"id", "email", "cell_phone", "ssn", "title", "user_ip"},
+		"samples": map[string]string{
+			"email":      "test@example.com",
+			"cell_phone": "+1-555-123-4567",
+			"ssn":        "123-45-6789",
+			"user_ip":    "10.0.0.1",
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/connections/default/mask/detect", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Detected map[string]string `json:"detected"`
+			Columns  []struct {
+				Column  string `json:"column"`
+				PIIType string `json:"pii_type"`
+				IsPII   bool   `json:"is_pii"`
+			} `json:"columns"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if resp.Data.Detected["email"] != "email" {
+		t.Errorf("expected email detection, got: %s", resp.Data.Detected["email"])
+	}
+	if resp.Data.Detected["cell_phone"] != "phone" {
+		t.Errorf("expected phone detection, got: %s", resp.Data.Detected["cell_phone"])
+	}
+	if resp.Data.Detected["ssn"] != "ssn" {
+		t.Errorf("expected ssn detection, got: %s", resp.Data.Detected["ssn"])
+	}
+	if resp.Data.Detected["user_ip"] != "ip" {
+		t.Errorf("expected ip detection, got: %s", resp.Data.Detected["user_ip"])
+	}
+	if _, ok := resp.Data.Detected["id"]; ok {
+		t.Errorf("id should not be detected as PII")
+	}
+}
+
+func TestMaskPreviewEndpoint(t *testing.T) {
+	mgr := connection.NewManager()
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// Test direct rows preview
+	body := map[string]interface{}{
+		"strategy": "redact",
+		"rows": []map[string]interface{}{
+			{"id": 1, "email": "bob@domain.org", "first_name": "Bob"},
+		},
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/connections/default/mask/preview", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data struct {
+			Strategy string                   `json:"strategy"`
+			Rows     []map[string]interface{} `json:"rows"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode preview response: %v", err)
+	}
+
+	if len(resp.Data.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(resp.Data.Rows))
+	}
+	if resp.Data.Rows[0]["email"] != "[REDACTED]" || resp.Data.Rows[0]["first_name"] != "[REDACTED]" {
+		t.Fatalf("unexpected preview rows: %v", resp.Data.Rows[0])
+	}
+}
+
+func TestPrivilegeEndpoints(t *testing.T) {
+	dbFile := "/tmp/dblens_privilege_api_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE accounts (
+			id INTEGER PRIMARY KEY,
+			username TEXT NOT NULL
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create accounts table: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. GET Privileges
+	getReq := httptest.NewRequest("GET", "/api/connections/default/privileges", nil)
+	getReq.Header.Set("X-DBLENS-DSN", dsn)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on GET /privileges, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var getResp struct {
+		Data struct {
+			Dialect string   `json:"dialect"`
+			Roles   []struct {
+				Name string `json:"name"`
+			} `json:"roles"`
+			Tables []string `json:"tables"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("failed to unmarshal GET /privileges: %v", err)
+	}
+	if getResp.Data.Dialect != "sqlite" {
+		t.Errorf("expected dialect sqlite, got %s", getResp.Data.Dialect)
+	}
+	if len(getResp.Data.Roles) == 0 || getResp.Data.Roles[0].Name != "sqlite_admin" {
+		t.Errorf("expected sqlite_admin role, got %+v", getResp.Data.Roles)
+	}
+
+	// 2. POST Preview
+	previewBody := map[string]interface{}{
+		"changes": []map[string]interface{}{
+			{
+				"role":      "sqlite_admin",
+				"schema":    "main",
+				"table":     "accounts",
+				"privilege": "SELECT",
+				"action":    "GRANT",
+			},
+		},
+		"roles": []map[string]interface{}{
+			{"name": "sqlite_admin", "isSuperuser": true},
+		},
+	}
+	pb, _ := json.Marshal(previewBody)
+	prevReq := httptest.NewRequest("POST", "/api/connections/default/privileges/preview", bytes.NewReader(pb))
+	prevReq.Header.Set("X-DBLENS-DSN", dsn)
+	prevRec := httptest.NewRecorder()
+	router.ServeHTTP(prevRec, prevReq)
+
+	if prevRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on POST /privileges/preview, got %d: %s", prevRec.Code, prevRec.Body.String())
+	}
+
+	var prevResp struct {
+		Data struct {
+			Statements []string `json:"statements"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(prevRec.Body.Bytes(), &prevResp); err != nil {
+		t.Fatalf("failed to decode preview response: %v", err)
+	}
+	if len(prevResp.Data.Statements) != 1 {
+		t.Errorf("expected 1 statement in preview, got %d", len(prevResp.Data.Statements))
+	}
+
+	// 3. POST Apply with ReadOnly header -> 403 Forbidden
+	applyReq := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", bytes.NewReader(pb))
+	applyReq.Header.Set("X-DBLENS-DSN", dsn)
+	applyReq.Header.Set("X-DBLENS-READONLY", "true")
+	applyRec := httptest.NewRecorder()
+	router.ServeHTTP(applyRec, applyReq)
+
+	if applyRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden on readonly apply, got %d", applyRec.Code)
+	}
+
+	// 4. POST Apply writable -> 200 OK
+	applyReq2 := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", bytes.NewReader(pb))
+	applyReq2.Header.Set("X-DBLENS-DSN", dsn)
+	applyRec2 := httptest.NewRecorder()
+	router.ServeHTTP(applyRec2, applyReq2)
+
+	if applyRec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on apply, got %d: %s", applyRec2.Code, applyRec2.Body.String())
+	}
+}
+
+func TestSecurityAndRouteAliasRemediation(t *testing.T) {
+	dbFile := "/tmp/dblens_api_sec_remediation_test.db"
+	_ = os.Remove(dbFile)
+	defer os.Remove(dbFile)
+
+	dsn := "sqlite://" + dbFile
+	mgr := connection.NewManager()
+	entry, err := mgr.GetByDSN(dsn)
+	if err != nil {
+		t.Fatalf("failed to create connection: %v", err)
+	}
+
+	ctx := context.Background()
+	_, err = entry.Driver.ExecuteQuery(ctx, `
+		CREATE TABLE canary (id INTEGER PRIMARY KEY, note TEXT);
+		INSERT INTO canary VALUES (1, 'keep me');
+	`)
+	if err != nil {
+		t.Fatalf("failed to setup canary db: %v", err)
+	}
+
+	h := api.NewHandler(mgr)
+	router := api.SetupRouter(h, api.RouterConfig{})
+
+	// 1. Route alias POST /api/connect
+	{
+		connectBody := map[string]string{
+			"type": "sqlite",
+			"dsn":  dsn,
+		}
+		cb, _ := json.Marshal(connectBody)
+		req := httptest.NewRequest("POST", "/api/connect", bytes.NewReader(cb))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK on POST /api/connect alias, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. SEC-07: Control chars in schema for GetPrivileges
+	{
+		req := httptest.NewRequest("GET", "/api/connections/default/privileges?schema=main%0A_injected", nil)
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request on control chars in GetPrivileges schema, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "schema parameter contains invalid characters") {
+			t.Fatalf("expected invalid characters error, got: %s", rec.Body.String())
+		}
+	}
+
+	// 3. SEC-07: Control chars in schema for GetAssistantSchema
+	{
+		req := httptest.NewRequest("GET", "/api/connections/default/assistant/schema?schema=main%00_null", nil)
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request on control chars in GetAssistantSchema schema, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "schema parameter contains invalid characters") {
+			t.Fatalf("expected invalid characters error, got: %s", rec.Body.String())
+		}
+	}
+
+	// 4. SEC-01: Reject client-supplied Plan in ApplyPrivileges without Changes
+	{
+		maliciousBody := `{
+			"plan": {
+				"dialect": "sqlite",
+				"statements": ["DROP TABLE canary;"]
+			}
+		}`
+		req := httptest.NewRequest("POST", "/api/connections/default/privileges/apply", strings.NewReader(maliciousBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request when changes are missing, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "changes are required") {
+			t.Fatalf("expected 'changes are required' error, got: %s", rec.Body.String())
+		}
+
+		// Verify table canary still exists
+		res, qErr := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM canary;")
+		if qErr != nil || len(res.Rows) == 0 {
+			t.Fatalf("canary table was unexpectedly dropped or query failed: %v", qErr)
+		}
+	}
+
+	// 5. SEC-04: MaxBytesReader on endpoints
+	{
+		oversizedJSON := "{\"prompt\":\"" + strings.Repeat("A", 2<<20) + "\"}"
+		req := httptest.NewRequest("POST", "/api/connections/default/assistant/prompt", strings.NewReader(oversizedJSON))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request for oversized payload, got %d", rec.Code)
+		}
+	}
+}
+
+
+
 
 
 

@@ -10,10 +10,18 @@ import { SchemaErdView } from './features/erd/SchemaErdView'
 import { SchemaDiffView } from './features/diff/SchemaDiffView'
 import { ProcessMonitorView } from './features/activity/ProcessMonitorView'
 import { DatabaseAdvisorView } from './features/advisor/DatabaseAdvisorView'
+import { PrivilegeManagerView } from './features/privilege/PrivilegeManagerView'
 import { AddConnectionModal } from './features/connections/AddConnectionModal'
 import { PeekDrawer } from './components/PeekDrawer'
 import { DryRunModal } from './components/DryRunModal'
+import { DatabaseDumpModal } from './features/dump/DatabaseDumpModal'
+import { RestPlaygroundModal } from './features/rest/RestPlaygroundModal'
+import { WebhookModal } from './features/webhook/WebhookModal'
+import { FederationModal } from './features/federation/FederationModal'
+import { MigrationHubModal } from './features/migration/MigrationHubModal'
+import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
 import { CommandPalette } from './components/CommandPalette'
+import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
 import { Monitor, Moon, Sun, Database, Zap, Shield, GitBranch } from 'lucide-react'
 
@@ -100,6 +108,14 @@ export function App() {
       useAppStore.getState().setActiveConnectionId(activeConnId)
     }
   }, [activeConnId])
+
+  useEffect(() => {
+    useAppStore.getState().setSelectedSchema(selectedSchema)
+  }, [selectedSchema])
+
+  useEffect(() => {
+    useAppStore.getState().setSelectedTable(selectedTable)
+  }, [selectedTable])
 
   const handleDeleted = (id: string) => {
     setConnections(prev => {
@@ -224,7 +240,7 @@ export function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="h-screen w-screen overflow-hidden select-none transition-colors duration-200">
+      <div className="h-screen w-screen flex flex-col overflow-hidden select-none transition-colors duration-200">
         <Header 
           connections={connections} 
           activeConnId={activeConnId} 
@@ -242,7 +258,8 @@ export function App() {
           onToggleTheme={toggleTheme}
           onOpenCommandPalette={() => useAppStore.getState().setCommandPaletteOpen(true)}
         />
-        <div className="flex-1 flex overflow-hidden h-[calc(100vh-40px)]">
+        <EnvironmentBanner connection={connections.find(c => c.id === activeConnId) || null} />
+        <div className="flex-1 flex overflow-hidden min-h-0">
           <Sidebar 
             key={`${activeConnId}:${refreshKey}`}
             connections={connections} 
@@ -285,6 +302,9 @@ export function App() {
                 {activeTab === 'advisor' && (
                   <DatabaseAdvisorView key={activeConnId} connId={activeConnId} />
                 )}
+                {activeTab === 'privileges' && (
+                  <PrivilegeManagerView key={activeConnId} connId={activeConnId} />
+                )}
               </>
             )}
           </main>
@@ -324,6 +344,12 @@ export function App() {
       />
       <PeekDrawer />
       <DryRunModal />
+      <DatabaseDumpModal />
+      <RestPlaygroundModal />
+      <WebhookModal />
+      <FederationModal />
+      <MigrationHubModal />
+      <RoutineStudioModal />
     </QueryClientProvider>
   )
 }

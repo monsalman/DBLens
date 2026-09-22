@@ -18,6 +18,7 @@ type ColumnMeta struct {
 
 type ForeignKey struct {
 	Name        string `json:"name,omitempty"`
+	Table       string `json:"table,omitempty"`
 	Column      string `json:"column"`
 	RefTable    string `json:"refTable"`
 	RefColumn   string `json:"refColumn"`
@@ -264,6 +265,7 @@ type Driver interface {
 	QueryTableStream(ctx context.Context, schema, table string) (*sql.Rows, error)
 	ExecuteQuery(ctx context.Context, sql string) (*QueryResult, error)
 	ExecuteQueryWithParams(ctx context.Context, sql string, params map[string]interface{}) (*QueryResult, error)
+	ExecuteRaw(ctx context.Context, sql string, args ...interface{}) (*QueryResult, error)
 	MutateRow(ctx context.Context, m Mutation) (*MutationResult, error)
 	BatchInsert(ctx context.Context, schema, table string, rows []map[string]interface{}) (*MutationResult, error)
 	GetERDData(ctx context.Context) ([]ERDTable, error)

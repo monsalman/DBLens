@@ -37,6 +37,10 @@ import { createSqlExtension } from '../../lib/sqlAutocomplete'
 import { extractQueryVariables, DBA_MAINTENANCE_SNIPPETS, type SqlSnippet } from './sqlVariableParser'
 import { sqlVariableHighlight } from './sqlVariableHighlight'
 import { ParameterPromptModal } from './ParameterPromptModal'
+import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
+import { JsonStudioModal } from '../json/JsonStudioModal'
+import { parseJsonSafely } from '../json/jsonPathHelper'
+import { AiAssistantBar } from './AiAssistantBar'
 
 interface Props {
   connId: string
@@ -123,6 +127,11 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const currentExplain = currentTab ? tabExplainResults[currentTab.id] ?? null : null
   const isExplaining = Boolean(currentTab && tabExplaining[currentTab.id])
   const activePane = currentTab ? tabActivePane[currentTab.id] ?? 'results' : 'results'
+
+  // AI Assistant states
+  const [isAiBarOpen, setIsAiBarOpen] = useState(false)
+  const [fixContext, setFixContext] = useState<{ query: string; error: string } | null>(null)
+  const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -229,6 +238,11 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
 
   // Query variables & snippets state
   const [isParamModalOpen, setIsParamModalOpen] = useState(false)
+  const [jsonStudioTarget, setJsonStudioTarget] = useState<{
+    isOpen: boolean
+    columnName: string
+    value: any
+  } | null>(null)
   const [isSnippetsOpen, setIsSnippetsOpen] = useState(false)
   const [snippetCategory, setSnippetCategory] = useState<string>('All')
   const snippetsMenuRef = useRef<HTMLDivElement>(null)
@@ -326,11 +340,37 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
       }
     }
 
-    const isDestructive = /\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE|DELETE\s+FROM(?!\s+[\s\S]*?\bWHERE\b))\b/i.test(query)
-    if (isDestructive) {
-      openDryRunModal('Confirm Destructive Query', query, () => {
-        executeRun(tabId, query, overrideParams)
-      })
+    const activeConn = effectiveConnections.find((c) => c.id === connId)
+    const isReadOnly = !!activeConn?.readOnly
+    const isMutation = isNonSelectQuery(query)
+
+    if (isReadOnly && isMutation) {
+      const errRes: QueryResult = {
+        columns: [],
+        rows: [],
+        durationMs: 0,
+        error: 'Connection is read-only. Mutation blocked by Safe Mode.',
+      }
+      setTabResults((prev) => ({ ...prev, [tabId]: errRes }))
+      return
+    }
+
+    const { isDestructive } = isDestructiveQuery(query)
+    const isSafeMode = useAppStore.getState().isSafeModeActive(connId)
+    const isProd = activeConn?.environment === 'production'
+
+    if (isDestructive || (isSafeMode && isMutation) || (isProd && isMutation)) {
+      const modalTitle = isDestructive
+        ? 'Confirm Destructive Query'
+        : `${isProd ? 'Production' : 'Safe Mode'} Mutation Guardrail`
+      openDryRunModal(
+        modalTitle,
+        query,
+        () => {
+          executeRun(tabId, query, overrideParams)
+        },
+        true
+      )
       return
     }
 
@@ -558,6 +598,30 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
 
       {/* Main Console Body */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+        {/* AI Assistant Bar */}
+        <AiAssistantBar
+          connId={connId}
+          currentQuery={currentTab?.query || ''}
+          activeSchema={selectedSchema}
+          profiles={effectiveConnections}
+          isOpen={isAiBarOpen}
+          onToggle={() => setIsAiBarOpen((prev) => !prev)}
+          onApplySql={(sql, mode) => {
+            if (!currentTab) return
+            if (mode === 'insert') {
+              const current = currentTab.query
+              const separator = current.endsWith('\n') || !current ? '' : '\n\n'
+              updateSqlTabQuery(connId, currentTab.id, current + separator + sql)
+            } else {
+              updateSqlTabQuery(connId, currentTab.id, sql)
+            }
+          }}
+          fixContext={fixContext}
+          onClearFixContext={() => setFixContext(null)}
+          explainRequested={explainWithAiRequested}
+          onClearExplainRequested={() => setExplainWithAiRequested(false)}
+        />
+
         {/* Editor Pane */}
         <div className="flex-1 flex flex-col min-h-0 border-b border-[var(--border)] overflow-hidden">
           <div className="flex-1 min-h-0 overflow-auto">
@@ -773,6 +837,41 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               </div>
             </div>
 
+            {/* AI Assistant Toggle Button */}
+            <button
+              id="dblens-ask-ai-btn"
+              onClick={() => setIsAiBarOpen((prev) => !prev)}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border transition-colors ${
+                isAiBarOpen
+                  ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-medium'
+                  : 'bg-[var(--surface)] hover:bg-[var(--hover)] text-[var(--fg)] border-[var(--border)]'
+              }`}
+              title="Ask AI Assistant (Cmd+I / Ctrl+I)"
+              aria-label="Ask AI Assistant (Cmd+I / Ctrl+I)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Ask AI</span>
+              <kbd className="hidden sm:inline text-[9px] px-1 py-0.2 rounded bg-[var(--bg)] border border-[var(--border)] text-[var(--muted)] font-mono">
+                ⌘I
+              </kbd>
+            </button>
+
+            {/* AI Explain Query Button */}
+            <button
+              id="dblens-ai-explain-btn"
+              onClick={() => {
+                setIsAiBarOpen(true)
+                setExplainWithAiRequested(true)
+              }}
+              disabled={!currentTab?.query.trim()}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-[var(--fg)] border border-[var(--border)] disabled:opacity-40 transition-colors"
+              title="Explain Query with AI"
+              aria-label="Explain Query with AI"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+              <span>Explain with AI</span>
+            </button>
+
             <button
               id="dblens-explain-btn"
               onClick={() => handleExplain()}
@@ -917,11 +1016,30 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         {activePane === 'results' && currentResult && (
           <div className="flex-1 flex flex-col min-h-0 overflow-auto">
             {currentResult.error ? (
-              <div className="p-4 flex items-start gap-2">
+              <div className="p-4 flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">
-                  {currentResult.error}
-                </pre>
+                <div className="flex-1 flex flex-col gap-2.5">
+                  <pre className="text-xs text-red-400 font-mono whitespace-pre-wrap">
+                    {currentResult.error}
+                  </pre>
+                  <div>
+                    <button
+                      id="dblens-fix-with-ai-btn"
+                      onClick={() => {
+                        setFixContext({
+                          query: currentTab?.query || '',
+                          error: currentResult.error || '',
+                        })
+                        setIsAiBarOpen(true)
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-medium transition-colors"
+                      title="Fix this error with AI Assistant"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>✨ Fix with AI</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="flex-1 flex flex-col min-h-0">
@@ -982,22 +1100,49 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                             key={i}
                             className="border-b border-[var(--border)] hover:bg-[var(--hover)]"
                           >
-                            {(currentResult.columns ?? []).map((c) => (
-                              <td
-                                key={c}
-                                className="px-3 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]"
-                              >
-                                {row[c] === null || row[c] === undefined ? (
-                                  <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">
-                                    null
-                                  </span>
-                                ) : typeof row[c] === 'object' ? (
-                                  JSON.stringify(row[c])
-                                ) : (
-                                  String(row[c])
-                                )}
-                              </td>
-                            ))}
+                            {(currentResult.columns ?? []).map((c) => {
+                              const cellVal = row[c]
+                              const jsonCheck = parseJsonSafely(cellVal)
+                              const isJson = jsonCheck.isJson
+
+                              return (
+                                <td
+                                  key={c}
+                                  className="px-3 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px]"
+                                >
+                                  {cellVal === null || cellVal === undefined ? (
+                                    <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">
+                                      null
+                                    </span>
+                                  ) : isJson ? (
+                                    <div className="flex items-center gap-1.5 truncate group/json">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setJsonStudioTarget({
+                                            isOpen: true,
+                                            columnName: c,
+                                            value: cellVal,
+                                          })
+                                        }}
+                                        className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 text-[10px] font-mono border border-indigo-500/30 cursor-pointer shrink-0 transition-colors"
+                                        title="Inspect in JSON Document Studio"
+                                      >
+                                        <span className="font-bold">{'{ }'}</span>
+                                        <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
+                                      </button>
+                                      <span className="truncate">
+                                        {typeof cellVal === 'object' ? JSON.stringify(cellVal) : String(cellVal)}
+                                      </span>
+                                    </div>
+                                  ) : typeof cellVal === 'object' ? (
+                                    JSON.stringify(cellVal)
+                                  ) : (
+                                    String(cellVal)
+                                  )}
+                                </td>
+                              )
+                            })}
                           </tr>
                         ))}
                       </tbody>
@@ -1408,6 +1553,18 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           initialValues={currentTab?.params || {}}
           onRun={handleRunParameters}
           onSave={handleSaveParameters}
+        />
+      )}
+
+      {/* JSON Document Studio Modal */}
+      {jsonStudioTarget && (
+        <JsonStudioModal
+          isOpen={jsonStudioTarget.isOpen}
+          initialValue={jsonStudioTarget.value}
+          columnName={jsonStudioTarget.columnName}
+          dialect={currentDialect || 'postgres'}
+          readOnly={true}
+          onClose={() => setJsonStudioTarget(null)}
         />
       )}
     </div>

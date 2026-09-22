@@ -1,13 +1,19 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
+import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
 import { useAppStore } from '../../stores/appStore'
 import { AddRowModal } from './AddRowModal'
 import { MockDataModal } from './MockDataModal'
 import { ImportModal } from './ImportModal'
 import { TableSchemaView } from './TableSchemaView'
+import { generateStagedSQL, type StagedChange } from './stagedMutations'
+import { JsonStudioModal } from '../json/JsonStudioModal'
+import { parseJsonSafely } from '../json/jsonPathHelper'
+import { SpatialMapDrawer } from '../gis/SpatialMapDrawer'
+import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
 
 interface Props {
   connId: string
@@ -35,15 +41,59 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
+  const qc = useQueryClient()
+  const { openPeekDrawer, connections, openRestModal } = useAppStore()
+  const activeConn = connections.find((c) => c.id === connId)
+  const isProd = activeConn?.environment === 'production'
+
+  const [stagedMode, setStagedMode] = useState<boolean>(() => isProd)
+  const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
+  const [showDiffModal, setShowDiffModal] = useState(false)
+  const [isApplyingStaged, setIsApplyingStaged] = useState(false)
+  const [privacyMode, setPrivacyMode] = useState<boolean>(false)
+  const [privacyStrategy, setPrivacyStrategy] = useState<MaskStrategy>('partial')
+  const [showPrivacyMenu, setShowPrivacyMenu] = useState<boolean>(false)
+  const [maskExport, setMaskExport] = useState<boolean>(true)
+  const privacyMenuRef = useRef<HTMLDivElement>(null)
+  const [jsonModal, setJsonModal] = useState<{
+    isOpen: boolean
+    row: Record<string, any>
+    col: string
+    val: any
+    rowIdx: number
+  } | null>(null)
+  const [spatialDrawer, setSpatialDrawer] = useState<{
+    isOpen: boolean
+    row: Record<string, any>
+    col: string
+    val: any
+    rowIdx: number
+  } | null>(null)
+
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const cancelledRef = useRef(false)
   const isCommittingRef = useRef(false)
 
+  // Keyboard shortcut Alt+M for Privacy Mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        setPrivacyMode((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setShowExportMenu(false)
+      }
+      if (privacyMenuRef.current && !privacyMenuRef.current.contains(e.target as Node)) {
+        setShowPrivacyMenu(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -58,6 +108,9 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedCol('')
     setEditingCell(null)
     setViewMode('data')
+    setStagedChanges({})
+    setShowDiffModal(false)
+    setIsApplyingStaged(false)
   }, [table, schema, connId])
 
   // Focus edit input when entering edit mode
@@ -67,8 +120,11 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     }
   }, [editingCell])
 
-  const qc = useQueryClient()
-  const { openPeekDrawer } = useAppStore()
+  useEffect(() => {
+    if (isProd) {
+      setStagedMode(true)
+    }
+  }, [isProd, connId, table])
 
   // Columns metadata
   const { data: cols, isLoading: colsLoading } = useQuery({
@@ -156,13 +212,39 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     setSelectedRows({})
   }
 
+  const colPIIMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const c of metaCols) {
+      let sample = ''
+      for (const r of rows) {
+        if (r[c.name] !== null && r[c.name] !== undefined && String(r[c.name]).trim() !== '') {
+          sample = String(r[c.name])
+          break
+        }
+      }
+      const pii = detectPIIType(c.name, sample)
+      if (pii) {
+        map.set(c.name, pii)
+      }
+    }
+    return map
+  }, [metaCols, rows])
+
   const handleExport = async (format: 'csv' | 'json' | 'sql') => {
     setShowExportMenu(false)
     if (!table) return
     setExportLoading(true)
     setInlineError(null)
     try {
-      await api.exportTableBlob(connId, schema, table, format)
+      await api.exportTableBlob(
+        connId,
+        schema,
+        table,
+        format,
+        undefined,
+        maskExport,
+        privacyStrategy
+      )
     } catch (err: any) {
       setInlineError(`Export failed: ${err?.message ?? 'Unknown error'}`)
     } finally {
@@ -177,10 +259,14 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     nullable: col.isNullable ?? true,
     isPk: !!(col.isPrimaryKey || col.isPrimary),
     fk: fkMap.get(col.name),
+    pii: colPIIMap.get(col.name),
   }))
 
-  const formatValue = (val: any) => {
+  const formatValue = (val: any, colName?: string) => {
     if (val === null || val === undefined) return <span className="italic text-[var(--muted)] opacity-60 font-mono text-xs">null</span>
+    if (privacyMode && colName && colPIIMap.has(colName)) {
+      val = maskValue(colName, val, privacyStrategy)
+    }
     if (typeof val === 'object') return JSON.stringify(val)
     return String(val)
   }
@@ -204,17 +290,46 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     if (!editingCell) return
     isCommittingRef.current = true
     try {
-      const { col } = editingCell
+      const { col, rowIdx } = editingCell
       setEditingCell(null)
       const originalVal = row[col]
       const newVal = editValue
+      const rowKey = getRowKey(row, rowIdx)
+      const cellKey = `${rowKey}:${col}`
+
       // skip if unchanged
-      if (String(originalVal ?? '') === newVal) return
+      if (String(originalVal ?? '') === newVal) {
+        if (stagedMode) {
+          setStagedChanges((prev) => {
+            const next = { ...prev }
+            delete next[cellKey]
+            return next
+          })
+        }
+        return
+      }
+
       setInlineError(null)
       const where: Record<string, any> = {}
       for (const pk of pkCols) {
         where[pk.name] = row[pk.name]
       }
+
+      if (stagedMode) {
+        setStagedChanges((prev) => ({
+          ...prev,
+          [cellKey]: {
+            key: cellKey,
+            row,
+            col,
+            oldVal: originalVal,
+            newVal: newVal === '' ? null : newVal,
+            where,
+          },
+        }))
+        return
+      }
+
       await mutateM.mutateAsync({
         schema,
         table,
@@ -227,6 +342,121 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     } finally {
       isCommittingRef.current = false
       cancelledRef.current = false
+    }
+  }
+
+  const handleJsonModalSave = async (newValue: string) => {
+    if (!jsonModal) return
+    const { row, col, rowIdx, val: oldVal } = jsonModal
+    const rowKey = getRowKey(row, rowIdx)
+    const cellKey = `${rowKey}:${col}`
+    const where: Record<string, any> = {}
+    for (const pk of pkCols) {
+      where[pk.name] = row[pk.name]
+    }
+
+    if (stagedMode) {
+      setStagedChanges((prev) => ({
+        ...prev,
+        [cellKey]: {
+          key: cellKey,
+          row,
+          col,
+          oldVal,
+          newVal: newValue,
+          where,
+        },
+      }))
+    } else {
+      try {
+        await mutateM.mutateAsync({
+          schema,
+          table,
+          type: 'UPDATE',
+          data: { [col]: newValue },
+          where,
+        })
+      } catch (err: any) {
+        setInlineError(`Update failed: ${err?.message ?? 'Unknown error'}`)
+      }
+    }
+  }
+
+  const handleSpatialDrawerSave = async (newValue: string) => {
+    if (!spatialDrawer) return
+    const { row, col, rowIdx, val: oldVal } = spatialDrawer
+    if (!row || !col) return
+    const rowKey = getRowKey(row, rowIdx)
+    const cellKey = `${rowKey}:${col}`
+    const where: Record<string, any> = {}
+    for (const pk of pkCols) {
+      where[pk.name] = row[pk.name]
+    }
+
+    if (stagedMode) {
+      setStagedChanges((prev) => ({
+        ...prev,
+        [cellKey]: {
+          key: cellKey,
+          row,
+          col,
+          oldVal,
+          newVal: newValue,
+          where,
+        },
+      }))
+    } else {
+      try {
+        await mutateM.mutateAsync({
+          schema,
+          table,
+          type: 'UPDATE',
+          data: { [col]: newValue },
+          where,
+        })
+      } catch (err: any) {
+        setInlineError(`Update failed: ${err?.message ?? 'Unknown error'}`)
+      }
+    }
+  }
+
+  const stagedList = useMemo(() => Object.values(stagedChanges), [stagedChanges])
+  const stagedCount = stagedList.length
+
+  const handleApplyStagedChanges = async () => {
+    if (stagedCount === 0 || isApplyingStaged) return
+    if (activeConn?.readOnly) {
+      setInlineError('Connection is read-only. Mutation blocked by Safe Mode.')
+      return
+    }
+    setIsApplyingStaged(true)
+    setInlineError(null)
+    try {
+      for (const change of stagedList) {
+        await api.mutateRow(
+          connId,
+          {
+            schema,
+            table,
+            type: 'UPDATE',
+            data: { [change.col]: change.newVal },
+            where: change.where,
+          },
+          connections
+        )
+        setStagedChanges((prev) => {
+          const next = { ...prev }
+          delete next[change.key]
+          return next
+        })
+      }
+      setShowDiffModal(false)
+      qc.invalidateQueries({ queryKey: ['data', connId, table] })
+    } catch (err: any) {
+      setInlineError(`Failed to apply staged mutations: ${err?.message ?? 'Unknown error'}`)
+      qc.invalidateQueries({ queryKey: ['data', connId, table] })
+    } finally {
+      setIsApplyingStaged(false)
     }
   }
 
@@ -333,6 +563,80 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             
             {/* Actions */}
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Privacy Mode Toggle & Strategy Selector */}
+              <div className="relative" ref={privacyMenuRef}>
+                <div className="inline-flex items-center rounded border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setPrivacyMode(!privacyMode)}
+                    className={`flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono transition-colors cursor-pointer ${
+                      privacyMode
+                        ? 'bg-purple-500/20 text-purple-300 font-medium'
+                        : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                    }`}
+                    title="Toggle Privacy Mode (Alt+M): Mask PII columns dynamically"
+                  >
+                    <Shield className={`w-3.5 h-3.5 ${privacyMode ? 'text-purple-400' : 'text-[var(--muted)]'}`} />
+                    <span>Privacy: {privacyMode ? 'ON' : 'OFF'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPrivacyMenu(!showPrivacyMenu)}
+                    className={`px-1 py-0.5 border-l border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] transition-colors ${
+                      privacyMode ? 'bg-purple-500/20 text-purple-300' : ''
+                    }`}
+                    title="Privacy Masking Strategy"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </div>
+
+                {showPrivacyMenu && (
+                  <div className="absolute left-0 mt-1 w-44 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                    <div className="px-3 py-1 text-[10px] text-[var(--muted)] uppercase tracking-wider font-semibold border-b border-[var(--border)] mb-1">
+                      Masking Strategy
+                    </div>
+                    {(['partial', 'redact', 'hash', 'faker'] as MaskStrategy[]).map((strat) => (
+                      <button
+                        key={strat}
+                        type="button"
+                        onClick={() => {
+                          setPrivacyStrategy(strat)
+                          setPrivacyMode(true)
+                          setShowPrivacyMenu(false)
+                        }}
+                        className={`w-full text-left px-3 py-1.5 flex items-center justify-between transition-colors ${
+                          privacyStrategy === strat
+                            ? 'bg-purple-500/15 text-purple-300 font-medium'
+                            : 'text-[var(--fg)] hover:bg-[var(--hover)]'
+                        }`}
+                      >
+                        <span className="capitalize">{strat}</span>
+                        {privacyStrategy === strat && <span className="text-[10px] text-purple-400">●</span>}
+                      </button>
+                    ))}
+                    <div className="px-3 py-1 mt-1 border-t border-[var(--border)] text-[10px] text-[var(--muted)]">
+                      Shortcut: <kbd className="px-1 py-0.5 rounded bg-[var(--surface)] text-[var(--fg)]">Alt+M</kbd>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Staged Mode Toggle */}
+              <button
+                type="button"
+                onClick={() => setStagedMode(!stagedMode)}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono border transition-colors cursor-pointer ${
+                  stagedMode
+                    ? 'bg-amber-500/15 text-amber-400 border-amber-500/30 font-medium'
+                    : 'bg-[var(--surface)] text-[var(--muted)] border-[var(--border)] hover:text-[var(--fg)]'
+                }`}
+                title="Toggle Staged Mode: Review changes and generate SQL diff before applying"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${stagedMode ? 'bg-amber-400 animate-pulse' : 'bg-[var(--muted)]'}`} />
+                <span>Staged: {stagedMode ? 'ON' : 'OFF'}</span>
+              </button>
+
               {Object.values(selectedRows).some(Boolean) && (
                 <button onClick={handleDelete} className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-red-400 hover:bg-red-950/20">
                   <Trash2 className="w-3 h-3" /> <span>{Object.values(selectedRows).filter(Boolean).length}</span>
@@ -366,6 +670,16 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 <Upload className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Import</span>
               </button>
+
+              {/* Instant Table REST API Playground */}
+              <button
+                onClick={() => openRestModal(table, schema)}
+                title="Instant Table REST API & Playground"
+                className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+              >
+                <Code2 className="w-3.5 h-3.5 text-blue-400" />
+                <span className="hidden sm:inline">REST API</span>
+              </button>
               
               <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -384,7 +698,19 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showExportMenu && (
-                  <div className="absolute right-0 mt-1 w-36 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                  <div className="absolute right-0 mt-1 w-48 bg-[var(--bg)] border border-[var(--border)] rounded shadow-lg py-1 z-30 font-mono text-xs">
+                    <label className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--border)] text-[11px] text-[var(--fg)] cursor-pointer hover:bg-[var(--hover)] select-none">
+                      <span className="flex items-center gap-1.5">
+                        <Shield className="w-3 h-3 text-purple-400" />
+                        <span>Sanitize / Mask PII</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={maskExport}
+                        onChange={(e) => setMaskExport(e.target.checked)}
+                        className="rounded border-[var(--border)] bg-[var(--surface)] text-purple-500 w-3.5 h-3.5"
+                      />
+                    </label>
                     <button
                       onClick={() => handleExport('csv')}
                       className="w-full text-left px-3 py-1.5 text-[var(--fg)] hover:bg-[var(--hover)] flex items-center justify-between"
@@ -454,6 +780,24 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                         <span>FK</span>
                       </span>
                     )}
+                    {c.pii && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-mono bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0"
+                        title={`PII Column: ${c.pii}`}
+                      >
+                        <Shield className="w-2.5 h-2.5" />
+                        <span>{c.pii}</span>
+                      </span>
+                    )}
+                    {isSpatialColumn(c.name, c.type) && (
+                      <span
+                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded text-[9px] font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shrink-0"
+                        title="Spatial / GIS Column"
+                      >
+                        <Globe className="w-2.5 h-2.5" />
+                        <span>GIS</span>
+                      </span>
+                    )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
@@ -478,19 +822,41 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     />
                   </td>
                   {colDefs.map(c => {
-                    const val = row[c.name]
-                    const isFkValue = !!c.fk && val !== null && val !== undefined && String(val) !== ''
+                    const rowKey = getRowKey(row, i)
+                    const cellKey = `${rowKey}:${c.name}`
+                    const staged = stagedChanges[cellKey]
+                    const isStaged = !!staged
+                    const val = isStaged ? staged.newVal : row[c.name]
+                    const isFkValue = !isStaged && !!c.fk && val !== null && val !== undefined && String(val) !== ''
                     const isEditing = editingCell?.rowIdx === i && editingCell?.col === c.name
                     const isPending = mutateM.isPending
+                    const isJsonType = !!(c.type && c.type.toLowerCase().includes('json'))
+                    const jsonCheck = parseJsonSafely(val)
+                    const isJson = isJsonType || jsonCheck.isJson
+                    const isMaskedPII = privacyMode && colPIIMap.has(c.name)
+                    const isSpatial = !isMaskedPII && (isSpatialValue(val) || isSpatialColumn(c.name, c.type)) && val !== null && val !== undefined && String(val).trim() !== ''
 
                     return (
                       <td
                         key={c.name}
-                        title={!hasPk ? 'Inline edit requires a primary key' : undefined}
-                        className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] ${hasPk && !isFkValue ? 'cursor-text' : ''} ${isPending && isEditing ? 'opacity-50' : ''}`}
+                        title={
+                          isMaskedPII
+                            ? `Masked PII (${colPIIMap.get(c.name)})`
+                            : isStaged
+                            ? `Staged change: ${String(staged.oldVal ?? 'NULL')} ➔ ${String(staged.newVal ?? 'NULL')}`
+                            : (!hasPk ? 'Inline edit requires a primary key' : undefined)
+                        }
+                        className={`px-2 py-1.5 font-mono-data text-[var(--fg)] truncate max-w-[280px] relative transition-colors ${
+                          hasPk && !isFkValue && !isMaskedPII ? 'cursor-text' : ''
+                        } ${isPending && isEditing ? 'opacity-50' : ''} ${
+                          isStaged
+                            ? 'bg-amber-500/15 text-amber-300 font-semibold border border-amber-500/40 rounded-xs'
+                            : ''
+                        }`}
                         onDoubleClick={() => {
                           if (!hasPk) return
                           if (isFkValue) return
+                          if (isMaskedPII) return
                           startEdit(i, c.name, val)
                         }}
                       >
@@ -515,24 +881,92 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                             onClick={e => e.stopPropagation()}
                           />
                         ) : isFkValue ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
-                          }}
-                          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate"
-                          title={`Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
-                        >
-                          <span className="truncate">{formatValue(val)}</span>
-                          <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
-                        </button>
-                      ) : (
-                        formatValue(val)
-                      )}
-                    </td>
-                  )
-                })}
+                          <button
+                            type="button"
+                            disabled={isMaskedPII}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (isMaskedPII) return
+                              openPeekDrawer(c.fk!.refTable, c.fk!.refColumn, val)
+                            }}
+                            className={`inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer group text-left max-w-full truncate ${
+                              isMaskedPII ? 'opacity-50 cursor-not-allowed hover:no-underline' : ''
+                            }`}
+                            title={isMaskedPII ? 'Peek disabled in Privacy Mode' : `Peek ${c.fk!.refTable}.${c.fk!.refColumn} = ${String(val)}`}
+                          >
+                            <span className="truncate">{formatValue(val, c.name)}</span>
+                            <Link2 className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
+                          </button>
+                        ) : isJson ? (
+                          <span className="flex items-center gap-1.5 truncate group/json">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setJsonModal({
+                                  isOpen: true,
+                                  row,
+                                  col: c.name,
+                                  val,
+                                  rowIdx: i,
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-400 text-[10px] font-mono border border-indigo-500/30 cursor-pointer shrink-0 transition-colors"
+                              title="Open in JSON Document Studio"
+                            >
+                              <span className="font-bold">{'{ }'}</span>
+                              <span className="text-[9px] uppercase tracking-wider font-semibold">JSON</span>
+                            </button>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
+                          </span>
+                        ) : isSpatial ? (
+                          <span className="flex items-center gap-1.5 truncate group/spatial">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setSpatialDrawer({
+                                  isOpen: true,
+                                  row,
+                                  col: c.name,
+                                  val,
+                                  rowIdx: i,
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 px-1 py-0.2 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-[10px] font-mono border border-emerald-500/30 cursor-pointer shrink-0 transition-colors"
+                              title="Open in Spatial & PostGIS Studio"
+                            >
+                              <Globe className="w-2.5 h-2.5" />
+                              <span className="text-[9px] uppercase tracking-wider font-semibold">GIS</span>
+                            </button>
+                            <span className="truncate">{formatValue(val, c.name)}</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1.5 truncate">
+                            {isStaged && (
+                              <span
+                                className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse"
+                                title="Pending staged update"
+                              />
+                            )}
+                            <span className="truncate">{formatValue(val, c.name)}</span>
+                          </span>
+                        )}
+                      </td>
+                    )
+                  })}
               </tr>
               )
             })}
@@ -602,6 +1036,132 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
             qc.invalidateQueries({ queryKey: ['data', connId, table] })
             refetch()
           }}
+        />
+      )}
+
+      {/* Floating Action Bar for Staged Changes */}
+      {stagedCount > 0 && (
+        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-[var(--surface)] border-2 border-amber-500/60 rounded-xl shadow-2xl backdrop-blur-md">
+          <div className="flex items-center gap-2 font-mono text-xs font-semibold text-amber-400">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <span>{stagedCount} Staged Change{stagedCount > 1 ? 's' : ''}</span>
+          </div>
+          <div className="h-4 w-px bg-[var(--border)]" />
+          <button
+            type="button"
+            onClick={() => setShowDiffModal(true)}
+            className="px-2.5 py-1 text-xs font-mono rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition-colors cursor-pointer"
+          >
+            Review SQL Diff
+          </button>
+          <button
+            type="button"
+            onClick={() => setStagedChanges({})}
+            disabled={isApplyingStaged}
+            className="px-2.5 py-1 text-xs font-mono rounded text-[var(--muted)] hover:text-red-400 transition-colors cursor-pointer disabled:opacity-40"
+          >
+            Discard All
+          </button>
+          <button
+            type="button"
+            onClick={handleApplyStagedChanges}
+            disabled={isApplyingStaged}
+            className="px-3 py-1 text-xs font-mono font-medium rounded bg-amber-500 hover:bg-amber-600 text-slate-950 shadow transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+          >
+            {isApplyingStaged && <Loader2 className="w-3 h-3 animate-spin" />}
+            <span>{isApplyingStaged ? 'Applying...' : 'Apply Changes'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Review SQL Diff Modal */}
+      {showDiffModal && (
+        <div className="modal-overlay p-4 z-50">
+          <div className="modal-content w-full max-w-2xl p-5 flex flex-col gap-3.5 bg-[var(--surface)] border border-[var(--border)] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[var(--border)] pb-2.5">
+              <div className="flex items-center gap-2 font-mono text-xs font-bold text-[var(--fg)]">
+                <span className="text-amber-400 uppercase">Review SQL Diff</span>
+                <span className="text-[var(--muted)]">({stagedCount} statement{stagedCount > 1 ? 's' : ''})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDiffModal(false)}
+                className="text-[var(--muted)] hover:text-[var(--fg)] p-0.5 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono uppercase text-[var(--muted)] tracking-wider">
+                Generated UPDATE Statements
+              </label>
+              <div className="p-3 bg-[var(--bg)] border border-[var(--border)] rounded font-mono text-xs text-amber-300 dark:text-amber-200 whitespace-pre-wrap max-h-80 overflow-auto">
+                {generateStagedSQL(stagedChanges, table, schema, activeConn?.dialect)}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-[var(--border)] flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setStagedChanges({})
+                  setShowDiffModal(false)
+                }}
+                className="text-xs font-mono text-red-400 hover:text-red-300 cursor-pointer"
+              >
+                Discard All
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDiffModal(false)}
+                  className="btn-secondary px-3 py-1.5 text-xs font-mono"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiffModal(false)
+                    handleApplyStagedChanges()
+                  }}
+                  disabled={isApplyingStaged}
+                  className="px-3 py-1.5 text-xs font-mono font-medium rounded bg-amber-500 hover:bg-amber-600 text-slate-950 shadow transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                >
+                  {isApplyingStaged && <Loader2 className="w-3 h-3 animate-spin" />}
+                  <span>{isApplyingStaged ? 'Applying...' : 'Apply Changes'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {jsonModal && (
+        <JsonStudioModal
+          isOpen={jsonModal.isOpen}
+          initialValue={jsonModal.val}
+          columnName={jsonModal.col}
+          tableName={table}
+          dialect={activeConn?.dialect || activeConn?.driver || 'postgres'}
+          readOnly={!hasPk || activeConn?.readOnly}
+          onClose={() => setJsonModal(null)}
+          onSave={handleJsonModalSave}
+        />
+      )}
+
+      {spatialDrawer && (
+        <SpatialMapDrawer
+          isOpen={spatialDrawer.isOpen}
+          initialValue={spatialDrawer.val}
+          columnName={spatialDrawer.col}
+          tableName={table}
+          connId={connId}
+          dialect={activeConn?.dialect || activeConn?.driver || 'postgres'}
+          readOnly={!hasPk || activeConn?.readOnly}
+          onClose={() => setSpatialDrawer(null)}
+          onSave={handleSpatialDrawerSave}
         />
       )}
     </div>

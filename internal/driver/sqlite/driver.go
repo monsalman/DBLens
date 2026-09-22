@@ -21,6 +21,7 @@ type SQLiteDriver struct {
 
 func New(dsn string) (*SQLiteDriver, error) {
 	cleanDSN := strings.TrimPrefix(dsn, "sqlite://")
+	cleanDSN = strings.TrimPrefix(cleanDSN, "sqlite3://")
 	cleanDSN = strings.TrimPrefix(cleanDSN, "file:")
 	db, err := sql.Open("sqlite", cleanDSN)
 	if err != nil {
@@ -416,12 +417,7 @@ func (s *SQLiteDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.
 }
 
 func (s *SQLiteDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
-	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-
 	compiledSql := trimmed
 	var args []interface{}
 	var err error
@@ -431,11 +427,19 @@ func (s *SQLiteDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string
 			return nil, err
 		}
 	}
+	return s.ExecuteRaw(ctx, compiledSql, args...)
+}
 
-	upper := strings.ToUpper(compiledSql)
+func (s *SQLiteDriver) ExecuteRaw(ctx context.Context, rawSql string, args ...interface{}) (*types.QueryResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	trimmed := strings.TrimSpace(rawSql)
+	upper := strings.ToUpper(trimmed)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "PRAGMA") || strings.HasPrefix(upper, "WITH") {
-		rows, err := s.db.QueryContext(ctxTimeout, compiledSql, args...)
+		rows, err := s.db.QueryContext(ctxTimeout, trimmed, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -472,7 +476,7 @@ func (s *SQLiteDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string
 		}, nil
 	}
 
-	res, err := s.db.ExecContext(ctxTimeout, compiledSql, args...)
+	res, err := s.db.ExecContext(ctxTimeout, trimmed, args...)
 	if err != nil {
 		return nil, err
 	}

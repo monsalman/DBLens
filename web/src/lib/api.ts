@@ -1,7 +1,38 @@
 export type DatabaseDriver = 'postgres' | 'mysql' | 'sqlite'
+import type { AIAssistantConfig } from '../features/editor/aiAssistant'
+import type { GISParseResponse, GISConvertResponse } from '../features/gis/gisHelper'
+import type {
+  RoutineItem,
+  RoutineArg,
+  TriggerItem,
+  ViewItem,
+  InvokeRoutineRequest,
+  InvokeRoutineResponse,
+  SaveRoutinePayload,
+  ToggleTriggerRequest,
+  RefreshViewRequest,
+} from '../features/routine/routineHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
+
+export interface SSHTunnelConfig {
+  enabled: boolean
+  host: string
+  port: number
+  user: string
+  auth_method: 'password' | 'key' | 'agent'
+  password?: string
+  private_key?: string
+  passphrase?: string
+}
+
+export interface TunnelTestResult {
+  success: boolean
+  message: string
+  latency_ms?: number
+  banner?: string
+}
 
 export interface Profile {
   id: string
@@ -10,6 +41,8 @@ export interface Profile {
   color?: string
   readOnly?: boolean
   dialect?: string   // cached after test
+  environment?: 'production' | 'staging' | 'development' | 'local'
+  ssh_tunnel?: SSHTunnelConfig
 }
 
 export interface ConnectionConfig {
@@ -21,6 +54,8 @@ export interface ConnectionConfig {
   dialect?: string
   name?: string
   driver?: DatabaseDriver
+  environment?: 'production' | 'staging' | 'development' | 'local'
+  ssh_tunnel?: SSHTunnelConfig
 }
 
 export interface ForeignKeyTarget {
@@ -385,13 +420,20 @@ export const api = {
     localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles))
   },
 
-  addProfile(dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+  addProfile(
+    dsn: string,
+    label: string = '',
+    color: string = '#818cf8',
+    readOnly: boolean = false,
+    environment?: 'production' | 'staging' | 'development' | 'local',
+    ssh_tunnel?: SSHTunnelConfig
+  ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       // Test connection first
       fetch('/api/connections/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dsn, label }),
+        body: JSON.stringify({ dsn, label, ssh_tunnel }),
       })
         .then(r => r.json())
         .then(json => {
@@ -408,6 +450,8 @@ export const api = {
             readOnly,
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
+            environment: environment || (readOnly ? 'production' : 'development'),
+            ssh_tunnel,
           }
           const existing = api.getProfiles()
           api.saveProfiles([...existing, profile])
@@ -417,12 +461,20 @@ export const api = {
     })
   },
 
-  updateProfile(id: string, dsn: string, label: string = '', color: string = '#818cf8', readOnly: boolean = false): Promise<ConnectionConfig> {
+  updateProfile(
+    id: string,
+    dsn: string,
+    label: string = '',
+    color: string = '#818cf8',
+    readOnly: boolean = false,
+    environment?: 'production' | 'staging' | 'development' | 'local',
+    ssh_tunnel?: SSHTunnelConfig
+  ): Promise<ConnectionConfig> {
     return new Promise((resolve, reject) => {
       fetch('/api/connections/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dsn, label }),
+        body: JSON.stringify({ dsn, label, ssh_tunnel }),
       })
         .then(r => r.json())
         .then(json => {
@@ -440,6 +492,8 @@ export const api = {
             readOnly,
             dialect: result.dialect,
             driver: result.dialect as DatabaseDriver,
+            environment: environment || (readOnly ? 'production' : 'development'),
+            ssh_tunnel,
           }
           api.saveProfiles(profiles.map(p => (p.id === id ? updated : p)))
           resolve(updated)
@@ -453,14 +507,24 @@ export const api = {
     api.saveProfiles(profiles)
   },
 
-  testConnection(dsn: string, label: string = ''): Promise<TestConnectionResult> {
+  testConnection(dsn: string, label: string = '', ssh_tunnel?: SSHTunnelConfig): Promise<TestConnectionResult> {
     return fetch('/api/connections/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dsn, label }),
+      body: JSON.stringify({ dsn, label, ssh_tunnel }),
     })
       .then(r => r.json())
       .then(json => json.data ?? json)
+  },
+
+  async testSSHTunnel(config: SSHTunnelConfig): Promise<TunnelTestResult> {
+    const res = await fetch('/api/tunnel/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    const json = await res.json()
+    return json.data ?? json
   },
 
   // Global profiles from server env DBLENS_CONNECTIONS
@@ -496,12 +560,22 @@ export const api = {
   },
 
   // ── Database Queries — all pass DSN via X-DBLENS-DSN header ──
-  _headers(dsn: string): HeadersInit {
+  _headers(dsn: string, connId?: string, profiles?: ConnectionConfig[]): HeadersInit {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
     if (dsn) {
       headers['X-DBLENS-DSN'] = dsn
+    }
+    const allProfiles = profiles && profiles.length > 0 ? profiles : this.getProfiles()
+    const match = connId
+      ? allProfiles.find(p => p.id === connId)
+      : allProfiles.find(p => p.dsn === dsn)
+    if (match?.readOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    if (match?.ssh_tunnel?.enabled) {
+      headers['X-DBLENS-SSH-TUNNEL'] = JSON.stringify(match.ssh_tunnel)
     }
     return headers
   },
@@ -617,7 +691,7 @@ export const api = {
       `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter-preview${schemaParam}`,
       {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       }
     )
@@ -642,7 +716,7 @@ export const api = {
       `/api/connections/${connId}/tables/${encodeURIComponent(table)}/alter${schemaParam}`,
       {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       }
     )
@@ -745,7 +819,7 @@ export const api = {
       }
       const res = await fetch(`/api/connections/${connId}/query`, {
         method: 'POST',
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
@@ -865,7 +939,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/mutate`, {
       method: 'POST',
-      headers: this._headers(dsn),
+      headers: this._headers(dsn, connId, profiles),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -885,7 +959,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     try {
       const res = await fetch(`/api/connections/${connId}/erd`, {
-        headers: this._headers(dsn),
+        headers: this._headers(dsn, connId, profiles),
       })
       if (!res.ok) return []
       const json = await res.json()
@@ -905,7 +979,7 @@ export const api = {
     const dsn = this._getDSN(connId, profiles)
     const res = await fetch(`/api/connections/${connId}/batch-insert`, {
       method: 'POST',
-      headers: this._headers(dsn),
+      headers: this._headers(dsn, connId, profiles),
       body: JSON.stringify({ schema, table, rows }),
     })
     if (!res.ok) {
@@ -926,14 +1000,23 @@ export const api = {
     schema: string,
     table: string,
     format: 'csv' | 'json' | 'sql',
-    profiles?: ConnectionConfig[]
+    profiles?: ConnectionConfig[],
+    mask?: boolean,
+    maskStrategy?: string
   ): Promise<void> {
     const dsn = this._getDSN(connId, profiles)
-    const params = new URLSearchParams({
+    const queryParams: Record<string, string> = {
       table,
       schema: schema || '',
       format,
-    })
+    }
+    if (mask) {
+      queryParams.mask = 'true'
+      if (maskStrategy) {
+        queryParams.mask_strategy = maskStrategy
+      }
+    }
+    const params = new URLSearchParams(queryParams)
     const headers: Record<string, string> = {}
     if (dsn) {
       headers['X-DBLENS-DSN'] = dsn
@@ -1022,6 +1105,110 @@ export const api = {
         if (j?.error) msg = j.error
       } catch {}
       throw new Error(msg || 'Import SQL failed')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async downloadDatabaseDump(
+    connId: string,
+    options: {
+      schema?: string
+      tables?: string[]
+      includeSchema?: boolean
+      includeData?: boolean
+      gzip?: boolean
+      database?: string
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<void> {
+    const dsn = this._getDSN(connId, profiles)
+    const params = new URLSearchParams()
+    if (options.schema) params.set('schema', options.schema)
+    if (options.tables && options.tables.length > 0) {
+      params.set('tables', options.tables.join(','))
+    }
+    if (options.includeSchema !== undefined) {
+      params.set('includeSchema', String(options.includeSchema))
+    }
+    if (options.includeData !== undefined) {
+      params.set('includeData', String(options.includeData))
+    }
+    if (options.gzip !== undefined) {
+      params.set('gzip', String(options.gzip))
+    }
+    if (options.database) {
+      params.set('database', options.database)
+    }
+
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+
+    const res = await fetch(`/api/connections/${connId}/dump?${params.toString()}`, {
+      headers,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Dump failed')
+    }
+
+    const disposition = res.headers.get('Content-Disposition')
+    let filename = options.gzip ? 'dblens-dump.sql.gz' : 'dblens-dump.sql'
+    if (disposition) {
+      const match = disposition.match(/filename="?([^";]+)"?/)
+      if (match && match[1]) {
+        filename = match[1]
+      }
+    }
+
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
+
+  async restoreDatabaseDump(
+    connId: string,
+    file: File,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ total: number; executed: number; errors: string[] }> {
+    const dsn = this._getDSN(connId, profiles)
+    const formData = new FormData()
+    formData.append('file', file)
+    const headers: Record<string, string> = {}
+    if (dsn) {
+      headers['X-DBLENS-DSN'] = dsn
+    }
+    const allProfiles = profiles && profiles.length > 0 ? profiles : this.getProfiles()
+    const match = allProfiles.find(p => p.id === connId)
+    if (match?.readOnly) {
+      headers['X-DBLENS-READONLY'] = 'true'
+    }
+    const res = await fetch(`/api/connections/${connId}/restore`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Restore failed')
     }
     const json = await res.json()
     return json.data ?? json
@@ -1163,4 +1350,1150 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async detectPII(
+    connId: string,
+    columns: string[],
+    samples?: Record<string, string>,
+    profiles?: ConnectionConfig[]
+  ): Promise<DetectPIIResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/mask/detect`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ columns, samples }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to detect PII')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async previewMask(
+    connId: string,
+    payload: PreviewMaskPayload,
+    profiles?: ConnectionConfig[]
+  ): Promise<PreviewMaskResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/mask/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to preview masked data')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getPrivileges(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PrivilegeReport> {
+    const dsn = this._getDSN(connId, profiles)
+    const url = schema
+      ? `/api/connections/${connId}/privileges?schema=${encodeURIComponent(schema)}`
+      : `/api/connections/${connId}/privileges`
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to get privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async previewPrivileges(
+    connId: string,
+    payload: { changes: PrivilegeChange[]; roles?: RoleInfo[] },
+    profiles?: ConnectionConfig[]
+  ): Promise<PrivilegePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/privileges/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to preview privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyPrivileges(
+    connId: string,
+    payload: { plan?: PrivilegePlan; changes?: PrivilegeChange[]; roles?: RoleInfo[] },
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; executedStatements: number }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/privileges/apply`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      let msg = text
+      try {
+        const j = JSON.parse(text)
+        if (j?.error) msg = j.error
+      } catch {}
+      throw new Error(msg || 'Failed to apply privileges')
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getAssistantSchema(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantSchemaContext> {
+    const dsn = this._getDSN(connId, profiles)
+    const url = schema
+      ? `/api/connections/${connId}/assistant/schema?schema=${encodeURIComponent(schema)}`
+      : `/api/connections/${connId}/assistant/schema`
+    const r = await fetch(url, { headers: this._headers(dsn, connId, profiles) })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch assistant schema (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async buildAssistantPrompt(
+    connId: string,
+    payload: {
+      op?: 'generate' | 'fix' | 'explain'
+      prompt?: string
+      query?: string
+      error?: string
+      schema?: string
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/prompt`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to build prompt (${r.status})`)
+    }
+    const json = await r.json()
+    const data = json.data ?? json
+    return data.prompt ?? ''
+  },
+
+  async generateSqlWithAI(
+    connId: string,
+    payload: {
+      prompt: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantGenerateResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/generate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async fixSqlWithAI(
+    connId: string,
+    payload: {
+      query: string
+      error: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantFixResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/fix`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fix SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async explainSqlWithAI(
+    connId: string,
+    payload: {
+      query: string
+      schema?: string
+      config?: AIAssistantConfig
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AssistantExplainResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/assistant/explain`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to explain SQL (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async getWebhooks(connId: string, profiles?: ConnectionConfig[]): Promise<Webhook[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch webhooks (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async createWebhook(
+    connId: string,
+    data: Partial<Webhook>,
+    profiles?: ConnectionConfig[]
+  ): Promise<Webhook> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to create webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async updateWebhook(
+    connId: string,
+    id: string,
+    data: Partial<Webhook>,
+    profiles?: ConnectionConfig[]
+  ): Promise<Webhook> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/${id}`, {
+      method: 'PUT',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to update webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async deleteWebhook(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean }> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/${id}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async getWebhookDeliveries(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<WebhookDelivery[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/deliveries`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch deliveries (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async retryWebhookDelivery(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<WebhookDelivery> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/deliveries/${id}/retry`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to retry delivery (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async simulateWebhook(
+    connId: string,
+    payload: SimulateWebhookRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SimulateWebhookResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const r = await fetch(`/api/connections/${connId}/webhooks/simulate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to simulate webhook (${r.status})`)
+    }
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async executeFederatedQuery(
+    req: FederatedQueryRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<FederatedQueryResponse> {
+    const connections: FederatedConnectionProfile[] = (req.connections || profiles || []).map((p) => ({
+      id: p.id,
+      dsn: p.dsn,
+      label: p.label || p.id,
+    }))
+    const res = await fetch('/api/federation/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...req, connections }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Federated query failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async executeDataPipe(
+    req: DataPipeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<DataPipeResponse> {
+    const srcDsn = req.sourceDsn || (req.sourceConnId ? this._getDSN(req.sourceConnId, profiles) : '')
+    const tgtDsn = req.targetDsn || (req.targetConnId ? this._getDSN(req.targetConnId, profiles) : '')
+    const payload: DataPipeRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const res = await fetch('/api/federation/pipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Data pipe execution failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async reconcileTables(
+    req: ReconcileRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ReconcileResponse> {
+    const srcDsn = req.sourceDsn || (req.sourceConnId ? this._getDSN(req.sourceConnId, profiles) : '')
+    const tgtDsn = req.targetDsn || (req.targetConnId ? this._getDSN(req.targetConnId, profiles) : '')
+    const payload: ReconcileRequest = {
+      ...req,
+      sourceDsn: srcDsn,
+      targetDsn: tgtDsn,
+    }
+    const res = await fetch('/api/federation/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Reconciliation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async parseGIS(
+    connId: string,
+    data: string,
+    srid?: number,
+    profiles?: ConnectionConfig[]
+  ): Promise<GISParseResponse> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const url = connId ? `/api/connections/${connId}/gis/parse` : '/api/gis/parse'
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify({ data, srid }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `GIS parse failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async convertGIS(
+    connId: string,
+    data: string,
+    targetFormat: string,
+    targetSrid?: number,
+    dialect?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<GISConvertResponse> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const url = connId ? `/api/connections/${connId}/gis/convert` : '/api/gis/convert'
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify({
+        data,
+        target_format: targetFormat,
+        target_srid: targetSrid,
+        dialect,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `GIS convert failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getMigrations(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationListResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch migrations (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async initMigrationTracker(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string; initialized: boolean }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/init`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to initialize migration tracker (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async generateMigration(
+    connId: string,
+    req: GenerateMigrationRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationBundle> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/generate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate migration bundle (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyMigration(
+    connId: string,
+    req: ApplyMigrationRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationRecord> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/apply`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to apply migration (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async rollbackMigration(
+    connId: string,
+    version?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<MigrationRecord> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/migrations/rollback`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ version }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to rollback migration (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  // ── Feature-29: Stored Procedure, Function, View & Trigger Studio ──
+  async getRoutines(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<RoutineItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const res = await fetch(`/api/connections/${connId}/routines${schemaParam}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch routines (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getRoutineDetail(
+    connId: string,
+    schema: string,
+    name: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<RoutineItem> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/${encodeURIComponent(schema)}/${encodeURIComponent(name)}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch routine detail (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async invokeRoutine(
+    connId: string,
+    req: InvokeRoutineRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<InvokeRoutineResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/invoke`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Routine invocation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async saveRoutine(
+    connId: string,
+    ddl: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/routines/save`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ddl }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to save routine (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async deleteRoutine(
+    connId: string,
+    schema: string,
+    name: string,
+    routineType?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const typeParam = routineType ? `?type=${encodeURIComponent(routineType)}` : ''
+    const res = await fetch(`/api/connections/${connId}/routines/${encodeURIComponent(schema)}/${encodeURIComponent(name)}${typeParam}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete routine (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getTriggers(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<TriggerItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const params = new URLSearchParams()
+    if (schema) params.set('schema', schema)
+    if (table) params.set('table', table)
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    const res = await fetch(`/api/connections/${connId}/triggers${qs}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch triggers (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async toggleTrigger(
+    connId: string,
+    req: ToggleTriggerRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/triggers/toggle`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to toggle trigger (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async deleteTrigger(
+    connId: string,
+    schema: string,
+    name: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const tableParam = table ? `?table=${encodeURIComponent(table)}` : ''
+    const res = await fetch(`/api/connections/${connId}/triggers/${encodeURIComponent(schema)}/${encodeURIComponent(name)}${tableParam}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to delete trigger (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async getViews(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ViewItem[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const schemaParam = schema ? `?schema=${encodeURIComponent(schema)}` : ''
+    const res = await fetch(`/api/connections/${connId}/views${schemaParam}`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch views (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async refreshView(
+    connId: string,
+    req: RefreshViewRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/views/refresh`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to refresh view (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
 }
+
+export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
+
+export interface MigrationRecord {
+  id: number
+  version: string
+  name: string
+  appliedAt: string
+  checksum: string
+  executionTimeMs: number
+  upSql: string
+  downSql: string
+}
+
+export interface MigrationFile {
+  fileName: string
+  content: string
+}
+
+export interface MigrationBundle {
+  format: MigrationFormat
+  version: string
+  name: string
+  checksum: string
+  files: MigrationFile[]
+  fileMap: Record<string, string>
+}
+
+export interface MigrationListResponse {
+  initialized: boolean
+  dialect: string
+  migrations: MigrationRecord[]
+}
+
+export interface GenerateMigrationRequest {
+  name: string
+  upSql: string
+  downSql?: string
+  format: string
+  version?: string
+}
+
+export interface ApplyMigrationRequest {
+  version?: string
+  name: string
+  upSql: string
+  downSql?: string
+  checksum?: string
+}
+
+export interface ColumnPIIInfo {
+  column: string
+  pii_type: string
+  is_pii: boolean
+}
+
+export interface DetectPIIResponse {
+  detected: Record<string, string>
+  columns: ColumnPIIInfo[]
+}
+
+export interface PreviewMaskPayload {
+  strategy?: string
+  columns?: string[]
+  rows?: Record<string, any>[]
+  table?: string
+  schema?: string
+  limit?: number
+}
+
+export interface PreviewMaskResponse {
+  strategy: string
+  columns?: string[]
+  rows: Record<string, any>[]
+}
+
+export interface RoleInfo {
+  name: string
+  isSuperuser: boolean
+  canLogin: boolean
+  connectionLimit: number
+  inherit?: boolean
+  createDb?: boolean
+  createRole?: boolean
+  attributes?: Record<string, any>
+}
+
+export interface TablePrivilege {
+  grantee: string
+  tableSchema: string
+  tableName: string
+  privilegeType: string
+  isGrantable: boolean
+}
+
+export interface PrivilegeReport {
+  dialect: string
+  roles: RoleInfo[]
+  tablePrivileges: TablePrivilege[]
+  tables: string[]
+  supportedPrivileges: string[]
+}
+
+export interface PrivilegeChange {
+  role: string
+  schema: string
+  table: string
+  privilege: string
+  action: 'GRANT' | 'REVOKE'
+  withGrantOption?: boolean
+}
+
+export interface SafetyWarning {
+  level: 'critical' | 'warning' | 'info'
+  role: string
+  message: string
+}
+
+export interface PrivilegePlan {
+  statements: string[]
+  warnings: SafetyWarning[]
+  dangerous: boolean
+  affectedRoles: string[]
+}
+
+export interface CompactColumn {
+  name: string
+  type: string
+  pk?: boolean
+  nullable?: boolean
+}
+
+export interface CompactFK {
+  column: string
+  refTable: string
+  refColumn: string
+}
+
+export interface CompactTable {
+  name: string
+  schema?: string
+  columns: CompactColumn[]
+  fks?: CompactFK[]
+}
+
+export interface AssistantSchemaContext {
+  tables: CompactTable[]
+  ddl: string
+}
+
+export interface AssistantGenerateResponse {
+  sql: string
+  raw?: string
+}
+
+export interface AssistantFixResponse {
+  sql: string
+  raw?: string
+}
+
+export interface AssistantExplainResponse {
+  explanation: string
+  raw?: string
+}
+
+export interface Webhook {
+  id: string
+  connection_id: string
+  name: string
+  url: string
+  secret?: string
+  has_secret?: boolean
+  events: string[]
+  tables: string[]
+  enabled: boolean
+  headers?: Record<string, string>
+  created_at?: string
+}
+
+export interface WebhookDelivery {
+  id: string
+  webhook_id?: string
+  webhook_name?: string
+  connection_id?: string
+  event: string
+  url: string
+  request_payload: string
+  response_status_code: number
+  response_body: string
+  latency_ms: number
+  error?: string
+  timestamp: string
+}
+
+export interface SimulateWebhookRequest {
+  webhook_id?: string
+  url?: string
+  secret?: string
+  event: 'INSERT' | 'UPDATE' | 'DELETE' | string
+  schema?: string
+  table: string
+  old_record?: Record<string, any>
+  new_record?: Record<string, any>
+}
+
+export interface SimulateWebhookResponse {
+  delivery: WebhookDelivery
+  success: boolean
+  error?: string
+}
+
+// ── Multi-Connection Query Federation & Data Pipe ──
+
+export interface FederatedConnectionProfile {
+  id: string
+  dsn: string
+  label?: string
+}
+
+export interface FederatedTableStat {
+  connId: string
+  schema?: string
+  table: string
+  tempTable: string
+  rowCount: number
+  elapsedMs: number
+}
+
+export interface FederatedQueryRequest {
+  query: string
+  limit?: number
+  connections?: FederatedConnectionProfile[]
+  dsns?: Record<string, string>
+}
+
+export interface FederatedQueryResponse {
+  result: QueryResult
+  tableStats: FederatedTableStat[]
+  rewrittenSql: string
+  elapsedMs: number
+}
+
+export interface DataPipeRequest {
+  sourceConnId: string
+  sourceDsn?: string
+  sourceSchema?: string
+  sourceTable: string
+  targetConnId: string
+  targetDsn?: string
+  targetSchema?: string
+  targetTable?: string
+  createTable?: boolean
+  truncateTable?: boolean
+  batchSize?: number
+}
+
+export interface DataPipeResponse {
+  rowsMigrated: number
+  elapsedMs: number
+  sourceTable: string
+  targetTable: string
+  message: string
+}
+
+export interface ColumnReconcileDiff {
+  name: string
+  sourceType: string
+  targetType: string
+  sourceNullable: boolean
+  targetNullable: boolean
+  sourcePrimary: boolean
+  targetPrimary: boolean
+  match: boolean
+  status: 'MATCH' | 'TYPE_MISMATCH' | 'MISSING_IN_TARGET' | 'MISSING_IN_SOURCE' | 'CONSTRAINT_MISMATCH' | string
+}
+
+export interface RowSampleDiff {
+  rowIndex: number
+  source: Record<string, any>
+  target: Record<string, any>
+  diffCols: string[]
+}
+
+export interface ReconcileRequest {
+  sourceConnId: string
+  sourceDsn?: string
+  sourceSchema?: string
+  sourceTable: string
+  targetConnId: string
+  targetDsn?: string
+  targetSchema?: string
+  targetTable?: string
+  sampleLimit?: number
+}
+
+export interface ReconcileResponse {
+  status: 'IDENTICAL' | 'SCHEMA_MISMATCH' | 'ROW_COUNT_MISMATCH' | 'DATA_MISMATCH' | string
+  sourceTable: string
+  targetTable: string
+  sourceRowCount: number
+  targetRowCount: number
+  rowCountDiff: number
+  sourceChecksum: string
+  targetChecksum: string
+  checksumMatch: boolean
+  columnComparison: ColumnReconcileDiff[]
+  missingInTarget: string[]
+  missingInSource: string[]
+  sampleCompared: number
+  sampleMatched: number
+  sampleMismatched: number
+  sampleDiffs?: RowSampleDiff[]
+  elapsedMs: number
+}
+
+export type {
+  RoutineItem,
+  RoutineArg,
+  TriggerItem,
+  ViewItem,
+  InvokeRoutineRequest,
+  InvokeRoutineResponse,
+  SaveRoutinePayload,
+  ToggleTriggerRequest,
+  RefreshViewRequest,
+}
+
+

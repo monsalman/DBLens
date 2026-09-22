@@ -477,12 +477,7 @@ func (m *MySQLDriver) ExecuteQuery(ctx context.Context, rawSql string) (*types.Q
 }
 
 func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string, queryParams map[string]interface{}) (*types.QueryResult, error) {
-	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	start := time.Now()
 	trimmed := strings.TrimSpace(rawSql)
-
 	compiledSql := trimmed
 	var args []interface{}
 	var err error
@@ -492,11 +487,19 @@ func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string,
 			return nil, err
 		}
 	}
+	return m.ExecuteRaw(ctx, compiledSql, args...)
+}
 
-	upper := strings.ToUpper(compiledSql)
+func (m *MySQLDriver) ExecuteRaw(ctx context.Context, rawSql string, args ...interface{}) (*types.QueryResult, error) {
+	ctxTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	trimmed := strings.TrimSpace(rawSql)
+	upper := strings.ToUpper(trimmed)
 
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "SHOW") || strings.HasPrefix(upper, "DESCRIBE") || strings.HasPrefix(upper, "WITH") {
-		rows, err := m.db.QueryContext(ctxTimeout, compiledSql, args...)
+		rows, err := m.db.QueryContext(ctxTimeout, trimmed, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -533,7 +536,7 @@ func (m *MySQLDriver) ExecuteQueryWithParams(ctx context.Context, rawSql string,
 		}, nil
 	}
 
-	res, err := m.db.ExecContext(ctxTimeout, compiledSql, args...)
+	res, err := m.db.ExecContext(ctxTimeout, trimmed, args...)
 	if err != nil {
 		return nil, err
 	}

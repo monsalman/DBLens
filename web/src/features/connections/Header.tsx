@@ -1,7 +1,8 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
+import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -71,6 +72,16 @@ export const Header: React.FC<Props> = ({
                     : 'text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
                 }`}>
                 <span>{c.label || c.name || c.id}</span>
+                {c.ssh_tunnel?.enabled && (
+                  <span
+                    className="inline-flex items-center gap-0.5 px-1 py-0.2 text-[9px] font-mono font-semibold rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                    title="SSH Bastion Tunnel Enabled"
+                  >
+                    <Shield className="w-2.5 h-2.5" />
+                    <span>SSH</span>
+                  </span>
+                )}
+                <EnvironmentBadge env={c.environment} />
                 <span className={`flex items-center gap-1 opacity-0 group-hover:opacity-100 ${c.id === activeConnId ? 'opacity-100' : ''}`}>
                   <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(c); }} className="hover:text-[var(--fg)] p-0.5" title="Edit">
                     <Pencil className="w-3 h-3" />
@@ -113,6 +124,7 @@ export const Header: React.FC<Props> = ({
             { id: 'diff' as const, label: 'Schema Diff' },
             { id: 'processes' as const, label: 'Processes' },
             { id: 'advisor' as const, label: 'Advisor', icon: ShieldCheck },
+            { id: 'privileges' as const, label: 'Privileges', icon: Shield },
           ].map(tab => {
             const Icon = (tab as any).icon
             return (
@@ -128,6 +140,41 @@ export const Header: React.FC<Props> = ({
             )
           })}
         </div>
+
+        {/* Database Dump & Restore */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsDumpModalOpen(true)}
+          disabled={!activeConnId}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Database Dump & Restore Engine"
+        >
+          <Archive className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">Dump / Restore</span>
+        </button>
+
+        {/* Database Webhooks & Change Event Simulator */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsWebhookModalOpen(true)}
+          disabled={!activeConnId}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Database Webhook & Change Event Simulator"
+        >
+          <Webhook className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">Webhooks</span>
+        </button>
+
+        {/* Cross-DB Query Federation & Data Pipe */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsFederationModalOpen(true)}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer"
+          title="Cross-Database Query Federation & Data Pipe"
+        >
+          <Network className="w-3.5 h-3.5" />
+          <span className="hidden md:inline">Federation</span>
+        </button>
 
         {/* Dark/Light Toggle */}
         <button onClick={onToggleTheme}

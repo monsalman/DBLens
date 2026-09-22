@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ConnectionConfig, QueryHistoryItem } from '../lib/api'
 
-export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff' | 'processes' | 'advisor'
+export type ActiveTab = 'table' | 'sql' | 'erd' | 'diff' | 'processes' | 'advisor' | 'privileges'
 
 export interface SqlTab {
   id: string
@@ -84,6 +84,27 @@ interface AppState {
   // Modals & Drawers
   isAddConnOpen: boolean
   setIsAddConnOpen: (open: boolean) => void
+  isDumpModalOpen: boolean
+  setIsDumpModalOpen: (open: boolean) => void
+  isRestModalOpen: boolean
+  setIsRestModalOpen: (open: boolean) => void
+  restModalTarget: { schema?: string; table?: string } | null
+  openRestModal: (table?: string, schema?: string) => void
+  closeRestModal: () => void
+  isWebhookModalOpen: boolean
+  setIsWebhookModalOpen: (open: boolean) => void
+  isFederationModalOpen: boolean
+  setIsFederationModalOpen: (open: boolean) => void
+  federationInitialTab?: 'query' | 'pipe' | 'reconcile'
+  openFederationModal: (tab?: 'query' | 'pipe' | 'reconcile') => void
+  closeFederationModal: () => void
+  isMigrationModalOpen: boolean
+  setIsMigrationModalOpen: (open: boolean) => void
+  isRoutineStudioOpen: boolean
+  setIsRoutineStudioOpen: (open: boolean) => void
+  routineStudioInitialTab?: 'routines' | 'triggers' | 'views'
+  openRoutineStudio: (tab?: 'routines' | 'triggers' | 'views') => void
+  closeRoutineStudio: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -99,9 +120,15 @@ interface AppState {
     title: string
     sql: string
     onConfirm: () => void
+    requireTypedConfirm?: boolean
   }
-  openDryRunModal: (title: string, sql: string, onConfirm: () => void) => void
+  openDryRunModal: (title: string, sql: string, onConfirm: () => void, requireTypedConfirm?: boolean) => void
   closeDryRunModal: () => void
+
+  // Safe Mode guardrails
+  safeModeOverrides: Record<string, boolean>
+  setSafeMode: (connId: string, enabled: boolean) => void
+  isSafeModeActive: (connId?: string | null) => boolean
 
   // Command Palette
   isCommandPaletteOpen: boolean
@@ -110,7 +137,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       connections: [],
       activeConnectionId: null,
       setConnections: (connections) =>
@@ -293,6 +320,39 @@ export const useAppStore = create<AppState>()(
 
       isAddConnOpen: false,
       setIsAddConnOpen: (isAddConnOpen) => set({ isAddConnOpen }),
+      isDumpModalOpen: false,
+      setIsDumpModalOpen: (isDumpModalOpen) => set({ isDumpModalOpen }),
+      isRestModalOpen: false,
+      setIsRestModalOpen: (isRestModalOpen) => set({ isRestModalOpen }),
+      restModalTarget: null,
+      openRestModal: (table, schema) =>
+        set({
+          isRestModalOpen: true,
+          restModalTarget: table ? { table, schema } : null,
+        }),
+      closeRestModal: () => set({ isRestModalOpen: false, restModalTarget: null }),
+      isWebhookModalOpen: false,
+      setIsWebhookModalOpen: (isWebhookModalOpen) => set({ isWebhookModalOpen }),
+      isFederationModalOpen: false,
+      setIsFederationModalOpen: (isFederationModalOpen) => set({ isFederationModalOpen }),
+      federationInitialTab: 'query',
+      openFederationModal: (tab = 'query') =>
+        set({
+          isFederationModalOpen: true,
+          federationInitialTab: tab,
+        }),
+      closeFederationModal: () => set({ isFederationModalOpen: false }),
+      isMigrationModalOpen: false,
+      setIsMigrationModalOpen: (isMigrationModalOpen) => set({ isMigrationModalOpen }),
+      isRoutineStudioOpen: false,
+      setIsRoutineStudioOpen: (isRoutineStudioOpen) => set({ isRoutineStudioOpen }),
+      routineStudioInitialTab: 'routines',
+      openRoutineStudio: (tab = 'routines') =>
+        set({
+          isRoutineStudioOpen: true,
+          routineStudioInitialTab: tab,
+        }),
+      closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
 
       peekDrawer: {
         isOpen: false,
@@ -318,14 +378,16 @@ export const useAppStore = create<AppState>()(
         title: '',
         sql: '',
         onConfirm: () => {},
+        requireTypedConfirm: false,
       },
-      openDryRunModal: (title, sql, onConfirm) =>
+      openDryRunModal: (title, sql, onConfirm, requireTypedConfirm = false) =>
         set({
           dryRunModal: {
             isOpen: true,
             title,
             sql,
             onConfirm,
+            requireTypedConfirm,
           },
         }),
       closeDryRunModal: () =>
@@ -335,8 +397,25 @@ export const useAppStore = create<AppState>()(
             title: '',
             sql: '',
             onConfirm: () => {},
+            requireTypedConfirm: false,
           },
         }),
+
+      safeModeOverrides: {},
+      setSafeMode: (connId, enabled) =>
+        set((state) => ({
+          safeModeOverrides: { ...state.safeModeOverrides, [connId]: enabled },
+        })),
+      isSafeModeActive: (connId) => {
+        const id = connId || get().activeConnectionId
+        if (!id) return false
+        const overrides = get().safeModeOverrides
+        if (id in overrides) {
+          return !!overrides[id]
+        }
+        const conn = get().connections.find((c) => c.id === id)
+        return conn?.environment === 'production' || conn?.environment === 'staging'
+      },
 
       isCommandPaletteOpen: false,
       setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),

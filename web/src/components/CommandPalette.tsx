@@ -18,10 +18,18 @@ import {
   GitCompare,
   Activity,
   ShieldCheck,
+  Shield,
+  Archive,
+  Code2,
+  Webhook,
+  Network,
+  GitBranch,
+  Zap,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
 import { useAppStore, type ActiveTab } from '../stores/appStore'
+import { EnvironmentBadge } from './EnvironmentBadge'
 
 export interface CommandPaletteProps {
   connections: ConnectionConfig[]
@@ -50,6 +58,7 @@ interface CommandItem {
   category: CategoryType
   icon: React.ComponentType<{ className?: string }>
   badge?: string
+  environment?: string
   keywords?: string[]
   onSelect: () => void
 }
@@ -92,6 +101,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   connections,
   activeConnId,
   selectedSchema,
+  selectedTable,
   isDark,
   onSwitchConnection,
   onSelectTable,
@@ -261,6 +271,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     items.push({
+      id: 'action:privileges',
+      title: 'Go to Database Role & Access Privilege Manager',
+      subtitle: 'Manage roles, 2D permission matrix, grant/revoke table privileges, dry-run DDL',
+      category: 'Actions',
+      icon: Shield,
+      badge: 'AUTH',
+      keywords: ['privilege', 'privileges', 'roles', 'permissions', 'grant', 'revoke', 'access', 'users', 'auth'],
+      onSelect: () => {
+        onTabChange('privileges')
+        closePalette()
+      },
+    })
+
+    items.push({
       id: 'action:theme',
       title: `Toggle Theme (${isDark ? 'Switch to Light' : 'Switch to Dark'})`,
       subtitle: `Currently in ${isDark ? 'Dark' : 'Light'} mode`,
@@ -303,6 +327,132 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     if (activeConnId) {
+      items.push({
+        id: 'action:dump_database',
+        title: 'Database Dump & Snapshot',
+        subtitle: 'Export logical backup (.sql / .sql.gz) with topological ordering',
+        category: 'Actions',
+        icon: Archive,
+        badge: 'BACKUP',
+        keywords: ['dump', 'backup', 'export', 'snapshot', 'sql', 'gzip'],
+        onSelect: () => {
+          useAppStore.getState().setIsDumpModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:restore_database',
+        title: 'Database Restore',
+        subtitle: 'Restore database from .sql or .sql.gz dump',
+        category: 'Actions',
+        icon: Archive,
+        badge: 'RESTORE',
+        keywords: ['restore', 'import', 'backup', 'sql', 'recover'],
+        onSelect: () => {
+          useAppStore.getState().setIsDumpModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_rest_playground',
+        title: 'Open REST API Playground',
+        subtitle: 'Instant Table REST API endpoints, filter testbench & code snippets',
+        category: 'Actions',
+        icon: Code2,
+        badge: 'REST',
+        keywords: ['rest', 'api', 'http', 'postgrest', 'curl', 'testbench', 'playground', 'endpoint'],
+        onSelect: () => {
+          useAppStore.getState().openRestModal(selectedTable || undefined, selectedSchema)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_webhook_simulator',
+        title: 'Database Webhooks & Event Simulator',
+        subtitle: 'Manage endpoints, delivery log with retry, and simulate change events',
+        category: 'Actions',
+        icon: Webhook,
+        badge: 'WEBHOOK',
+        keywords: ['webhook', 'events', 'simulator', 'cdc', 'dispatch', 'delivery', 'hmac', 'signature', 'payload', 'notification'],
+        onSelect: () => {
+          useAppStore.getState().setIsWebhookModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_federation_modal',
+        title: 'Cross-Database Query Federation & Data Pipe',
+        subtitle: 'Virtual SQLite query runner, streaming data pipe & cross-connection table reconciliation',
+        category: 'Actions',
+        icon: Network,
+        badge: 'CROSS-DB',
+        keywords: ['federation', 'federated', 'cross-db', 'pipe', 'data pipe', 'reconcile', 'sqlite', 'multi-connection', 'runner', 'stream'],
+        onSelect: () => {
+          useAppStore.getState().setIsFederationModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_migration_hub',
+        title: 'Schema Migration Generator & Changelog Hub',
+        subtitle: 'Generate reversible migrations (Goose, Flyway, Golang-Migrate, DB-Mate, Prisma) & manage changelog',
+        category: 'Actions',
+        icon: GitBranch,
+        badge: 'MIGRATION',
+        keywords: ['migration', 'migrate', 'changelog', 'goose', 'flyway', 'dbmate', 'prisma', 'rollback', 'schema version'],
+        onSelect: () => {
+          useAppStore.getState().setIsMigrationModalOpen(true)
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_routine_studio',
+        title: 'Stored Procedure, Function, View & Trigger Studio',
+        subtitle: 'Inspect catalogs, invoke routines with parameters, toggle triggers, and refresh views',
+        category: 'Actions',
+        icon: Zap,
+        badge: 'ROUTINE',
+        keywords: ['routine', 'procedure', 'function', 'trigger', 'view', 'materialized', 'stored procedure', 'invoke', 'triggers', 'views'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('routines')
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_triggers_studio',
+        title: 'Triggers Inspector & Toggle',
+        subtitle: 'Inspect firing timing, table events, definitions, and toggle triggers',
+        category: 'Actions',
+        icon: Activity,
+        badge: 'TRIGGER',
+        keywords: ['trigger', 'triggers', 'before', 'after', 'toggle', 'events', 'enable', 'disable'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('triggers')
+          closePalette()
+        },
+      })
+
+      items.push({
+        id: 'action:open_views_studio',
+        title: 'Views & Materialized Views Studio',
+        subtitle: 'Inspect SQL view queries and 1-click refresh PostgreSQL materialized views',
+        category: 'Actions',
+        icon: Eye,
+        badge: 'VIEW',
+        keywords: ['view', 'views', 'materialized', 'matview', 'refresh view', 'pg_matviews'],
+        onSelect: () => {
+          useAppStore.getState().openRoutineStudio('views')
+          closePalette()
+        },
+      })
+
       items.push({
         id: 'action:disconnect',
         title: 'Disconnect Active Connection',
@@ -386,7 +536,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         category: 'Connections',
         icon: Server,
         badge: (conn.dialect || conn.driver || 'CONN').toUpperCase(),
-        keywords: ['connection', 'profile', conn.label || '', conn.name || '', conn.dialect || '', conn.id],
+        environment: conn.environment,
+        keywords: ['connection', 'profile', conn.label || '', conn.name || '', conn.dialect || '', conn.id, conn.environment || ''],
         onSelect: () => {
           onSwitchConnection(conn.id)
           closePalette()
@@ -402,6 +553,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     connections,
     activeConnId,
     selectedSchema,
+    selectedTable,
     isDark,
     onTabChange,
     onToggleTheme,
@@ -631,6 +783,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                           </div>
 
                           <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                            {item.environment && (
+                              <EnvironmentBadge env={item.environment} />
+                            )}
                             {item.badge && (
                               <span className="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--muted)] bg-[var(--hover)]">
                                 {item.badge}

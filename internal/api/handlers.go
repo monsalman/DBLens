@@ -1,22 +1,215 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/dump"
+	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/privilege"
+	"github.com/dblens/dblens/internal/rest"
+	"github.com/dblens/dblens/internal/tunnel"
+	"github.com/dblens/dblens/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
+
+var (
+	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	reLineComment  = regexp.MustCompile(`--[^\r\n]*`)
+	reCteMutation  = regexp.MustCompile(`(?i)\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b`)
+	reAnalyze      = regexp.MustCompile(`(?i)\bANALYZE\b`)
+	reMutating     = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|MERGE|GRANT|REVOKE|DO|CALL|RENAME)\b`)
+	reInsertSQL    = regexp.MustCompile(`(?i)^\s*INSERT\s+INTO\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
+	reUpdateSQL    = regexp.MustCompile(`(?i)^\s*UPDATE\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
+	reDeleteSQL    = regexp.MustCompile(`(?i)^\s*DELETE\s+FROM\s+([` + "`" + `"'a-zA-Z0-9_.]+)`)
+)
+
+func cleanSQLComments(sql string) string {
+	s := reBlockComment.ReplaceAllString(sql, " ")
+	s = reLineComment.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+func trimIdentifierQuotes(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "`\"'")
+	return s
+}
+
+func parseMutationEvent(rawSQL string) (webhook.EventPayload, bool) {
+	clean := cleanSQLComments(rawSQL)
+	var event, target string
+
+	if m := reInsertSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "INSERT"
+		target = m[1]
+	} else if m := reUpdateSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "UPDATE"
+		target = m[1]
+	} else if m := reDeleteSQL.FindStringSubmatch(clean); len(m) > 1 {
+		event = "DELETE"
+		target = m[1]
+	} else {
+		return webhook.EventPayload{}, false
+	}
+
+	target = strings.TrimSpace(target)
+	var schema, table string
+	if strings.Contains(target, ".") {
+		parts := strings.SplitN(target, ".", 2)
+		schema = trimIdentifierQuotes(parts[0])
+		table = trimIdentifierQuotes(parts[1])
+	} else {
+		table = trimIdentifierQuotes(target)
+	}
+
+	return webhook.EventPayload{
+		ID:        webhook.GenerateID("evt_"),
+		Event:     event,
+		Schema:    schema,
+		Table:     table,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}, true
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
+func (sr *statusRecorder) Write(b []byte) (int, error) {
+	if sr.status == 0 {
+		sr.status = http.StatusOK
+	}
+	return sr.ResponseWriter.Write(b)
+}
+
+func splitStatements(sql string) []string {
+	var stmts []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	inBacktick := false
+
+	chars := []rune(sql)
+	for i := 0; i < len(chars); i++ {
+		ch := chars[i]
+		if ch == '\'' && !inDoubleQuote && !inBacktick {
+			if inSingleQuote && i+1 < len(chars) && chars[i+1] == '\'' {
+				current.WriteRune(ch)
+				current.WriteRune(chars[i+1])
+				i++
+				continue
+			}
+			inSingleQuote = !inSingleQuote
+			current.WriteRune(ch)
+		} else if ch == '"' && !inSingleQuote && !inBacktick {
+			if inDoubleQuote && i+1 < len(chars) && chars[i+1] == '"' {
+				current.WriteRune(ch)
+				current.WriteRune(chars[i+1])
+				i++
+				continue
+			}
+			inDoubleQuote = !inDoubleQuote
+			current.WriteRune(ch)
+		} else if ch == '`' && !inSingleQuote && !inDoubleQuote {
+			inBacktick = !inBacktick
+			current.WriteRune(ch)
+		} else if ch == ';' && !inSingleQuote && !inDoubleQuote && !inBacktick {
+			stmts = append(stmts, current.String())
+			current.Reset()
+		} else {
+			current.WriteRune(ch)
+		}
+	}
+	if current.Len() > 0 {
+		stmts = append(stmts, current.String())
+	}
+	return stmts
+}
+
+func stripOuterParens(s string) string {
+	s = strings.TrimSpace(s)
+	for strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		depth := 0
+		matched := true
+		for i, ch := range s {
+			if ch == '(' {
+				depth++
+			} else if ch == ')' {
+				depth--
+				if depth == 0 && i < len(s)-1 {
+					matched = false
+					break
+				}
+			}
+		}
+		if matched && depth == 0 {
+			s = strings.TrimSpace(s[1 : len(s)-1])
+		} else {
+			break
+		}
+	}
+	return s
+}
+
+// IsNonSelectSQL returns true if SQL statement is non-SELECT (mutation/DDL).
+func IsNonSelectSQL(sql string) bool {
+	cleaned := reBlockComment.ReplaceAllString(sql, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return false
+	}
+
+	stmts := splitStatements(cleaned)
+	for _, stmt := range stmts {
+		stmt = stripOuterParens(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		fields := strings.Fields(stmt)
+		if len(fields) == 0 {
+			continue
+		}
+		firstWord := strings.ToUpper(fields[0])
+
+		switch firstWord {
+		case "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE", "REPLACE", "MERGE", "GRANT", "REVOKE", "DO", "CALL", "RENAME":
+			return true
+		case "WITH":
+			if reCteMutation.MatchString(stmt) {
+				return true
+			}
+		case "EXPLAIN":
+			if reAnalyze.MatchString(stmt) && reMutating.MatchString(stmt) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
 
 type Response struct {
 	Data  interface{} `json:"data"`
@@ -46,29 +239,49 @@ func sendError(w http.ResponseWriter, status int, msg string) {
 }
 
 type Handler struct {
-	mgr *connection.Manager
+	mgr        *connection.Manager
+	webhookMgr *webhook.Manager
 }
 
 func NewHandler(mgr *connection.Manager) *Handler {
-	return &Handler{mgr: mgr}
+	return &Handler{
+		mgr:        mgr,
+		webhookMgr: webhook.NewManager(),
+	}
+}
+
+func (h *Handler) WebhookManager() *webhook.Manager {
+	if h.webhookMgr == nil {
+		h.webhookMgr = webhook.NewManager()
+	}
+	return h.webhookMgr
 }
 
 type TestConnectionRequest struct {
-	DSN string `json:"dsn"`
+	DSN       string                 `json:"dsn"`
+	SSHTunnel *tunnel.SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
 }
 
 // resolveDriver extracts DSN from X-DBLENS-DSN header first,
 // and falls back to resolving global server-seeded connections by connId param.
 func (h *Handler) resolveDriver(r *http.Request) (*connection.PoolEntry, error) {
 	dsn := strings.TrimSpace(r.Header.Get("X-DBLENS-DSN"))
+	var tunnelCfg *tunnel.SSHTunnelConfig
+	if th := strings.TrimSpace(r.Header.Get("X-DBLENS-SSH-TUNNEL")); th != "" {
+		var tc tunnel.SSHTunnelConfig
+		if err := json.Unmarshal([]byte(th), &tc); err == nil && tc.Enabled {
+			tunnelCfg = &tc
+		}
+	}
+
 	if dsn != "" {
-		return h.mgr.GetByDSN(dsn)
+		return h.mgr.GetByDSNWithTunnel(dsn, tunnelCfg)
 	}
 
 	connID := chi.URLParam(r, "connId")
 	if connID != "" {
 		if globalDSN, ok := h.mgr.GetGlobalDSNByID(connID); ok {
-			return h.mgr.GetByDSN(globalDSN)
+			return h.mgr.GetByDSNWithTunnel(globalDSN, tunnelCfg)
 		}
 	}
 
@@ -91,7 +304,7 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dialect, err := h.mgr.TestDSN(req.DSN)
+	dialect, err := h.mgr.TestDSNWithTunnel(req.DSN, req.SSHTunnel)
 	if err != nil {
 		sendJSON(w, http.StatusOK, map[string]interface{}{
 			"success": false,
@@ -288,6 +501,11 @@ func (h *Handler) AlterTablePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AlterTableApply(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	tableName := chi.URLParam(r, "table")
 	schema := r.URL.Query().Get("schema")
 
@@ -441,10 +659,19 @@ func (h *Handler) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) && IsNonSelectSQL(sql) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	res, err := entry.Driver.ExecuteQueryWithParams(r.Context(), sql, req.Params)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if evt, ok := parseMutationEvent(sql); ok {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
 	}
 	sendJSON(w, http.StatusOK, res)
 }
@@ -507,6 +734,11 @@ func (h *Handler) ExplainQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -524,10 +756,32 @@ func (h *Handler) MutateRow(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	connID := chi.URLParam(r, "connId")
+	evt := webhook.EventPayload{
+		ID:        webhook.GenerateID("evt_"),
+		Event:     string(mut.Type),
+		Schema:    mut.Schema,
+		Table:     mut.Table,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	if mut.Type == driver.MutationInsert {
+		evt.NewRecord = mut.Data
+	} else if mut.Type == driver.MutationUpdate {
+		evt.OldRecord = mut.Where
+		evt.NewRecord = mut.Data
+	} else if mut.Type == driver.MutationDelete {
+		evt.OldRecord = mut.Where
+	}
+	go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
 	sendJSON(w, http.StatusOK, res)
 }
 
 func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -559,6 +813,18 @@ func (h *Handler) BatchInsert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	connID := chi.URLParam(r, "connId")
+	for _, row := range req.Rows {
+		evt := webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "INSERT",
+			Schema:    req.Schema,
+			Table:     req.Table,
+			NewRecord: row,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, evt)
 	}
 	sendJSON(w, http.StatusOK, res)
 }
@@ -650,6 +916,13 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	maskParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mask")))
+	isMasking := maskParam == "true" || maskParam == "1"
+	maskStrategy := masker.Strategy(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mask_strategy"))))
+	if maskStrategy == "" {
+		maskStrategy = masker.StrategyPartial
+	}
+
 	rows, err := entry.Driver.QueryTableStream(r.Context(), schema, table)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, err.Error())
@@ -708,7 +981,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			_ = csvWriter.Write(record)
+			rowOut := record
+			if isMasking {
+				rowOut = masker.MaskRecord(cols, record, maskStrategy)
+			}
+			_ = csvWriter.Write(rowOut)
 			count++
 			if count%500 == 0 {
 				csvWriter.Flush()
@@ -743,6 +1020,9 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 			rowMap := make(map[string]interface{}, len(cols))
 			for i, col := range cols {
 				val := colVals[i]
+				if isMasking {
+					val = masker.MaskValue(col, val, maskStrategy)
+				}
 				if b, ok := val.([]byte); ok {
 					rowMap[col] = string(b)
 				} else if t, ok := val.(time.Time); ok {
@@ -812,7 +1092,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 			}
 			valStrs := make([]string, len(cols))
 			for i, val := range colVals {
-				valStrs[i] = formatSQLValue(dialect, val)
+				v := val
+				if isMasking {
+					v = masker.MaskValue(cols[i], val, maskStrategy)
+				}
+				valStrs[i] = formatSQLValue(dialect, v)
 			}
 
 			stmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colsHeader, strings.Join(valStrs, ", "))
@@ -832,6 +1116,11 @@ func (h *Handler) ExportTable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ImportCSV(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -1140,6 +1429,11 @@ func splitSQLStatements(sql string) []string {
 }
 
 func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())
@@ -1194,6 +1488,163 @@ func (h *Handler) ImportSQL(w http.ResponseWriter, r *http.Request) {
 		"statementsExecuted": executedCount,
 		"affectedRows":       totalAffected,
 		"message":            fmt.Sprintf("Successfully executed %d SQL statements", executedCount),
+	})
+}
+
+func sanitizeDumpDbName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	res := strings.Trim(b.String(), "_")
+	if res == "" {
+		return "db"
+	}
+	return res
+}
+
+func (h *Handler) DumpDatabase(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	q := r.URL.Query()
+	schema := strings.TrimSpace(q.Get("schema"))
+	tablesParam := strings.TrimSpace(q.Get("tables"))
+	var tables []string
+	if tablesParam != "" {
+		for _, t := range strings.Split(tablesParam, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				if hasControlChars(t) {
+					sendError(w, http.StatusBadRequest, "invalid table parameter")
+					return
+				}
+				tables = append(tables, t)
+			}
+		}
+	}
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "invalid schema parameter")
+		return
+	}
+
+	includeSchema := true
+	if v := q.Get("includeSchema"); v != "" {
+		includeSchema = strings.EqualFold(v, "true") || v == "1"
+	}
+	includeData := true
+	if v := q.Get("includeData"); v != "" {
+		includeData = strings.EqualFold(v, "true") || v == "1"
+	}
+	useGzip := false
+	if v := q.Get("gzip"); v != "" {
+		useGzip = strings.EqualFold(v, "true") || v == "1"
+	}
+
+	dbName := strings.TrimSpace(q.Get("database"))
+	if dbName == "" {
+		dbName = schema
+	}
+	if dbName == "" {
+		dbName = chi.URLParam(r, "connId")
+	}
+	if dbName == "" {
+		dbName = "db"
+	}
+	cleanDb := sanitizeDumpDbName(dbName)
+	timestamp := time.Now().UTC().Format("20060102-150405")
+
+	var filename, contentType string
+	if useGzip {
+		filename = fmt.Sprintf("dblens-dump-%s-%s.sql.gz", cleanDb, timestamp)
+		contentType = "application/gzip"
+	} else {
+		filename = fmt.Sprintf("dblens-dump-%s-%s.sql", cleanDb, timestamp)
+		contentType = "application/sql"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	opts := dump.DumpOptions{
+		Schema:        schema,
+		Tables:        tables,
+		IncludeSchema: includeSchema,
+		IncludeData:   includeData,
+		UseGzip:       useGzip,
+	}
+
+	if err := dump.GenerateDump(r.Context(), entry.Driver, w, opts); err != nil {
+		return
+	}
+}
+
+func (h *Handler) RestoreDatabase(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20) // 100MB limit
+	var reader io.Reader = r.Body
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			sendError(w, http.StatusBadRequest, "failed to parse multipart form: "+err.Error())
+			return
+		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
+
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			sendError(w, http.StatusBadRequest, "file field is required in multipart form: "+err.Error())
+			return
+		}
+		defer file.Close()
+		reader = file
+	}
+
+	result, err := dump.RestoreDump(r.Context(), entry.Driver, reader)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, "restore failed: "+err.Error())
+		return
+	}
+
+	if result.Errors == nil {
+		result.Errors = []string{}
+	}
+
+	payload := map[string]interface{}{
+		"total":    result.Total,
+		"executed": result.Executed,
+		"errors":   result.Errors,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"total":    result.Total,
+		"executed": result.Executed,
+		"errors":   result.Errors,
+		"data":     payload,
 	})
 }
 
@@ -1419,7 +1870,7 @@ func trimLeadingComments(s string) string {
 }
 
 func (h *Handler) ApplyDiff(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Target connection is read-only")
 		return
 	}
@@ -1526,7 +1977,7 @@ type KillProcessRequest struct {
 }
 
 func (h *Handler) KillProcess(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.Header.Get("X-DBLENS-READONLY"), "true") {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only")
 		return
 	}
@@ -1585,5 +2036,577 @@ func (h *Handler) GetDatabaseHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	sendJSON(w, http.StatusOK, report)
 }
+
+func getRestTarget(r *http.Request) (string, string) {
+	table := chi.URLParam(r, "table")
+	schema := chi.URLParam(r, "schema")
+	if schema == "" {
+		schema = r.URL.Query().Get("schema")
+	}
+	return schema, table
+}
+
+func isTruthy(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "true" || s == "1" || s == "yes"
+}
+
+func (h *Handler) isRestReadOnly(r *http.Request) bool {
+	return isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
+		isTruthy(r.URL.Query().Get("readonly"))
+}
+
+func (h *Handler) RestGet(w http.ResponseWriter, r *http.Request) {
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rest.HandleGet(w, r, entry.Driver, schema, table)
+}
+
+func (h *Handler) RestPost(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandlePost(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "INSERT",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+func (h *Handler) RestPatch(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandlePatch(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "UPDATE",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+func (h *Handler) RestDelete(w http.ResponseWriter, r *http.Request) {
+	if h.isRestReadOnly(r) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Mutation blocked by Safe Mode.")
+		return
+	}
+	schema, table := getRestTarget(r)
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rec := &statusRecorder{ResponseWriter: w}
+	rest.HandleDelete(rec, r, entry.Driver, schema, table)
+	if rec.status >= 200 && rec.status < 300 {
+		connID := chi.URLParam(r, "connId")
+		go h.WebhookManager().DispatchEvent(context.Background(), connID, webhook.EventPayload{
+			ID:        webhook.GenerateID("evt_"),
+			Event:     "DELETE",
+			Schema:    schema,
+			Table:     table,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+type DetectMaskRequest struct {
+	Columns []string          `json:"columns"`
+	Samples map[string]string `json:"samples"`
+}
+
+type ColumnPIIInfo struct {
+	Column  string `json:"column"`
+	PIIType string `json:"pii_type"`
+	IsPII   bool   `json:"is_pii"`
+}
+
+type DetectMaskResponse struct {
+	Detected map[string]string `json:"detected"`
+	Columns  []ColumnPIIInfo   `json:"columns"`
+}
+
+// DetectMaskPII analyzes a list of columns and optional sample values to identify PII.
+func (h *Handler) DetectMaskPII(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req DetectMaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	detected := make(map[string]string)
+	colInfos := make([]ColumnPIIInfo, 0, len(req.Columns))
+
+	for _, col := range req.Columns {
+		var sample string
+		if req.Samples != nil {
+			sample = req.Samples[col]
+		}
+		pii := masker.DetectPIIType(col, sample)
+		if pii != "" {
+			detected[col] = pii
+			colInfos = append(colInfos, ColumnPIIInfo{
+				Column:  col,
+				PIIType: pii,
+				IsPII:   true,
+			})
+		} else {
+			colInfos = append(colInfos, ColumnPIIInfo{
+				Column:  col,
+				PIIType: "",
+				IsPII:   false,
+			})
+		}
+	}
+
+	sendJSON(w, http.StatusOK, DetectMaskResponse{
+		Detected: detected,
+		Columns:  colInfos,
+	})
+}
+
+type PreviewMaskRequest struct {
+	Strategy string                   `json:"strategy"`
+	Columns  []string                 `json:"columns"`
+	Rows     []map[string]interface{} `json:"rows"`
+	Table    string                   `json:"table"`
+	Schema   string                   `json:"schema"`
+	Limit    int                      `json:"limit"`
+}
+
+// PreviewMaskData previews masked data using provided rows or live sample query.
+// ponytail: in-memory preview capped at 100 rows; upgrade to stream preview if multi-MB payloads requested.
+func (h *Handler) PreviewMaskData(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	var req PreviewMaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	strat := masker.Strategy(strings.ToLower(strings.TrimSpace(req.Strategy)))
+	if strat == "" {
+		strat = masker.StrategyPartial
+	}
+
+	// 1. Direct rows preview
+	if len(req.Rows) > 0 {
+		maskedRows := make([]map[string]interface{}, len(req.Rows))
+		for i, row := range req.Rows {
+			mRow := make(map[string]interface{}, len(row))
+			for k, v := range row {
+				mRow[k] = masker.MaskValue(k, v, strat)
+			}
+			maskedRows[i] = mRow
+		}
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"strategy": strat,
+			"rows":     maskedRows,
+		})
+		return
+	}
+
+	// 2. Query table preview
+	if req.Table != "" {
+		entry, err := h.resolveDriver(r)
+		if err != nil {
+			sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		limit := req.Limit
+		if limit <= 0 || limit > 100 {
+			limit = 5
+		}
+
+		res, err := entry.Driver.QueryTableData(r.Context(), types.QueryOptions{
+			Schema: req.Schema,
+			Table:  req.Table,
+			Limit:  limit,
+		})
+		if err != nil {
+			sendError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		maskedRows := make([]map[string]interface{}, len(res.Rows))
+		for i, row := range res.Rows {
+			mRow := make(map[string]interface{}, len(res.Columns))
+			for j, col := range res.Columns {
+				var val interface{}
+				if j < len(row) {
+					val = row[j]
+				}
+				mRow[col] = masker.MaskValue(col, val, strat)
+			}
+			maskedRows[i] = mRow
+		}
+
+		sendJSON(w, http.StatusOK, map[string]interface{}{
+			"strategy": strat,
+			"columns":  res.Columns,
+			"rows":     maskedRows,
+		})
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"strategy": strat,
+		"rows":     []interface{}{},
+	})
+}
+
+// GetPrivileges inspects database roles, table privileges, and available tables.
+func (h *Handler) GetPrivileges(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	schema := strings.TrimSpace(r.URL.Query().Get("schema"))
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "schema parameter contains invalid characters")
+		return
+	}
+	report, err := privilege.InspectPrivileges(r.Context(), entry.Driver, schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, report)
+}
+
+type PreviewPrivilegesRequest struct {
+	Changes []privilege.PrivilegeChange `json:"changes"`
+	Roles   []privilege.RoleInfo        `json:"roles"`
+}
+
+// PreviewPrivileges generates dry-run DDL and security warnings for staged privilege adjustments.
+func (h *Handler) PreviewPrivileges(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req PreviewPrivilegesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	plan, err := privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, plan)
+}
+
+type ApplyPrivilegesRequest struct {
+	Plan    *privilege.PrivilegePlan    `json:"plan,omitempty"`
+	Changes []privilege.PrivilegeChange `json:"changes,omitempty"`
+	Roles   []privilege.RoleInfo        `json:"roles,omitempty"`
+}
+
+// ApplyPrivileges applies the generated privilege plan statements if not in read-only mode.
+func (h *Handler) ApplyPrivileges(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+		sendError(w, http.StatusForbidden, "Connection is read-only. Privilege modification blocked by Safe Mode.")
+		return
+	}
+
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req ApplyPrivilegesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if len(req.Changes) == 0 {
+		sendError(w, http.StatusBadRequest, "changes are required")
+		return
+	}
+
+	plan, err := privilege.GeneratePlan(entry.Driver.Dialect(), req.Changes, req.Roles)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := privilege.ApplyPlan(r.Context(), entry.Driver, plan); err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]interface{}{
+		"success":            true,
+		"executedStatements": len(plan.Statements),
+	})
+}
+
+func extractLLMConfig(r *http.Request, bodyCfg assistant.LLMConfig) assistant.LLMConfig {
+	cfg := bodyCfg
+	if cfg.Provider == "" {
+		cfg.Provider = r.Header.Get("X-AI-Provider")
+	}
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = r.Header.Get("X-AI-Endpoint")
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = r.Header.Get("X-AI-Key")
+		if cfg.APIKey == "" {
+			cfg.APIKey = r.Header.Get("X-AI-ApiKey")
+		}
+	}
+	if cfg.Model == "" {
+		cfg.Model = r.Header.Get("X-AI-Model")
+	}
+	if cfg.Provider == "" {
+		cfg.Provider = "openai"
+	}
+	return cfg
+}
+
+// GetAssistantSchema returns compact table and DDL metadata for the assistant.
+func (h *Handler) GetAssistantSchema(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	schema := r.URL.Query().Get("schema")
+	if hasControlChars(schema) {
+		sendError(w, http.StatusBadRequest, "schema parameter contains invalid characters")
+		return
+	}
+	schemaCtx, err := assistant.ExtractCompactSchema(r.Context(), entry.Driver, schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, schemaCtx)
+}
+
+type AssistantPromptRequest struct {
+	Op     string `json:"op"`
+	Prompt string `json:"prompt"`
+	Query  string `json:"query"`
+	Error  string `json:"error"`
+	Schema string `json:"schema"`
+}
+
+// BuildAssistantPrompt generates offline prompt formatted with schema context for copy-paste.
+func (h *Handler) BuildAssistantPrompt(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req AssistantPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	schemaCtx, err := assistant.ExtractCompactSchema(r.Context(), entry.Driver, req.Schema)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	op := req.Op
+	if op == "" {
+		if req.Error != "" {
+			op = "fix"
+		} else if req.Query != "" {
+			op = "explain"
+		} else {
+			op = "generate"
+		}
+	}
+
+	input := req.Prompt
+	if op == "fix" || op == "explain" {
+		if req.Query != "" {
+			input = req.Query
+		}
+	}
+
+	prompt := assistant.BuildPrompt(op, entry.Driver.Dialect(), schemaCtx, input, req.Error)
+	sendJSON(w, http.StatusOK, map[string]string{
+		"prompt": prompt,
+	})
+}
+
+type AssistantGenerateRequest struct {
+	Prompt string              `json:"prompt"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// GenerateSQL converts natural language prompt into SQL.
+func (h *Handler) GenerateSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req AssistantGenerateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Prompt) == "" {
+		sendError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.GenerateSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Prompt)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"sql": resp.Result,
+		"raw": resp.Raw,
+	})
+}
+
+type AssistantFixRequest struct {
+	Query  string              `json:"query"`
+	Error  string              `json:"error"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// FixSQL corrects failing SQL from error message.
+func (h *Handler) FixSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req AssistantFixRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		sendError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.FixSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Query, req.Error)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"sql": resp.Result,
+		"raw": resp.Raw,
+	})
+}
+
+type AssistantExplainRequest struct {
+	Query  string              `json:"query"`
+	Schema string              `json:"schema"`
+	Config assistant.LLMConfig `json:"config"`
+}
+
+// ExplainSQL explains SQL query in bullet points.
+func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
+	entry, err := h.resolveDriver(r)
+	if err != nil {
+		sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req AssistantExplainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(req.Query) == "" {
+		sendError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+
+	cfg := extractLLMConfig(r, req.Config)
+	resp, err := assistant.ExplainSQL(r.Context(), entry.Driver, cfg, req.Schema, req.Query)
+	if err != nil {
+		sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sendJSON(w, http.StatusOK, map[string]string{
+		"explanation": resp.Result,
+		"raw":         resp.Raw,
+	})
+}
+
+
+
+
 
 
