@@ -20,6 +20,7 @@ import { WebhookModal } from './features/webhook/WebhookModal'
 import { FederationModal } from './features/federation/FederationModal'
 import { MigrationHubModal } from './features/migration/MigrationHubModal'
 import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
+import { CronStudio } from './features/cron/CronStudio'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -64,6 +65,8 @@ export function App() {
   const [editingConfig, setEditingConfig] = useState<ConnectionConfig | null>(null)
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
+  const isCronStudioOpen = useAppStore((s) => s.isCronStudioOpen)
+  const setIsCronStudioOpen = useAppStore((s) => s.setIsCronStudioOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -350,6 +353,10 @@ export function App() {
       <FederationModal />
       <MigrationHubModal />
       <RoutineStudioModal />
+      <CronStudio
+        isOpen={isCronStudioOpen}
+        onClose={() => setIsCronStudioOpen(false)}
+      />
     </QueryClientProvider>
   )
 }

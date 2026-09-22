@@ -2168,6 +2168,53 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  // ── Feature-30: Cron Jobs ──
+  async listCronJobs(): Promise<CronJob[]> {
+    const r = await fetch('/api/cron/jobs')
+    if (!r.ok) throw new Error(`Failed to fetch cron jobs (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async createCronJob(job: Partial<CronJob>): Promise<CronJob> {
+    const r = await fetch('/api/cron/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(job),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create cron job (${r.status})`)
+    return json.data ?? json
+  },
+
+  async updateCronJob(id: string, job: Partial<CronJob>): Promise<CronJob> {
+    const r = await fetch(`/api/cron/jobs/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(job),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update cron job (${r.status})`)
+    return json.data ?? json
+  },
+
+  async deleteCronJob(id: string): Promise<void> {
+    const r = await fetch(`/api/cron/jobs/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete cron job (${r.status})`)
+  },
+
+  async runCronJobNow(id: string): Promise<void> {
+    const r = await fetch(`/api/cron/jobs/${id}/run`, { method: 'POST' })
+    if (!r.ok) throw new Error(`Failed to trigger cron job (${r.status})`)
+  },
+
+  async getCronJobHistory(id: string): Promise<CronJobRun[]> {
+    const r = await fetch(`/api/cron/jobs/${id}/history`)
+    if (!r.ok) throw new Error(`Failed to fetch cron history (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2495,5 +2542,36 @@ export type {
   ToggleTriggerRequest,
   RefreshViewRequest,
 }
+
+// ── Feature-30: Cron Job types ──
+export interface CronAlertRule {
+  condition: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | ''
+  threshold: number
+  webhook_url: string
+  message: string
+}
+
+export interface CronJobRun {
+  run_at: string
+  duration_ms: number
+  status: 'ok' | 'error' | 'alert'
+  output: string
+  error?: string
+}
+
+export interface CronJob {
+  id: string
+  name: string
+  conn_id: string
+  sql: string
+  interval_sec: number
+  enabled: boolean
+  alert_rule: CronAlertRule
+  last_run: string
+  last_status: string
+  last_error: string
+  run_history: CronJobRun[]
+}
+
 
 

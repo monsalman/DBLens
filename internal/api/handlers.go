@@ -15,6 +15,7 @@ import (
 	"github.com/dblens/dblens/internal/alter"
 	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/cron"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
@@ -239,14 +240,38 @@ func sendError(w http.ResponseWriter, status int, msg string) {
 }
 
 type Handler struct {
-	mgr        *connection.Manager
-	webhookMgr *webhook.Manager
+	mgr           *connection.Manager
+	webhookMgr    *webhook.Manager
+	cronScheduler *cron.Scheduler
 }
 
 func NewHandler(mgr *connection.Manager) *Handler {
+	exec := func(ctx context.Context, connID, _ string, sql string) (string, error) {
+		var entry *connection.PoolEntry
+		var err error
+		if dsn, ok := mgr.GetGlobalDSNByID(connID); ok {
+			entry, err = mgr.GetByDSN(dsn)
+		} else {
+			return "", fmt.Errorf("connection not found: %s", connID)
+		}
+		if err != nil {
+			return "", err
+		}
+		res, err := entry.Driver.ExecuteQuery(ctx, sql)
+		if err != nil {
+			return "", err
+		}
+		if res != nil && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+			return fmt.Sprintf("%v", res.Rows[0][0]), nil
+		}
+		return "", nil
+	}
+	sched := cron.NewScheduler(exec)
+	sched.Start()
 	return &Handler{
-		mgr:        mgr,
-		webhookMgr: webhook.NewManager(),
+		mgr:           mgr,
+		webhookMgr:    webhook.NewManager(),
+		cronScheduler: sched,
 	}
 }
 

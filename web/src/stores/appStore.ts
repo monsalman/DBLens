@@ -105,6 +105,8 @@ interface AppState {
   routineStudioInitialTab?: 'routines' | 'triggers' | 'views'
   openRoutineStudio: (tab?: 'routines' | 'triggers' | 'views') => void
   closeRoutineStudio: () => void
+  isCronStudioOpen: boolean
+  setIsCronStudioOpen: (open: boolean) => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -353,6 +355,8 @@ export const useAppStore = create<AppState>()(
           routineStudioInitialTab: tab,
         }),
       closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
+      isCronStudioOpen: false,
+      setIsCronStudioOpen: (isCronStudioOpen) => set({ isCronStudioOpen }),
 
       peekDrawer: {
         isOpen: false,

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield, GitBranch, Zap } from 'lucide-react'
+import { Table2, Shield, GitBranch, Zap, Clock } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 import { useAppStore } from '../../stores/appStore'
@@ -182,6 +182,20 @@ export const Sidebar: React.FC<Props> = ({
           </div>
           <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 shrink-0">
             CI/CD
+          </span>
+        </button>
+
+        <button
+          onClick={() => useAppStore.getState().setIsCronStudioOpen(true)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-amber-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"
+          title="Open Cron Jobs & Heartbeat Alerts"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            <span className="truncate">Cron & Alerts</span>
+          </div>
+          <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 shrink-0">
+            ⏱
           </span>
         </button>
       </div>

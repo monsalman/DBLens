@@ -139,6 +139,14 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/views", h.GetViews)
 	api.Post("/connections/{connId}/views/refresh", h.RefreshView)
 
+	// ── Feature-30: Scheduled SQL Cron Jobs & Database Heartbeat Alerts ──
+	api.Get("/cron/jobs", h.ListCronJobs)
+	api.Post("/cron/jobs", h.CreateCronJob)
+	api.Put("/cron/jobs/{id}", h.UpdateCronJob)
+	api.Delete("/cron/jobs/{id}", h.DeleteCronJob)
+	api.Post("/cron/jobs/{id}/run", h.RunCronJobNow)
+	api.Get("/cron/jobs/{id}/history", h.GetCronJobHistory)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
