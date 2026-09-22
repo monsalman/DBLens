@@ -249,14 +249,21 @@ type Handler struct {
 	auditLogPath  string
 }
 
-func NewHandler(mgr *connection.Manager) *Handler {
-	exec := func(ctx context.Context, connID, _ string, sql string) (string, error) {
+func NewHandler(mgr *connection.Manager) (*Handler, error) {
+	exec := func(ctx context.Context, connID, dsn, sql string) (string, error) {
 		var entry *connection.PoolEntry
 		var err error
-		if dsn, ok := mgr.GetGlobalDSNByID(connID); ok {
-			entry, err = mgr.GetByDSN(dsn)
-		} else {
-			return "", fmt.Errorf("connection not found: %s", connID)
+		switch {
+		case strings.TrimSpace(dsn) != "":
+			// UI-created connections carry browser-local local_* ids the server
+			// cannot resolve, so the real DSN travels with the job.
+			entry, err = mgr.GetByDSN(strings.TrimSpace(dsn))
+		default:
+			if globalDSN, ok := mgr.GetGlobalDSNByID(connID); ok {
+				entry, err = mgr.GetByDSN(globalDSN)
+			} else {
+				return "", fmt.Errorf("connection not found: %s (no DSN on the job and no server-side global connection with that id)", connID)
+			}
 		}
 		if err != nil {
 			return "", err
@@ -274,11 +281,22 @@ func NewHandler(mgr *connection.Manager) *Handler {
 	sched.Start()
 
 	// Set up audit logger at ~/.dblens/audit.log
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = os.TempDir()
+	}
 	auditDir := homeDir + "/.dblens"
-	_ = os.MkdirAll(auditDir, 0700)
+	if err := os.MkdirAll(auditDir, 0700); err != nil {
+		sched.Stop()
+		return nil, fmt.Errorf("failed to create audit directory %s: %w", auditDir, err)
+	}
 	auditPath := auditDir + "/audit.log"
-	auditLog, _ := audit.NewAuditLogger(auditPath)
+	auditLog, err := audit.NewAuditLogger(auditPath)
+	if err != nil {
+		// Do not silently lose the compliance trail: fail loudly.
+		sched.Stop()
+		return nil, fmt.Errorf("failed to open audit log %s: %w", auditPath, err)
+	}
 
 	return &Handler{
 		mgr:           mgr,
@@ -286,8 +304,26 @@ func NewHandler(mgr *connection.Manager) *Handler {
 		cronScheduler: sched,
 		auditLogger:   auditLog,
 		auditLogPath:  auditPath,
+	}, nil
+}
+
+// Shutdown stops background workers and flushes the audit log. Safe to call
+// more than once; called from main's graceful-shutdown path.
+func (h *Handler) Shutdown() {
+	if h == nil {
+		return
+	}
+	if h.cronScheduler != nil {
+		h.cronScheduler.Stop()
+	}
+	if h.auditLogger != nil {
+		h.auditLogger.Close()
 	}
 }
+
+// Close releases the audit log handle. Alias of Shutdown for callers that use
+// io.Closer semantics.
+func (h *Handler) Close() { h.Shutdown() }
 
 func (h *Handler) WebhookManager() *webhook.Manager {
 	if h.webhookMgr == nil {
@@ -297,7 +333,7 @@ func (h *Handler) WebhookManager() *webhook.Manager {
 }
 
 type TestConnectionRequest struct {
-	DSN       string                 `json:"dsn"`
+	DSN       string                  `json:"dsn"`
 	SSHTunnel *tunnel.SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
 }
 
@@ -2643,9 +2679,3 @@ func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
 		"raw":         resp.Raw,
 	})
 }
-
-
-
-
-
-

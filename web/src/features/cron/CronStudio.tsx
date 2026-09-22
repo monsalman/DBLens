@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react'
-import { Clock, Plus, RefreshCw, History } from 'lucide-react'
+import { Clock, Plus, RefreshCw } from 'lucide-react'
 import { api, type CronJob, type CronJobRun } from '../../lib/api'
 import { JobCard } from './JobCard'
 import { JobForm } from './JobForm'
@@ -144,16 +144,9 @@ export const CronStudio: React.FC<Props> = ({ isOpen, onClose }) => {
                   onRun={handleRun}
                   onEdit={(j) => setEditJob(j)}
                   onDelete={handleDelete}
+                  onHistory={handleShowHistory}
                   running={runningIds.has(job.id)}
                 />
-                <button
-                  onClick={() => handleShowHistory(job)}
-                  title="View history"
-                  className="absolute bottom-3 right-3 p-1 rounded text-[var(--muted)] hover:text-indigo-400 hover:bg-indigo-500/10 transition-colors"
-                  style={{ display: 'none' }} // surfaced via JobCard context; kept for accessibility
-                >
-                  <History className="w-3.5 h-3.5" />
-                </button>
               </div>
             ))}
           </div>

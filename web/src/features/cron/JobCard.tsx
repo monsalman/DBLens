@@ -1,5 +1,5 @@
 import React from 'react'
-import { Clock, Play, Pencil, Trash2, CheckCircle2, AlertTriangle, XCircle, Loader2 } from 'lucide-react'
+import { Clock, Play, Pencil, Trash2, CheckCircle2, AlertTriangle, XCircle, Loader2, History } from 'lucide-react'
 import type { CronJob } from '../../lib/api'
 
 interface Props {
@@ -7,6 +7,7 @@ interface Props {
   onRun: (id: string) => void
   onEdit: (job: CronJob) => void
   onDelete: (id: string) => void
+  onHistory?: (job: CronJob) => void
   running?: boolean
 }
 
@@ -30,7 +31,7 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="text-[11px] text-[var(--muted)]">{status}</span>
 }
 
-export const JobCard: React.FC<Props> = ({ job, onRun, onEdit, onDelete, running }) => {
+export const JobCard: React.FC<Props> = ({ job, onRun, onEdit, onDelete, onHistory, running }) => {
   const interval = job.interval_sec
   const schedLabel = interval > 0
     ? interval >= 3600 ? `every ${Math.round(interval / 3600)}h`
@@ -61,6 +62,15 @@ export const JobCard: React.FC<Props> = ({ job, onRun, onEdit, onDelete, running
           >
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
           </button>
+          {onHistory && (
+            <button
+              onClick={() => onHistory(job)}
+              title="View history"
+              className="p-1.5 rounded hover:bg-indigo-500/10 text-[var(--muted)] hover:text-indigo-400 transition-colors"
+            >
+              <History className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={() => onEdit(job)}
             title="Edit"

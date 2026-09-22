@@ -355,4 +355,3 @@ func TestParseSQLiteThreeLevelHierarchy(t *testing.T) {
 		t.Errorf("expected Seq Scan at level 3, got %s", level2.Children[0].NodeType)
 	}
 }
-

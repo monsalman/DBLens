@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { X, Circle, Trash2, Radio } from 'lucide-react'
+import { useAppStore } from '../../stores/appStore'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -31,9 +32,10 @@ interface FeedConfig {
 const BASE_URL = '/api'
 const MAX_EVENTS = 200
 
-function useLiveFeed(config: FeedConfig | null, intervalSec: number, active: boolean) {
+function useLiveFeed(config: FeedConfig | null, intervalSec: number, active: boolean, dsn: string) {
   const [events, setEvents] = useState<ChangeEvent[]>([])
   const [connected, setConnected] = useState(false)
+  const [feedError, setFeedError] = useState('')
   const esRef = useRef<EventSource | null>(null)
 
   const stop = useCallback(() => {
@@ -48,12 +50,17 @@ function useLiveFeed(config: FeedConfig | null, intervalSec: number, active: boo
       return
     }
     stop() // close previous if any
+    setFeedError('')
 
     const params = new URLSearchParams({
       schema: config.schema,
       table: config.table,
       interval: String(intervalSec),
     })
+    // EventSource cannot set request headers, so the DSN travels as a query
+    // param. Without it the server only knows browser-local (local_*) IDs and
+    // can never resolve the connection.
+    if (dsn) params.set('dsn', dsn)
     const url = `${BASE_URL}/connections/${config.connId}/live-feed?${params}`
     const es = new EventSource(url)
     esRef.current = es
@@ -63,6 +70,11 @@ function useLiveFeed(config: FeedConfig | null, intervalSec: number, active: boo
         const data = JSON.parse(e.data)
         if ((data as ConnectedEvent).type === 'connected') {
           setConnected(true)
+          return
+        }
+        if (data.type === 'error') {
+          setFeedError(data.message || 'Live feed stopped')
+          setConnected(false)
           return
         }
         const ev = data as ChangeEvent
@@ -80,11 +92,11 @@ function useLiveFeed(config: FeedConfig | null, intervalSec: number, active: boo
     }
 
     return stop
-  }, [active, config?.connId, config?.schema, config?.table, intervalSec, stop])
+  }, [active, config?.connId, config?.schema, config?.table, intervalSec, dsn, stop])
 
   const clearLog = useCallback(() => setEvents([]), [])
 
-  return { events, connected, clearLog }
+  return { events, connected, feedError, clearLog }
 }
 
 // ── Delta counter (last 60s) ────────────────────────────────────────────────
@@ -196,8 +208,9 @@ interface Props {
 export function LiveFeedDrawer({ isOpen, onClose, connId, schema, table }: Props) {
   const [active, setActive] = useState(false)
   const [intervalSec, setIntervalSec] = useState(2)
+  const dsn = useAppStore((s) => s.connections.find((c) => c.id === connId)?.dsn ?? '')
   const config: FeedConfig | null = connId && table ? { connId, schema, table } : null
-  const { events, connected, clearLog } = useLiveFeed(config, intervalSec, active)
+  const { events, connected, feedError, clearLog } = useLiveFeed(config, intervalSec, active, dsn)
   const delta = useDelta(events)
 
   // Stop feed when drawer closes.
@@ -218,8 +231,8 @@ export function LiveFeedDrawer({ isOpen, onClose, connId, schema, table }: Props
           </span>
           {/* Status dot */}
           <span
-            className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-[var(--muted)]'}`}
-            title={connected ? 'Connected' : 'Stopped'}
+            className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400 animate-pulse' : feedError ? 'bg-red-500' : 'bg-[var(--muted)]'}`}
+            title={connected ? 'Connected' : feedError ? 'Error' : 'Stopped'}
           />
         </div>
         <button onClick={onClose} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]">
@@ -265,10 +278,17 @@ export function LiveFeedDrawer({ isOpen, onClose, connId, schema, table }: Props
 
       {/* Event log */}
       <div className="flex-1 overflow-auto">
+        {feedError && (
+          <div className="mx-3 mt-3 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[11px] font-mono">
+            ⚠ {feedError}
+          </div>
+        )}
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] gap-2">
             <Radio className="w-8 h-8 opacity-20" />
-            <p className="text-xs font-mono">{active ? 'Watching for changes…' : 'Start feed to watch changes'}</p>
+            <p className="text-xs font-mono">
+              {feedError ? 'Feed stopped with an error' : active ? 'Watching for changes…' : 'Start feed to watch changes'}
+            </p>
           </div>
         ) : (
           <table className="w-full text-left border-collapse">

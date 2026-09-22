@@ -412,38 +412,38 @@ func TestStartForwarderAndDataTransfer(t *testing.T) {
 
 func TestExtractTargetAndRewriteDSN(t *testing.T) {
 	tests := []struct {
-		dsn          string
-		wantHost     string
-		wantPort     int
-		localPort    int
+		dsn           string
+		wantHost      string
+		wantPort      int
+		localPort     int
 		wantRewritten string
 	}{
 		{
-			dsn:          "postgres://user:pass@internal-db.vpc:5432/mydb?sslmode=disable",
-			wantHost:     "internal-db.vpc",
-			wantPort:     5432,
-			localPort:    45678,
+			dsn:           "postgres://user:pass@internal-db.vpc:5432/mydb?sslmode=disable",
+			wantHost:      "internal-db.vpc",
+			wantPort:      5432,
+			localPort:     45678,
 			wantRewritten: "postgres://user:pass@127.0.0.1:45678/mydb?sslmode=disable",
 		},
 		{
-			dsn:          "postgresql://user:pass@db.private/company",
-			wantHost:     "db.private",
-			wantPort:     5432,
-			localPort:    45678,
+			dsn:           "postgresql://user:pass@db.private/company",
+			wantHost:      "db.private",
+			wantPort:      5432,
+			localPort:     45678,
 			wantRewritten: "postgresql://user:pass@127.0.0.1:45678/company",
 		},
 		{
-			dsn:          "root:secret@tcp(mysql-prod.internal:3306)/appdb",
-			wantHost:     "mysql-prod.internal",
-			wantPort:     3306,
-			localPort:    45678,
+			dsn:           "root:secret@tcp(mysql-prod.internal:3306)/appdb",
+			wantHost:      "mysql-prod.internal",
+			wantPort:      3306,
+			localPort:     45678,
 			wantRewritten: "root:secret@tcp(127.0.0.1:45678)/appdb",
 		},
 		{
-			dsn:          "mysql://root:secret@tcp(mysql-prod.internal:3306)/appdb",
-			wantHost:     "mysql-prod.internal",
-			wantPort:     3306,
-			localPort:    45678,
+			dsn:           "mysql://root:secret@tcp(mysql-prod.internal:3306)/appdb",
+			wantHost:      "mysql-prod.internal",
+			wantPort:      3306,
+			localPort:     45678,
 			wantRewritten: "mysql://root:secret@tcp(127.0.0.1:45678)/appdb",
 		},
 	}

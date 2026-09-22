@@ -7,13 +7,33 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/dblens/dblens/internal/webhook"
 )
+
+// alertHTTPClient is the webhook dispatch client: the transport validates every
+// resolved IP at dial time (blocking cloud metadata, link-local and loopback
+// targets) and redirects are never followed, so a responding endpoint cannot
+// bounce the request to an internal address.
+var alertHTTPClient = &http.Client{
+	Timeout:   15 * time.Second,
+	Transport: webhook.NewSafeHTTPTransport(),
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // dispatch sends an HTTP POST alert to the configured webhook URL.
 func dispatch(ctx context.Context, job CronJob, output string) error {
 	url := job.AlertRule.WebhookURL
 	if url == "" {
 		return nil
+	}
+
+	// Defense in depth: never dispatch to a target that fails SSRF validation,
+	// even if a job predating the create-time check is still in memory.
+	if err := webhook.ValidateWebhookURL(url); err != nil {
+		return err
 	}
 
 	msg := job.AlertRule.Message
@@ -58,10 +78,13 @@ func dispatch(ctx context.Context, job CronJob, output string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "DBLens-Cron/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := alertHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("webhook target returned HTTP %d", resp.StatusCode)
+	}
 	return nil
 }

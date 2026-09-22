@@ -86,7 +86,11 @@ func startAPITestSSHServer(t *testing.T, expectedPass string) (int, func()) {
 
 func TestTestTunnelHandler(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	sshPort, cleanup := startAPITestSSHServer(t, "topsecret")

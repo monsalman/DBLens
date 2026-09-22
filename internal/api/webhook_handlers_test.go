@@ -40,7 +40,11 @@ func TestWebhookEndpoints(t *testing.T) {
 		t.Fatalf("failed to setup sqlite: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// Mock target server for receiving webhooks

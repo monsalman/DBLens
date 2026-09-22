@@ -68,6 +68,29 @@ func (h *Handler) VerifyAuditChain(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sanitizeCSVCell neutralizes spreadsheet formula injection: a cell beginning
+// with = + - @ (or a tab/CR that some spreadsheets strip) is treated as a
+// formula by Excel/Sheets, so it is prefixed with an apostrophe and quoted.
+func sanitizeCSVCell(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + v
+	}
+	return v
+}
+
+// sanitizeCSVRow applies sanitizeCSVCell to every cell.
+func sanitizeCSVRow(row []string) []string {
+	out := make([]string, len(row))
+	for i, c := range row {
+		out[i] = sanitizeCSVCell(c)
+	}
+	return out
+}
+
 // ExportAuditCSV streams audit log as CSV with same filters as ListAuditLog.
 func (h *Handler) ExportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -96,12 +119,13 @@ func (h *Handler) ExportAuditCSV(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"id", "timestamp", "actor_ip", "user_agent", "conn_id", "db_name", "schema", "query_type", "query_text", "rows_affected", "duration_ms", "error", "hash"})
+	_ = cw.Write([]string{"id", "timestamp", "actor_ip", "forwarded_for", "user_agent", "conn_id", "db_name", "schema", "query_type", "query_text", "rows_affected", "duration_ms", "error", "hash"})
 	for _, e := range entries {
-		_ = cw.Write([]string{
+		_ = cw.Write(sanitizeCSVRow([]string{
 			e.ID,
 			e.Timestamp.Format(time.RFC3339),
 			e.ActorIP,
+			e.ForwardedFor,
 			e.UserAgent,
 			e.ConnID,
 			e.DBName,
@@ -112,7 +136,7 @@ func (h *Handler) ExportAuditCSV(w http.ResponseWriter, r *http.Request) {
 			strconv.FormatInt(e.DurationMs, 10),
 			e.Error,
 			e.Hash,
-		})
+		}))
 	}
 	cw.Flush()
 }

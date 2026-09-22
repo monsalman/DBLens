@@ -2602,6 +2602,7 @@ export interface CronJob {
   interval_sec: number
   enabled: boolean
   alert_rule: CronAlertRule
+  dsn?: string
   last_run: string
   last_status: string
   last_error: string

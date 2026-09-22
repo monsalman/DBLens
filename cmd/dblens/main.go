@@ -42,7 +42,10 @@ func main() {
 		distFS = sub
 	}
 	mgr := connection.NewManager(*dataDir)
-	handler := api.NewHandler(mgr)
+	handler, err := api.NewHandler(mgr)
+	if err != nil {
+		log.Fatalf("Failed to initialize handler: %v\n", err)
+	}
 	router := api.SetupRouter(handler, api.RouterConfig{
 		AuthPassword: authPass,
 		StaticDir:    *staticDir,
@@ -77,6 +80,10 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		log.Printf("Server shutdown error: %v\n", err)
 	}
+
+	// Stop the cron scheduler ticker and flush the audit log before exit;
+	// otherwise the audit chain loses buffered entries on every restart.
+	handler.Shutdown()
 
 	log.Println("DBLens exited cleanly")
 }

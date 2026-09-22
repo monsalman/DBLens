@@ -946,7 +946,3 @@ func (s *SQLiteDriver) InspectHealth(ctx context.Context) (*types.HealthReport, 
 
 	return report, nil
 }
-
-
-
-

@@ -44,6 +44,9 @@ export const JobForm: React.FC<Props> = ({ job, onClose, onSave }) => {
         ...(job ? { id: job.id } : {}),
         name: name.trim(),
         conn_id: connId,
+        // The server cannot resolve browser-local (local_*) connection IDs,
+        // so pass the real DSN for the job to execute against.
+        dsn: connections.find((c) => c.id === connId)?.dsn ?? job?.dsn ?? '',
         sql: sql.trim(),
         interval_sec: parseInt(intervalSec) || 0,
         enabled,

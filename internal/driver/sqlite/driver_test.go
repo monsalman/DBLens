@@ -167,4 +167,3 @@ func TestSQLiteDriverSqlite3Prefix(t *testing.T) {
 		t.Fatalf("failed to ping db initialized with sqlite3:// prefix: %v", err)
 	}
 }
-

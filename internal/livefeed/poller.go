@@ -3,9 +3,14 @@ package livefeed
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dblens/dblens/internal/diff"
 )
+
+const defaultMaxFailures = 3
 
 // ExecFunc runs a SQL query for a given connection and returns rows as maps.
 type ExecFunc func(connID, sql string, args []interface{}) ([]map[string]interface{}, error)
@@ -29,6 +34,9 @@ func NewPoller(cfg FeedConfig, execFunc ExecFunc) *Poller {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
+	if cfg.MaxFailures <= 0 {
+		cfg.MaxFailures = defaultMaxFailures
+	}
 	return &Poller{cfg: cfg, execFunc: execFunc}
 }
 
@@ -41,7 +49,15 @@ func (p *Poller) Start(ctx context.Context, events chan<- ChangeEvent) error {
 	return nil
 }
 
-// Stop cancels the poll loop.
+// StartWithErrors is Start plus a channel that receives a terminal error event
+// when the loop gives up after MaxFailures consecutive fetch failures.
+func (p *Poller) StartWithErrors(ctx context.Context, events chan<- ChangeEvent, errs chan<- ErrorEvent) error {
+	ctx, p.cancel = context.WithCancel(ctx)
+	go p.loopWithErrors(ctx, events, errs)
+	return nil
+}
+
+// Stop cancels the poll loop. Safe to call twice.
 func (p *Poller) Stop() {
 	if p.cancel != nil {
 		p.cancel()
@@ -50,14 +66,22 @@ func (p *Poller) Stop() {
 
 // loop runs the differential poll until ctx is done.
 func (p *Poller) loop(ctx context.Context, events chan<- ChangeEvent) {
+	p.loopWithErrors(ctx, events, nil)
+}
+
+// loopWithErrors runs the differential poll until ctx is done or the fetch fails
+// MaxFailures times in a row. A silent `continue` on every failure would make a
+// permanently broken feed look identical to a healthy idle one.
+func (p *Poller) loopWithErrors(ctx context.Context, events chan<- ChangeEvent, errs chan<- ErrorEvent) {
 	ticker := time.NewTicker(p.cfg.PollInterval)
 	defer ticker.Stop()
 
 	// snapshot: pk-string → json-encoded row
 	snapshot := map[string]string{}
-	// pkCols: detected pk column names
+	// pkCols: detected pk columns
 	var pkCols []string
 	first := true
+	consecutiveFailures := 0
 
 	for {
 		select {
@@ -66,8 +90,19 @@ func (p *Poller) loop(ctx context.Context, events chan<- ChangeEvent) {
 		case <-ticker.C:
 			rows, err := p.fetchRows()
 			if err != nil {
+				consecutiveFailures++
+				if consecutiveFailures >= p.cfg.MaxFailures {
+					sendErrorEvent(ctx, errs, ErrorEvent{
+						Type:      "error",
+						Message:   fmt.Sprintf("live feed stopped after %d consecutive failures: %v", consecutiveFailures, err),
+						Failures:  consecutiveFailures,
+						Timestamp: time.Now().UTC().Format(time.RFC3339),
+					})
+					return
+				}
 				continue // transient error; try next tick
 			}
+			consecutiveFailures = 0
 
 			if first && len(rows) > 0 {
 				pkCols = detectPKCols(rows[0])
@@ -136,15 +171,42 @@ func (p *Poller) loop(ctx context.Context, events chan<- ChangeEvent) {
 	}
 }
 
-// fetchRows runs SELECT ... LIMIT 200 ORDER BY pk col.
+// fetchRows builds and runs `SELECT * FROM <table> LIMIT 200`.
+// Identifiers are quoted with the dialect-correct quoting helper rather than a
+// hardcoded double quote (MySQL needs backticks).
 func (p *Poller) fetchRows() ([]map[string]interface{}, error) {
+	if p.cfg.Table == "" {
+		return nil, fmt.Errorf("live feed: table name is required")
+	}
+	for _, ident := range []string{p.cfg.Schema, p.cfg.Table} {
+		if strings.ContainsRune(ident, '\x00') {
+			return nil, fmt.Errorf("live feed: identifier contains a NUL byte: %q", ident)
+		}
+	}
+
+	dialect := p.cfg.Dialect
+	if dialect == "" {
+		dialect = "postgres"
+	}
 	var q string
 	if p.cfg.Schema != "" {
-		q = `SELECT * FROM "` + p.cfg.Schema + `"."` + p.cfg.Table + `" LIMIT 200`
+		q = "SELECT * FROM " + diff.QuoteIdent(p.cfg.Schema, dialect) + "." + diff.QuoteIdent(p.cfg.Table, dialect) + " LIMIT 200"
 	} else {
-		q = `SELECT * FROM "` + p.cfg.Table + `" LIMIT 200`
+		q = "SELECT * FROM " + diff.QuoteIdent(p.cfg.Table, dialect) + " LIMIT 200"
 	}
 	return p.execFunc(p.cfg.ConnID, q, nil)
+}
+
+// sendErrorEvent delivers a terminal error event without blocking forever when
+// the consumer is gone.
+func sendErrorEvent(ctx context.Context, errs chan<- ErrorEvent, ev ErrorEvent) {
+	if errs == nil {
+		return
+	}
+	select {
+	case errs <- ev:
+	case <-ctx.Done():
+	}
 }
 
 // detectPKCols finds the best PK column(s) from a sample row.

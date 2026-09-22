@@ -12,8 +12,8 @@ import (
 
 var (
 	validDataTypeRegex = regexp.MustCompile(`^[A-Za-z0-9_(), ]+$`)
-	safeExprRegex     = regexp.MustCompile(`^[A-Za-z0-9_]+(\(\))?$`)
-	allowedFKActions  = map[string]bool{
+	safeExprRegex      = regexp.MustCompile(`^[A-Za-z0-9_]+(\(\))?$`)
+	allowedFKActions   = map[string]bool{
 		"CASCADE":     true,
 		"SET NULL":    true,
 		"SET DEFAULT": true,

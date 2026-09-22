@@ -1052,6 +1052,3 @@ func (m *MySQLDriver) InspectHealth(ctx context.Context) (*types.HealthReport, e
 
 	return report, nil
 }
-
-
-

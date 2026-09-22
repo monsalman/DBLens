@@ -4,7 +4,7 @@ import "time"
 
 // AlertRule defines threshold condition and dispatch target.
 type AlertRule struct {
-	Condition  string  `json:"condition"`   // "gt"|"gte"|"lt"|"lte"|"eq"
+	Condition  string  `json:"condition"` // "gt"|"gte"|"lt"|"lte"|"eq"
 	Threshold  float64 `json:"threshold"`
 	WebhookURL string  `json:"webhook_url"`
 	Message    string  `json:"message"`
@@ -29,8 +29,14 @@ type CronJob struct {
 	Enabled     bool      `json:"enabled"`
 	AlertRule   AlertRule `json:"alert_rule"`
 
-	LastRun    time.Time  `json:"last_run"`
-	LastStatus string     `json:"last_status"`
-	LastError  string     `json:"last_error"`
-	RunHistory []JobRun   `json:"run_history"`
+	// DSN is the connection string the background runner dials. UI-created
+	// connections use browser-local "local_<ts>" ids that the server cannot
+	// resolve, so the job must carry the real DSN. Empty = resolve ConnID as a
+	// server-seeded global connection. Never returned in API responses.
+	DSN string `json:"dsn,omitempty"`
+
+	LastRun    time.Time `json:"last_run"`
+	LastStatus string    `json:"last_status"`
+	LastError  string    `json:"last_error"`
+	RunHistory []JobRun  `json:"run_history"`
 }

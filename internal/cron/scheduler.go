@@ -13,16 +13,40 @@ import (
 
 const maxHistory = 50
 
+// Interval bounds for scheduled jobs. Anything outside is clamped: a negative
+// or huge IntervalSec overflows time.Duration and would otherwise make a job
+// fire on every scheduler tick.
+const (
+	MinIntervalSec = 0
+	MaxIntervalSec = 86400 // 24h
+)
+
+// ClampIntervalSec bounds a requested interval into [MinIntervalSec, MaxIntervalSec].
+func ClampIntervalSec(v int) int {
+	if v < MinIntervalSec {
+		return MinIntervalSec
+	}
+	if v > MaxIntervalSec {
+		return MaxIntervalSec
+	}
+	return v
+}
+
 // DriverExec executes a SQL query and returns the first cell of first row as string.
 // The caller (Handler) provides this function wired to the connection manager.
+// dsn is the job's stateless DSN when set (required for browser-local local_*
+// connections the server cannot resolve), otherwise empty.
 type DriverExec func(ctx context.Context, connID, dsn, sql string) (string, error)
 
 // Scheduler manages cron jobs and their background execution.
 type Scheduler struct {
-	mu      sync.RWMutex
-	jobs    map[string]*CronJob
-	exec    DriverExec
-	stopCh  chan struct{}
+	mu       sync.RWMutex
+	jobs     map[string]*CronJob
+	exec     DriverExec
+	stopCh   chan struct{}
+	started  bool
+	stopped  bool
+	stopOnce sync.Once
 }
 
 // NewScheduler creates a Scheduler. exec is called to run SQL against a connection.
@@ -36,6 +60,13 @@ func NewScheduler(exec DriverExec) *Scheduler {
 
 // Start launches the background ticker (checks every 10s which jobs are due).
 func (s *Scheduler) Start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return
+	}
+	s.started = true
+	stopCh := s.stopCh
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -43,19 +74,35 @@ func (s *Scheduler) Start() {
 			select {
 			case <-ticker.C:
 				s.tick()
-			case <-s.stopCh:
+			case <-stopCh:
 				return
 			}
 		}
 	}()
 }
 
-// Stop shuts down the scheduler goroutine.
+// Stop shuts down the scheduler goroutine. It is idempotent and safe to call
+// twice (and safe when Start was never called).
 func (s *Scheduler) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopped = true
+		s.mu.Unlock()
+		close(s.stopCh)
+	})
+}
+
+// stoppedNow reports whether Stop has been called.
+func (s *Scheduler) stoppedNow() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stopped
 }
 
 func (s *Scheduler) tick() {
+	if s.stoppedNow() {
+		return
+	}
 	s.mu.RLock()
 	due := make([]*CronJob, 0)
 	now := time.Now()
@@ -63,7 +110,13 @@ func (s *Scheduler) tick() {
 		if !j.Enabled || j.IntervalSec <= 0 {
 			continue
 		}
-		next := j.LastRun.Add(time.Duration(j.IntervalSec) * time.Second)
+		// Defensive: an out-of-range interval would overflow the Duration
+		// arithmetic below and make the job fire on every tick.
+		interval := ClampIntervalSec(j.IntervalSec)
+		if interval <= 0 {
+			continue
+		}
+		next := j.LastRun.Add(time.Duration(interval) * time.Second)
 		if now.After(next) || now.Equal(next) {
 			cp := *j
 			due = append(due, &cp)
@@ -90,7 +143,7 @@ func (s *Scheduler) runJob(j *CronJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	output, err := s.exec(ctx, j.ConnID, "", j.SQL)
+	output, err := s.exec(ctx, j.ConnID, j.DSN, j.SQL)
 
 	dur := time.Since(start).Milliseconds()
 	run := JobRun{
@@ -150,11 +203,14 @@ func evalCondition(output string, rule AlertRule) bool {
 	return false
 }
 
-// AddJob adds or replaces a job (ID must be non-empty).
+// AddJob adds or replaces a job (ID must be non-empty). IntervalSec is clamped
+// into [MinIntervalSec, MaxIntervalSec].
 func (s *Scheduler) AddJob(job CronJob) CronJob {
 	if job.ID == "" {
 		job.ID = genID("job_")
 	}
+	job.IntervalSec = ClampIntervalSec(job.IntervalSec)
+	job.DSN = strings.TrimSpace(job.DSN)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jobs[job.ID] = &job
@@ -163,6 +219,8 @@ func (s *Scheduler) AddJob(job CronJob) CronJob {
 
 // UpdateJob replaces an existing job; returns error if not found.
 func (s *Scheduler) UpdateJob(job CronJob) (CronJob, error) {
+	job.IntervalSec = ClampIntervalSec(job.IntervalSec)
+	job.DSN = strings.TrimSpace(job.DSN)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, ok := s.jobs[job.ID]

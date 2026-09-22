@@ -22,6 +22,9 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	// Capture the true socket peer BEFORE RealIP rewrites r.RemoteAddr from the
+	// spoofable X-Forwarded-For header, so audit actor_ip is never attacker-chosen.
+	r.Use(CaptureTruePeer)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)

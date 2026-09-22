@@ -11,14 +11,18 @@ import (
 	"github.com/dblens/dblens/internal/connection"
 )
 
-func setupGISTestServer() http.Handler {
+func setupGISTestServer(t *testing.T) http.Handler {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	return api.SetupRouter(h, api.RouterConfig{})
 }
 
 func TestGISParseEndpoint(t *testing.T) {
-	router := setupGISTestServer()
+	router := setupGISTestServer(t)
 
 	// 1. Test WKT Point
 	body, _ := json.Marshal(map[string]interface{}{
@@ -79,7 +83,7 @@ func TestGISParseEndpoint(t *testing.T) {
 }
 
 func TestGISConvertEndpoint(t *testing.T) {
-	router := setupGISTestServer()
+	router := setupGISTestServer(t)
 
 	// 1. Convert WKT to GeoJSON
 	body, _ := json.Marshal(map[string]interface{}{

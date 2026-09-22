@@ -112,7 +112,11 @@ func TestBatchInsertHandler(t *testing.T) {
 		t.Fatalf("failed to create table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Successful Batch Insert
@@ -221,7 +225,11 @@ func TestExportTableStreaming(t *testing.T) {
 		t.Fatalf("failed to create books table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Export CSV
@@ -374,7 +382,11 @@ func TestImportCSVHandler(t *testing.T) {
 		t.Fatalf("failed to create items table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	csvData := "name,qty\nApple,10\nBanana,20\nOrange,\n"
@@ -423,7 +435,11 @@ func TestImportSQLHandler(t *testing.T) {
 		t.Fatalf("failed to create connection: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	sqlData := `
@@ -563,7 +579,11 @@ func TestCommandPaletteMetadataEndpoints(t *testing.T) {
 		t.Fatalf("failed to create table and view: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Test Schemas Endpoint
@@ -655,7 +675,11 @@ func TestGetTableDDL(t *testing.T) {
 		t.Fatalf("failed to create test table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	req := httptest.NewRequest("GET", "/api/connections/default/tables/products/ddl?schema=main", nil)
@@ -727,7 +751,11 @@ func TestGetTableDetails(t *testing.T) {
 		t.Fatalf("failed to create test tables: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	req := httptest.NewRequest("GET", "/api/connections/default/tables/items?schema=main", nil)
@@ -741,8 +769,8 @@ func TestGetTableDetails(t *testing.T) {
 	}
 
 	var res struct {
-		Data    driver.TableDetail `json:"data"`
-		Error   *string            `json:"error"`
+		Data  driver.TableDetail `json:"data"`
+		Error *string            `json:"error"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
 		t.Fatalf("failed to decode table details response: %v", err)
@@ -849,7 +877,11 @@ func TestExecuteQueryHandler(t *testing.T) {
 		t.Fatalf("failed to insert sample items: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	type queryResponse struct {
@@ -1060,12 +1092,16 @@ func TestExplainQueryHandler(t *testing.T) {
 		t.Fatalf("failed to create index: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	type explainResponse struct {
-		Data *driver.ExplainResult `json:"data"`
-		Error *string              `json:"error"`
+		Data  *driver.ExplainResult `json:"data"`
+		Error *string               `json:"error"`
 	}
 
 	// 1. Valid EXPLAIN query on /connections/default/explain
@@ -1189,7 +1225,11 @@ func TestAutocompleteSchemaEndpoints(t *testing.T) {
 		t.Fatalf("failed to create tables: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	req := httptest.NewRequest("GET", "/api/connections/default/erd", nil)
@@ -1268,7 +1308,11 @@ func TestAlterTablePreviewAndApply(t *testing.T) {
 		t.Fatalf("failed to create table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Preview alter table
@@ -1434,7 +1478,11 @@ func TestSchemaDiffAndApply(t *testing.T) {
 	tgtDSN := "sqlite://" + tgtDbFile
 
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	srcEntry, err := mgr.GetByDSN(srcDSN)
@@ -1564,7 +1612,11 @@ func TestApplyDiffCommentsAndErrorHandling(t *testing.T) {
 	tgtDSN := "sqlite://" + tgtDbFile
 
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	tgtEntry, err := mgr.GetByDSN(tgtDSN)
@@ -1671,7 +1723,11 @@ func TestApplyDiffCommentsAndErrorHandling(t *testing.T) {
 
 func TestDiffSchemasControlChars(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	tests := []struct {
@@ -1728,7 +1784,11 @@ func TestDiffSchemasControlChars(t *testing.T) {
 
 func TestApplyDiffReadOnlyProtection(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Rejection via X-DBLENS-READONLY header
@@ -1772,7 +1832,11 @@ func TestApplyDiffReadOnlyProtection(t *testing.T) {
 
 func TestGetProcessesAndKillProcess(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	dbFile := filepath.Join(t.TempDir(), "processes_test.db")
@@ -1856,7 +1920,11 @@ func TestGetProcessesAndKillProcess(t *testing.T) {
 
 func TestGetDatabaseHealth(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	dbFile := filepath.Join(t.TempDir(), "health_test.db")
@@ -1934,7 +2002,11 @@ func TestSafeModeReadOnlyEnforcement(t *testing.T) {
 		t.Fatalf("failed to init table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. IsNonSelectSQL unit tests
@@ -2166,7 +2238,11 @@ func TestDumpAndRestoreAPI(t *testing.T) {
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Plain SQL Dump
@@ -2284,7 +2360,11 @@ func TestRestAPIEndpoints(t *testing.T) {
 		t.Fatalf("failed to create items table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. POST: Insert item
@@ -2417,7 +2497,11 @@ func TestRestEndpointsTruthyReadOnlyAndMaxBytesLimit(t *testing.T) {
 		t.Fatalf("failed to create items table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Test X-DBLENS-READONLY with "1" and "yes"
@@ -2490,7 +2574,11 @@ func TestMaskedExportStreaming(t *testing.T) {
 		t.Fatalf("failed to create customers table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Export CSV with Redact Strategy
@@ -2581,7 +2669,11 @@ func TestMaskedExportStreaming(t *testing.T) {
 
 func TestMaskDetectEndpoint(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	body := map[string]interface{}{
@@ -2634,7 +2726,11 @@ func TestMaskDetectEndpoint(t *testing.T) {
 
 func TestMaskPreviewEndpoint(t *testing.T) {
 	mgr := connection.NewManager()
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// Test direct rows preview
@@ -2694,7 +2790,11 @@ func TestPrivilegeEndpoints(t *testing.T) {
 		t.Fatalf("failed to create accounts table: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. GET Privileges
@@ -2709,7 +2809,7 @@ func TestPrivilegeEndpoints(t *testing.T) {
 
 	var getResp struct {
 		Data struct {
-			Dialect string   `json:"dialect"`
+			Dialect string `json:"dialect"`
 			Roles   []struct {
 				Name string `json:"name"`
 			} `json:"roles"`
@@ -2806,7 +2906,11 @@ func TestSecurityAndRouteAliasRemediation(t *testing.T) {
 		t.Fatalf("failed to setup canary db: %v", err)
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. Route alias POST /api/connect
@@ -2898,13 +3002,3 @@ func TestSecurityAndRouteAliasRemediation(t *testing.T) {
 		}
 	}
 }
-
-
-
-
-
-
-
-
-
-
