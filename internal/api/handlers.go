@@ -18,6 +18,7 @@ import (
 	"github.com/dblens/dblens/internal/audit"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/cron"
+	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
@@ -247,6 +248,7 @@ type Handler struct {
 	cronScheduler *cron.Scheduler
 	auditLogger   *audit.AuditLogger
 	auditLogPath  string
+	playbookStore *playbook.Store
 }
 
 func NewHandler(mgr *connection.Manager) (*Handler, error) {
@@ -304,6 +306,14 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 		cronScheduler: sched,
 		auditLogger:   auditLog,
 		auditLogPath:  auditPath,
+		playbookStore: func() *playbook.Store {
+			ps, err := playbook.NewStore(auditDir + "/playbook.json")
+			if err != nil {
+				// non-fatal: return nil store (handlers will fail gracefully)
+				return nil
+			}
+			return ps
+		}(),
 	}, nil
 }
 

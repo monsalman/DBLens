@@ -22,6 +22,7 @@ import { MigrationHubModal } from './features/migration/MigrationHubModal'
 import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
 import { CronStudio } from './features/cron/CronStudio'
 import { AuditLogPanel } from './features/audit/AuditLogPanel'
+import { PlaybookPanel } from './features/playbook/PlaybookPanel'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
@@ -86,6 +87,8 @@ export function App() {
   const setActiveTab = useAppStore((s) => s.setActiveTab)
   const isCronStudioOpen = useAppStore((s) => s.isCronStudioOpen)
   const setIsCronStudioOpen = useAppStore((s) => s.setIsCronStudioOpen)
+  const isPlaybookOpen = useAppStore((s) => s.isPlaybookOpen)
+  const setIsPlaybookOpen = useAppStore((s) => s.setIsPlaybookOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -377,6 +380,7 @@ export function App() {
         onClose={() => setIsCronStudioOpen(false)}
       />
       <AuditLogPanel />
+      <PlaybookPanel isOpen={isPlaybookOpen} onClose={() => setIsPlaybookOpen(false)} />
       <GlobalLiveFeedDrawer />
     </QueryClientProvider>
   )

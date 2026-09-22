@@ -2250,6 +2250,63 @@ export const api = {
     if (!r.ok) throw new Error(`Failed to get live feed status (${r.status})`)
     return r.json()
   },
+
+  // ── Feature-33: Playbook ──────────────────────────────────────────────────
+  async listPlaybookEntries(tag?: string, q?: string): Promise<PlaybookEntry[]> {
+    const params = new URLSearchParams()
+    if (tag) params.set('tag', tag)
+    if (q) params.set('q', q)
+    const r = await fetch(`/api/playbook/entries?${params}`)
+    if (!r.ok) throw new Error(`Failed to list playbook (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+  async createPlaybookEntry(entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+    const r = await fetch('/api/playbook/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create entry (${r.status})`)
+    return json.data ?? json
+  },
+  async getPlaybookEntry(id: string): Promise<PlaybookEntry> {
+    const r = await fetch(`/api/playbook/entries/${id}`)
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to get entry (${r.status})`)
+    return json.data ?? json
+  },
+  async updatePlaybookEntry(id: string, entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+    const r = await fetch(`/api/playbook/entries/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update entry (${r.status})`)
+    return json.data ?? json
+  },
+  async deletePlaybookEntry(id: string): Promise<void> {
+    const r = await fetch(`/api/playbook/entries/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete entry (${r.status})`)
+  },
+  async getPlaybookShareUri(id: string): Promise<string> {
+    const r = await fetch(`/api/playbook/entries/${id}/share`)
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to get share URI (${r.status})`)
+    return (json.data ?? json).uri
+  },
+  async importPlaybook(entries: Partial<PlaybookEntry>[]): Promise<{ imported: number }> {
+    const r = await fetch('/api/playbook/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries }),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to import (${r.status})`)
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2631,6 +2688,35 @@ export interface AuditEntry {
 export interface AuditVerifyResult {
   ok: boolean
   tampered_lines: number[]
+}
+
+// ── Feature-33: Playbook types ────────────────────────────────────────────
+
+export interface PlaybookVersionSnapshot {
+  version: number
+  query_snapshot: string
+  updated_at: string
+}
+
+export interface PlaybookParameter {
+  name: string
+  type?: string
+  default?: string
+}
+
+export interface PlaybookEntry {
+  id: string
+  slug: string
+  title: string
+  description?: string
+  tags: string[]
+  dialect?: string
+  query: string
+  parameters?: PlaybookParameter[]
+  author?: string
+  created_at: string
+  updated_at: string
+  version_history: PlaybookVersionSnapshot[]
 }
 
 

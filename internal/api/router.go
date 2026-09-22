@@ -165,6 +165,17 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/live-feed", h.LiveTableFeed)
 	api.Get("/live-feed/status", h.LiveFeedStatus)
 
+	// ── Feature-33: Shareable Query Library & Team Playbook ──
+	api.Get("/playbook/entries", h.PlaybookList)
+	api.Post("/playbook/entries", h.PlaybookCreate)
+	api.Get("/playbook/entries/{id}", h.PlaybookGet)
+	api.Put("/playbook/entries/{id}", h.PlaybookUpdate)
+	api.Delete("/playbook/entries/{id}", h.PlaybookDelete)
+	api.Get("/playbook/export.json", h.PlaybookExportJSON)
+	api.Get("/playbook/export.md", h.PlaybookExportMD)
+	api.Post("/playbook/import", h.PlaybookImport)
+	api.Get("/playbook/entries/{id}/share", h.PlaybookShare)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

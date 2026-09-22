@@ -140,6 +140,10 @@ interface AppState {
   isAuditLogOpen: boolean
   setIsAuditLogOpen: (open: boolean) => void
 
+  // Feature-33: Playbook
+  isPlaybookOpen: boolean
+  setIsPlaybookOpen: (open: boolean) => void
+
   // Live Feed (Feature-32)
   isLiveFeedOpen: boolean
   liveFeedConfig: { connId: string; schema: string; table: string } | null
@@ -436,6 +440,9 @@ export const useAppStore = create<AppState>()(
 
       isAuditLogOpen: false,
       setIsAuditLogOpen: (isAuditLogOpen) => set({ isAuditLogOpen }),
+
+      isPlaybookOpen: false,
+      setIsPlaybookOpen: (isPlaybookOpen) => set({ isPlaybookOpen }),
 
       isLiveFeedOpen: false,
       liveFeedConfig: null,
