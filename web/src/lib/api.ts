@@ -2215,6 +2215,34 @@ export const api = {
     const json = await r.json()
     return json.data ?? json
   },
+
+  async listAuditLog(filters: {
+    connId?: string
+    queryType?: string
+    actorIp?: string
+    from?: string
+    to?: string
+    limit?: number
+  }): Promise<AuditEntry[]> {
+    const params = new URLSearchParams()
+    if (filters.connId) params.set('conn_id', filters.connId)
+    if (filters.queryType) params.set('query_type', filters.queryType)
+    if (filters.actorIp) params.set('actor_ip', filters.actorIp)
+    if (filters.from) params.set('from', filters.from)
+    if (filters.to) params.set('to', filters.to)
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const r = await fetch(`/api/audit/entries?${params.toString()}`)
+    if (!r.ok) throw new Error(`Failed to fetch audit log (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async verifyAuditChain(): Promise<AuditVerifyResult> {
+    const r = await fetch('/api/audit/verify')
+    if (!r.ok) throw new Error(`Failed to verify audit chain (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2571,6 +2599,30 @@ export interface CronJob {
   last_status: string
   last_error: string
   run_history: CronJobRun[]
+}
+
+// ── Feature-31: Audit Log ──────────────────────────────────────────────────
+
+export interface AuditEntry {
+  id: string
+  timestamp: string
+  actor_ip: string
+  user_agent: string
+  conn_id: string
+  db_name: string
+  schema: string
+  query_type: string
+  query_text: string
+  rows_affected: number
+  duration_ms: number
+  error: string
+  prev_hash: string
+  hash: string
+}
+
+export interface AuditVerifyResult {
+  ok: boolean
+  tampered_lines: number[]
 }
 
 

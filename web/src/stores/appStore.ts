@@ -135,6 +135,10 @@ interface AppState {
   // Command Palette
   isCommandPaletteOpen: boolean
   setCommandPaletteOpen: (open: boolean) => void
+
+  // Audit Log
+  isAuditLogOpen: boolean
+  setIsAuditLogOpen: (open: boolean) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -423,6 +427,9 @@ export const useAppStore = create<AppState>()(
 
       isCommandPaletteOpen: false,
       setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
+
+      isAuditLogOpen: false,
+      setIsAuditLogOpen: (isAuditLogOpen) => set({ isAuditLogOpen }),
     }),
     {
       name: 'dblens-storage',

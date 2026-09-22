@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/dblens/dblens/internal/alter"
 	"github.com/dblens/dblens/internal/assistant"
+	"github.com/dblens/dblens/internal/audit"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/cron"
 	"github.com/dblens/dblens/internal/diff"
@@ -243,6 +245,8 @@ type Handler struct {
 	mgr           *connection.Manager
 	webhookMgr    *webhook.Manager
 	cronScheduler *cron.Scheduler
+	auditLogger   *audit.AuditLogger
+	auditLogPath  string
 }
 
 func NewHandler(mgr *connection.Manager) *Handler {
@@ -268,10 +272,20 @@ func NewHandler(mgr *connection.Manager) *Handler {
 	}
 	sched := cron.NewScheduler(exec)
 	sched.Start()
+
+	// Set up audit logger at ~/.dblens/audit.log
+	homeDir, _ := os.UserHomeDir()
+	auditDir := homeDir + "/.dblens"
+	_ = os.MkdirAll(auditDir, 0700)
+	auditPath := auditDir + "/audit.log"
+	auditLog, _ := audit.NewAuditLogger(auditPath)
+
 	return &Handler{
 		mgr:           mgr,
 		webhookMgr:    webhook.NewManager(),
 		cronScheduler: sched,
+		auditLogger:   auditLog,
+		auditLogPath:  auditPath,
 	}
 }
 

@@ -21,6 +21,7 @@ import { FederationModal } from './features/federation/FederationModal'
 import { MigrationHubModal } from './features/migration/MigrationHubModal'
 import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
 import { CronStudio } from './features/cron/CronStudio'
+import { AuditLogPanel } from './features/audit/AuditLogPanel'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -357,6 +358,7 @@ export function App() {
         isOpen={isCronStudioOpen}
         onClose={() => setIsCronStudioOpen(false)}
       />
+      <AuditLogPanel />
     </QueryClientProvider>
   )
 }

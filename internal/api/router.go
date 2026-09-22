@@ -51,6 +51,12 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 
 	// ── API routes FIRST (before catch-all) ──
 	api := chi.NewRouter()
+
+	// Apply audit middleware BEFORE routes (chi requirement)
+	if h.auditLogger != nil {
+		api.Use(AuditMiddleware(h.auditLogger))
+	}
+
 	api.Get("/profiles/global", h.ListGlobalProfiles)
 
 	api.Post("/tunnel/test", h.TestTunnelHandler)
@@ -146,6 +152,11 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Delete("/cron/jobs/{id}", h.DeleteCronJob)
 	api.Post("/cron/jobs/{id}/run", h.RunCronJobNow)
 	api.Get("/cron/jobs/{id}/history", h.GetCronJobHistory)
+
+	// ── Feature-31: Immutable Query Audit Log & Compliance Trail ──
+	api.Get("/audit/entries", h.ListAuditLog)
+	api.Get("/audit/verify", h.VerifyAuditChain)
+	api.Get("/audit/export.csv", h.ExportAuditCSV)
 
 	r.Mount("/api", api)
 
