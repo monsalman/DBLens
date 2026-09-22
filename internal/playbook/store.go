@@ -43,10 +43,10 @@ type Entry struct {
 
 // Store holds entries in memory and persists to a JSON-lines file.
 type Store struct {
-	mu       sync.RWMutex
-	path     string
-	entries  []*Entry
-	gitRepo  string // optional: path to git repo for auto-commit
+	mu      sync.RWMutex
+	path    string
+	entries []*Entry
+	gitRepo string // optional: path to git repo for auto-commit
 }
 
 var reSlugBad = regexp.MustCompile(`[^a-z0-9]+`)
@@ -107,7 +107,22 @@ func (s *Store) gitCommit() {
 	_ = exec.Command("git", "-C", s.gitRepo, "commit", "-m", "chore: update playbook").Run()
 }
 
-// List returns entries matching optional tag and fuzzy query filters.
+// deepCopyEntry returns a copy of e including its slice fields, so readers
+// never hand out pointers into the store's mutable entries.
+func deepCopyEntry(e *Entry) *Entry {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	cp.Tags = append([]string{}, e.Tags...)
+	cp.Parameters = append([]Parameter{}, e.Parameters...)
+	cp.VersionHistory = append([]VersionSnapshot{}, e.VersionHistory...)
+	return &cp
+}
+
+// List returns entries matching optional tag and fuzzy query filters. Each
+// element is a deep copy: Update mutates the stored entries under Lock, so
+// live pointers would race with a concurrent writer (and its marshaling).
 func (s *Store) List(tag, q string) []*Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -132,7 +147,7 @@ func (s *Store) List(tag, q string) []*Entry {
 				continue
 			}
 		}
-		out = append(out, e)
+		out = append(out, deepCopyEntry(e))
 	}
 	if out == nil {
 		out = []*Entry{}
@@ -140,13 +155,13 @@ func (s *Store) List(tag, q string) []*Entry {
 	return out
 }
 
-// Get returns entry by id or nil.
+// Get returns a deep copy of the entry by id, or nil when absent.
 func (s *Store) Get(id string) *Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, e := range s.entries {
 		if e.ID == id {
-			return e
+			return deepCopyEntry(e)
 		}
 	}
 	return nil
@@ -169,7 +184,7 @@ func (s *Store) Create(e *Entry) error {
 		e.Parameters = []Parameter{}
 	}
 	e.VersionHistory = []VersionSnapshot{}
-	s.entries = append(s.entries, e)
+	s.entries = append(s.entries, deepCopyEntry(e))
 	return s.save()
 }
 
@@ -198,7 +213,7 @@ func (s *Store) Update(id string, patch *Entry) (*Entry, error) {
 			e.Slug = patch.Slug
 		}
 		e.UpdatedAt = now()
-		return e, s.save()
+		return deepCopyEntry(e), s.save()
 	}
 	return nil, fmt.Errorf("entry not found: %s", id)
 }
@@ -216,11 +231,17 @@ func (s *Store) Delete(id string) error {
 	return fmt.Errorf("entry not found: %s", id)
 }
 
-// ExportJSON returns all entries as JSON.
+// ExportJSON returns all entries as JSON. The marshal happens inside the RLock
+// section over deep copies, so the encoder never reads a struct that a
+// concurrent Update is mutating - and never over a half-mutated entry.
 func (s *Store) ExportJSON() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return json.MarshalIndent(map[string]interface{}{"entries": s.entries}, "", "  ")
+	cp := make([]*Entry, 0, len(s.entries))
+	for _, e := range s.entries {
+		cp = append(cp, deepCopyEntry(e))
+	}
+	return json.MarshalIndent(map[string]interface{}{"entries": cp}, "", "  ")
 }
 
 // ExportMarkdown renders a playbook.md with fenced SQL blocks.

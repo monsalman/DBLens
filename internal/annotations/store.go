@@ -169,7 +169,8 @@ func (s *Store) Update(id string, patch *Annotation) (*Annotation, error) {
 			a.Column = patch.Column
 		}
 		a.UpdatedAt = time.Now().UTC()
-		return a, s.save()
+		cp := *a
+		return &cp, s.save()
 	}
 	return nil, fmt.Errorf("annotation not found: %s", id)
 }
@@ -187,11 +188,13 @@ func (s *Store) Delete(id string) error {
 	return fmt.Errorf("annotation not found: %s", id)
 }
 
-// List returns all annotations, pinned first then newest first.
+// List returns all annotations, pinned first then newest first. Every element
+// is a value copy: the store keeps mutating its own records under Lock, so
+// handing out live pointers would race with concurrent writers.
 func (s *Store) List() []*Annotation {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return sortAnnotations(s.items)
+	return sortAnnotations(copyAnnotations(s.items))
 }
 
 // ListByTarget returns annotations for a connection, optionally narrowed to a
@@ -210,7 +213,7 @@ func (s *Store) ListByTarget(connID, schema, table string) []*Annotation {
 		if table != "" && a.Table != table {
 			continue
 		}
-		out = append(out, a)
+		out = append(out, copyAnnotation(a))
 	}
 	return sortAnnotations(out)
 }
@@ -221,13 +224,13 @@ func (s *Store) Search(keyword string) []*Annotation {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if kw == "" {
-		return sortAnnotations(s.items)
+		return sortAnnotations(copyAnnotations(s.items))
 	}
 	var out []*Annotation
 	for _, a := range s.items {
 		hay := strings.ToLower(a.Note + " " + a.Author + " " + a.Schema + " " + a.Table + " " + a.Column + " " + a.ConnectionID)
 		if strings.Contains(hay, kw) {
-			out = append(out, a)
+			out = append(out, copyAnnotation(a))
 		}
 	}
 	return sortAnnotations(out)
@@ -257,9 +260,29 @@ func (s *Store) Query(connID, schema, table, keyword string) []*Annotation {
 		if table != "" && a.Table != table {
 			continue
 		}
-		out = append(out, a)
+		out = append(out, copyAnnotation(a))
 	}
 	return sortAnnotations(out)
+}
+
+// copyAnnotation returns a value copy of a so callers never hold a pointer into
+// the store's mutable slice.
+func copyAnnotation(a *Annotation) *Annotation {
+	if a == nil {
+		return nil
+	}
+	cp := *a
+	return &cp
+}
+
+// copyAnnotations value-copies every element; the caller must hold at least the
+// read lock so the copies are taken from a stable slice.
+func copyAnnotations(in []*Annotation) []*Annotation {
+	out := make([]*Annotation, 0, len(in))
+	for _, a := range in {
+		out = append(out, copyAnnotation(a))
+	}
+	return out
 }
 
 func sortAnnotations(in []*Annotation) []*Annotation {
