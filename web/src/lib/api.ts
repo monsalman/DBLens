@@ -31,6 +31,12 @@ import type {
   GateRequest,
   GateResult,
 } from '../features/lint/lintRules'
+import type {
+  ImpactGraph,
+  RemediationPlan,
+  RenamePlan,
+  RenameRequest,
+} from '../features/impact/impactHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2634,6 +2640,110 @@ export const api = {
     const json = await res.json()
     if (!res.ok) throw new Error(json.error || `Quality gate request failed (${res.status})`)
     return json.data ?? json
+  },
+
+  // ── Feature-40: Schema Object Impact Analyzer & Safe-Drop Planner ────
+  async getImpact(
+    connId: string,
+    params: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      depth?: number
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<ImpactGraph> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (params.schema) sp.set('schema', params.schema)
+    if (params.object) sp.set('object', params.object)
+    if (params.object_type) sp.set('object_type', params.object_type)
+    if (params.column) sp.set('column', params.column)
+    if (params.depth) sp.set('depth', String(params.depth))
+
+    const res = await fetch(`/api/connections/${connId}/impact?${sp.toString()}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to analyze impact (${res.status})`)
+    return json.data ?? json
+  },
+
+  async createImpactPlan(
+    connId: string,
+    payload: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      depth?: number
+      cascade?: boolean
+      graph?: ImpactGraph
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<RemediationPlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to create remediation plan (${res.status})`)
+    return json.data ?? json
+  },
+
+  async createImpactRename(
+    connId: string,
+    payload: RenameRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<RenamePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/rename`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to generate rename plan (${res.status})`)
+    return json.data ?? json
+  },
+
+  async exportImpactMD(
+    connId: string,
+    params: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      cascade?: boolean
+      depth?: number
+      graph?: ImpactGraph
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/export.md`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `Failed to export impact report (${res.status})`)
+    }
+    return await res.text()
   },
 }
 

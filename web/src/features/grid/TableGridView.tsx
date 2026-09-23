@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity, Network } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -18,6 +18,7 @@ import { LiveFeedDrawer } from '../livefeed/LiveFeedDrawer'
 import { AnnotationBadge } from '../annotations/AnnotationBadge'
 import { useAnnotations } from '../annotations/useAnnotations'
 import { ProfileStudioModal } from '../profile/ProfileStudioModal'
+import { ImpactAnalyzerPanel } from '../impact/ImpactAnalyzerPanel'
 
 interface Props {
   connId: string
@@ -45,6 +46,8 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [showImpactPanel, setShowImpactPanel] = useState(false)
+  const [impactColumn, setImpactColumn] = useState<string | undefined>(undefined)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
   const qc = useQueryClient()
   const { openPeekDrawer, connections, openRestModal } = useAppStore()
@@ -88,12 +91,17 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const cancelledRef = useRef(false)
   const isCommittingRef = useRef(false)
 
-  // Keyboard shortcut Alt+M for Privacy Mode
+  // Keyboard shortcut Alt+M for Privacy Mode, Alt+I for Impact Analyzer
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === 'm' || e.key === 'M')) {
         e.preventDefault()
         setPrivacyMode((prev) => !prev)
+      }
+      if (e.altKey && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault()
+        setImpactColumn(undefined)
+        setShowImpactPanel((prev) => !prev)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -731,6 +739,21 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                   <span className="hidden sm:inline">Profile</span>
                 </button>
               )}
+
+              {/* Schema Object Impact Analyzer */}
+              {table && (
+                <button
+                  onClick={() => {
+                    setImpactColumn(undefined)
+                    setShowImpactPanel(true)
+                  }}
+                  title="Schema Object Impact Analyzer & Safe-Drop Planner (Alt+I)"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-amber-400 hover:border-amber-500/40 hover:bg-amber-500/10 transition-colors"
+                >
+                  <Network className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">Impact</span>
+                </button>
+              )}
               
               <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -867,6 +890,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                       annotations={tableNotes}
                     />
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setImpactColumn(c.name)
+                        setShowImpactPanel(true)
+                      }}
+                      title={`Analyze impact of column ${c.name}`}
+                      className="opacity-0 group-hover:opacity-100 hover:text-amber-400 text-[var(--muted)] transition-opacity p-0.5"
+                    >
+                      <Network className="w-2.5 h-2.5" />
+                    </button>
                   </div>
                 </th>
               ))}
@@ -1244,6 +1279,19 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
         dsn={activeConn?.dsn || ''}
         table={table}
         schema={schema}
+        profiles={connections}
+      />
+      <ImpactAnalyzerPanel
+        isOpen={showImpactPanel}
+        onClose={() => {
+          setShowImpactPanel(false)
+          setImpactColumn(undefined)
+        }}
+        connId={connId}
+        schema={schema}
+        object={table}
+        objectType={impactColumn ? 'column' : 'table'}
+        column={impactColumn}
         profiles={connections}
       />
     </div>

@@ -220,6 +220,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/pivot/export.csv", h.PivotExportCSVHandler)
 	api.Post("/pivot/export.md", h.PivotExportMDHandler)
 
+	// ── Feature-40: Schema Object Impact Analyzer & Safe-Drop Planner ────
+	api.Get("/connections/{connId}/impact", h.GetImpactHandler)
+	api.Post("/connections/{connId}/impact/plan", h.CreateImpactPlanHandler)
+	api.Post("/connections/{connId}/impact/rename", h.CreateImpactRenameHandler)
+	api.Get("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
+	api.Post("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
