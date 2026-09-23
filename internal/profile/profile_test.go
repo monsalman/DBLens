@@ -2,6 +2,7 @@ package profile_test
 
 import (
 	"context"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -207,4 +208,38 @@ func hasFlag(flags []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestHistogramNaNInf(t *testing.T) {
+	ctx := context.Background()
+
+	// Both NaN
+	h1 := profile.GenerateHistogram(ctx, nil, "users", "age", math.NaN(), math.NaN(), 5)
+	if len(h1) != 0 {
+		t.Errorf("expected empty buckets for NaN min and max, got %d", len(h1))
+	}
+
+	// Min NaN
+	h2 := profile.GenerateHistogram(ctx, nil, "users", "age", math.NaN(), 100, 5)
+	if len(h2) != 0 {
+		t.Errorf("expected empty buckets for NaN min, got %d", len(h2))
+	}
+
+	// Max NaN
+	h3 := profile.GenerateHistogram(ctx, nil, "users", "age", 0, math.NaN(), 5)
+	if len(h3) != 0 {
+		t.Errorf("expected empty buckets for NaN max, got %d", len(h3))
+	}
+
+	// Min -Inf
+	h4 := profile.GenerateHistogram(ctx, nil, "users", "age", math.Inf(-1), 100, 5)
+	if len(h4) != 0 {
+		t.Errorf("expected empty buckets for -Inf min, got %d", len(h4))
+	}
+
+	// Max +Inf
+	h5 := profile.GenerateHistogram(ctx, nil, "users", "age", 0, math.Inf(1), 5)
+	if len(h5) != 0 {
+		t.Errorf("expected empty buckets for +Inf max, got %d", len(h5))
+	}
 }

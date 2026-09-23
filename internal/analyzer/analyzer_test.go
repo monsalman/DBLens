@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -362,5 +363,60 @@ func TestStorePersistence(t *testing.T) {
 				t.Errorf("expected select-star severity to be info after reload, got %s", r.Severity)
 			}
 		}
+	}
+}
+
+func TestUpdateRulesValidation(t *testing.T) {
+	storeFile := "/tmp/dblens_analyzer_val_test.json"
+	_ = os.Remove(storeFile)
+	defer os.Remove(storeFile)
+
+	store, err := NewStore(storeFile)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// 1. Invalid rule ID must be rejected
+	err = store.UpdateRules(map[string]RuleSetting{
+		"non-existent-rule-id": {
+			Enabled:  true,
+			Severity: SeverityWarning,
+		},
+	})
+	if err == nil {
+		t.Errorf("expected error when updating non-existent rule ID, got nil")
+	}
+
+	// 2. Invalid severity must be rejected
+	err = store.UpdateRules(map[string]RuleSetting{
+		"select-star": {
+			Enabled:  true,
+			Severity: Severity("fatal"),
+		},
+	})
+	if err == nil {
+		t.Errorf("expected error when updating rule with invalid severity 'fatal', got nil")
+	}
+
+	// 3. Empty severity must be rejected
+	err = store.UpdateRules(map[string]RuleSetting{
+		"select-star": {
+			Enabled:  true,
+			Severity: Severity(""),
+		},
+	})
+	if err == nil {
+		t.Errorf("expected error when updating rule with empty severity, got nil")
+	}
+
+	// 4. Valid rule ID and valid severity must succeed
+	err = store.UpdateRules(map[string]RuleSetting{
+		"select-star": {
+			Enabled:  true,
+			Severity: SeverityError,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected valid update to succeed, got %v", err)
 	}
 }

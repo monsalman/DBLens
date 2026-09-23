@@ -235,4 +235,25 @@ func TestMaterializeHandlers(t *testing.T) {
 			t.Fatalf("expire scratch status %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+
+	// 8. DELETE non-existent scratch table: returns 404 and does NOT drop real table
+	t.Run("Delete Non-Existent Scratch Table Does Not Drop Real Table", func(t *testing.T) {
+		delReq := httptest.NewRequest(http.MethodDelete, "/api/connections/c1/materialize/scratch/main/customers", nil)
+		delReq.Header.Set("X-DBLENS-DSN", dsn)
+		delRec := httptest.NewRecorder()
+		router.ServeHTTP(delRec, delReq)
+
+		if delRec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 for non-existent scratch table, got %d: %s", delRec.Code, delRec.Body.String())
+		}
+
+		// Verify real table still exists and data is intact
+		res, err := entry.Driver.ExecuteQuery(ctx, "SELECT COUNT(*) FROM customers;")
+		if err != nil {
+			t.Fatalf("expected real table 'customers' to still exist, but got error: %v", err)
+		}
+		if len(res.Rows) == 0 || fmt.Sprintf("%v", res.Rows[0][0]) != "3" {
+			t.Fatalf("expected 3 rows in real table 'customers', got %v", res.Rows)
+		}
+	})
 }
