@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -14,6 +14,9 @@ import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { SpatialMapDrawer } from '../gis/SpatialMapDrawer'
 import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
+import { LiveFeedDrawer } from '../livefeed/LiveFeedDrawer'
+import { AnnotationBadge } from '../annotations/AnnotationBadge'
+import { useAnnotations } from '../annotations/useAnnotations'
 
 interface Props {
   connId: string
@@ -46,6 +49,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const activeConn = connections.find((c) => c.id === connId)
   const isProd = activeConn?.environment === 'production'
 
+  // Feature-34: annotations for the current table (column badges + pinned banner)
+  const { annotations: tableNotes } = useAnnotations(
+    { conn: connId, table, schema },
+    !!connId && !!table,
+  )
+  const pinnedNotes = useMemo(() => tableNotes.filter(n => n.pinned), [tableNotes])
+
   const [stagedMode, setStagedMode] = useState<boolean>(() => isProd)
   const [stagedChanges, setStagedChanges] = useState<Record<string, StagedChange>>({})
   const [showDiffModal, setShowDiffModal] = useState(false)
@@ -69,6 +79,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
     val: any
     rowIdx: number
   } | null>(null)
+  const [showLiveFeed, setShowLiveFeed] = useState(false)
 
   const exportMenuRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
@@ -489,6 +500,20 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
 
   return (
     <div className="flex-1 flex flex-col bg-[var(--bg)] overflow-hidden">
+      {pinnedNotes.length > 0 && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 text-amber-500 text-[11px] px-3 py-1.5 font-mono shrink-0 space-y-1">
+          {pinnedNotes.map(n => (
+            <div key={n.id} className="flex items-start gap-1.5">
+              <StickyNote className="w-3 h-3 mt-0.5 shrink-0" />
+              <span className="shrink-0 font-semibold">
+                {n.column ? `${n.column}:` : 'Table note:'}
+              </span>
+              <span className="whitespace-pre-wrap break-words text-[var(--fg)]">{n.note}</span>
+              {n.author && <span className="ml-auto shrink-0 opacity-70">— {n.author}</span>}
+            </div>
+          ))}
+        </div>
+      )}
       {inlineError && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-xs px-3 py-1.5 flex items-center justify-between font-mono shrink-0">
           <span>{inlineError}</span>
@@ -680,6 +705,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 <Code2 className="w-3.5 h-3.5 text-blue-400" />
                 <span className="hidden sm:inline">REST API</span>
               </button>
+
+              {/* Live Feed */}
+              {table && (
+                <button
+                  onClick={() => setShowLiveFeed(true)}
+                  title="Live Table Feed — watch rows change in real time"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-green-400 hover:border-green-500/40 hover:bg-green-500/10 transition-colors"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                  <span>Live Feed ▶</span>
+                </button>
+              )}
               
               <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -736,6 +773,14 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 )}
               </div>
             </div>
+
+            {/* Feature-34: table-level notes */}
+            <AnnotationBadge
+              connId={connId}
+              schema={schema}
+              table={table}
+              annotations={tableNotes}
+            />
           </>
         ) : (
           <div className="text-xs font-mono text-[var(--muted)] flex items-center gap-2">
@@ -800,6 +845,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                     )}
                     <span className="text-[var(--fg)]">{c.name}</span>
                     <span className="text-[9px] text-[var(--muted)]">{c.type}</span>
+                    <AnnotationBadge
+                      connId={connId}
+                      schema={schema}
+                      table={table}
+                      column={c.name}
+                      annotations={tableNotes}
+                    />
                     <ArrowUpDown className="w-2.5 h-2.5 text-[var(--muted)] group-hover:text-[var(--fg)] shrink-0" />
                   </div>
                 </th>
@@ -1164,6 +1216,13 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
           onSave={handleSpatialDrawerSave}
         />
       )}
+      <LiveFeedDrawer
+        isOpen={showLiveFeed}
+        onClose={() => setShowLiveFeed(false)}
+        connId={connId}
+        schema={schema}
+        table={table}
+      />
     </div>
   )
 }

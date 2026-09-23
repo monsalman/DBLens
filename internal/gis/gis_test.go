@@ -262,7 +262,7 @@ func TestMalformedCoordinates(t *testing.T) {
 func TestOversizedWKBCountRejection(t *testing.T) {
 	// 1. LineString claimed count > maxWKBItems (1_000_000)
 	buf := new(bytes.Buffer)
-	buf.WriteByte(1) // LittleEndian
+	buf.WriteByte(1)                                      // LittleEndian
 	_ = binary.Write(buf, binary.LittleEndian, uint32(2)) // LineString
 	_ = binary.Write(buf, binary.LittleEndian, uint32(1_000_001))
 	_, err := ParseWKB(buf.Bytes(), 4326)
@@ -272,8 +272,8 @@ func TestOversizedWKBCountRejection(t *testing.T) {
 
 	// 2. LineString claimed count requires more buffer than remaining
 	buf.Reset()
-	buf.WriteByte(1) // LittleEndian
-	_ = binary.Write(buf, binary.LittleEndian, uint32(2)) // LineString
+	buf.WriteByte(1)                                           // LittleEndian
+	_ = binary.Write(buf, binary.LittleEndian, uint32(2))      // LineString
 	_ = binary.Write(buf, binary.LittleEndian, uint32(10_000)) // requires 160_000 bytes, but buffer ends
 	_, err = ParseWKB(buf.Bytes(), 4326)
 	if err == nil || !strings.Contains(err.Error(), "insufficient buffer") {

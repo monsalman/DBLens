@@ -41,7 +41,11 @@ func TestRoutineEndpoints(t *testing.T) {
 		}
 	}
 
-	h := api.NewHandler(mgr)
+	h, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(h.Shutdown)
 	router := api.SetupRouter(h, api.RouterConfig{})
 
 	// 1. GET /api/connections/c1/routines

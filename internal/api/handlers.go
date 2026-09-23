@@ -7,19 +7,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/annotations"
 	"github.com/dblens/dblens/internal/assistant"
+	"github.com/dblens/dblens/internal/audit"
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/cron"
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/dump"
+	"github.com/dblens/dblens/internal/healthmon"
 	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/dblens/dblens/internal/tunnel"
@@ -239,16 +246,139 @@ func sendError(w http.ResponseWriter, status int, msg string) {
 }
 
 type Handler struct {
-	mgr        *connection.Manager
-	webhookMgr *webhook.Manager
+	mgr              *connection.Manager
+	webhookMgr       *webhook.Manager
+	cronScheduler    *cron.Scheduler
+	auditLogger      *audit.AuditLogger
+	auditLogPath     string
+	playbookStore    *playbook.Store
+	annotationsStore *annotations.Store
+	healthMon        *healthmon.Monitor
+	healthCancel     context.CancelFunc
+	shutdownCh       chan struct{}
+	shutdownOnce     sync.Once
 }
 
-func NewHandler(mgr *connection.Manager) *Handler {
-	return &Handler{
-		mgr:        mgr,
-		webhookMgr: webhook.NewManager(),
+func NewHandler(mgr *connection.Manager) (*Handler, error) {
+	exec := func(ctx context.Context, connID, dsn, sql string) (string, error) {
+		var entry *connection.PoolEntry
+		var err error
+		switch {
+		case strings.TrimSpace(dsn) != "":
+			// UI-created connections carry browser-local local_* ids the server
+			// cannot resolve, so the real DSN travels with the job.
+			entry, err = mgr.GetByDSN(strings.TrimSpace(dsn))
+		default:
+			if globalDSN, ok := mgr.GetGlobalDSNByID(connID); ok {
+				entry, err = mgr.GetByDSN(globalDSN)
+			} else {
+				return "", fmt.Errorf("connection not found: %s (no DSN on the job and no server-side global connection with that id)", connID)
+			}
+		}
+		if err != nil {
+			return "", err
+		}
+		res, err := entry.Driver.ExecuteQuery(ctx, sql)
+		if err != nil {
+			return "", err
+		}
+		if res != nil && len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
+			return fmt.Sprintf("%v", res.Rows[0][0]), nil
+		}
+		return "", nil
+	}
+	sched := cron.NewScheduler(exec)
+	sched.Start()
+
+	// Set up audit logger at ~/.dblens/audit.log
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = os.TempDir()
+	}
+	auditDir := homeDir + "/.dblens"
+	if err := os.MkdirAll(auditDir, 0700); err != nil {
+		sched.Stop()
+		return nil, fmt.Errorf("failed to create audit directory %s: %w", auditDir, err)
+	}
+	auditPath := auditDir + "/audit.log"
+	auditLog, err := audit.NewAuditLogger(auditPath)
+	if err != nil {
+		// Do not silently lose the compliance trail: fail loudly.
+		sched.Stop()
+		return nil, fmt.Errorf("failed to open audit log %s: %w", auditPath, err)
+	}
+
+	// Feature-35: connection health prober. The context is cancelled in
+	// Shutdown; the loop is a no-op until the pool holds at least one
+	// connection, so an idle server never dials anything.
+	healthCtx, healthCancel := context.WithCancel(context.Background())
+	healthMon := healthmon.New()
+	healthMon.Start(healthCtx, mgr, healthInterval())
+
+	h := &Handler{
+		mgr:           mgr,
+		webhookMgr:    webhook.NewManager(),
+		cronScheduler: sched,
+		auditLogger:   auditLog,
+		auditLogPath:  auditPath,
+		healthMon:     healthMon,
+		healthCancel:  healthCancel,
+		shutdownCh:    make(chan struct{}),
+		playbookStore: func() *playbook.Store {
+			ps, err := playbook.NewStore(auditDir + "/playbook.json")
+			if err != nil {
+				// non-fatal: return nil store (handlers will fail gracefully)
+				return nil
+			}
+			return ps
+		}(),
+		annotationsStore: func() *annotations.Store {
+			as, err := annotations.NewStore(auditDir + "/annotations.json")
+			if err != nil {
+				// non-fatal: return nil store (handlers will fail gracefully)
+				return nil
+			}
+			return as
+		}(),
+	}
+	return h, nil
+}
+
+// healthInterval is the prober cadence: DBLENS_HEALTH_INTERVAL (seconds) when
+// set to a positive number, otherwise the 30s default. Overridable so
+// deployments can tune probe load without a rebuild.
+func healthInterval() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("DBLENS_HEALTH_INTERVAL")); raw != "" {
+		if secs, err := strconv.ParseFloat(raw, 64); err == nil && secs > 0 {
+			return time.Duration(secs * float64(time.Second))
+		}
+	}
+	return healthmon.DefaultInterval
+}
+
+// Shutdown stops background workers and flushes the audit log. Safe to call
+// more than once; called from main's graceful-shutdown path.
+func (h *Handler) Shutdown() {
+	if h == nil {
+		return
+	}
+	if h.shutdownCh != nil {
+		h.shutdownOnce.Do(func() { close(h.shutdownCh) })
+	}
+	if h.healthCancel != nil {
+		h.healthCancel()
+	}
+	if h.cronScheduler != nil {
+		h.cronScheduler.Stop()
+	}
+	if h.auditLogger != nil {
+		h.auditLogger.Close()
 	}
 }
+
+// Close releases the audit log handle. Alias of Shutdown for callers that use
+// io.Closer semantics.
+func (h *Handler) Close() { h.Shutdown() }
 
 func (h *Handler) WebhookManager() *webhook.Manager {
 	if h.webhookMgr == nil {
@@ -258,7 +388,7 @@ func (h *Handler) WebhookManager() *webhook.Manager {
 }
 
 type TestConnectionRequest struct {
-	DSN       string                 `json:"dsn"`
+	DSN       string                  `json:"dsn"`
 	SSHTunnel *tunnel.SSHTunnelConfig `json:"ssh_tunnel,omitempty"`
 }
 
@@ -2604,9 +2734,3 @@ func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
 		"raw":         resp.Raw,
 	})
 }
-
-
-
-
-
-

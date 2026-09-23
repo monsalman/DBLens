@@ -337,9 +337,9 @@ func TestSQLInjectionResistance(t *testing.T) {
 func TestIsOperatorWhitelisting(t *testing.T) {
 	// 1. Valid whitelisted values
 	validValues := url.Values{
-		"deleted": []string{"is.null"},
-		"status":  []string{"is.not.null"},
-		"active":  []string{"is.true"},
+		"deleted":  []string{"is.null"},
+		"status":   []string{"is.not.null"},
+		"active":   []string{"is.true"},
 		"archived": []string{"is.false"},
 	}
 

@@ -2168,6 +2168,199 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  // ── Feature-30: Cron Jobs ──
+  async listCronJobs(): Promise<CronJob[]> {
+    const r = await fetch('/api/cron/jobs')
+    if (!r.ok) throw new Error(`Failed to fetch cron jobs (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async createCronJob(job: Partial<CronJob>): Promise<CronJob> {
+    const r = await fetch('/api/cron/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(job),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create cron job (${r.status})`)
+    return json.data ?? json
+  },
+
+  async updateCronJob(id: string, job: Partial<CronJob>): Promise<CronJob> {
+    const r = await fetch(`/api/cron/jobs/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(job),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update cron job (${r.status})`)
+    return json.data ?? json
+  },
+
+  async deleteCronJob(id: string): Promise<void> {
+    const r = await fetch(`/api/cron/jobs/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete cron job (${r.status})`)
+  },
+
+  async runCronJobNow(id: string): Promise<void> {
+    const r = await fetch(`/api/cron/jobs/${id}/run`, { method: 'POST' })
+    if (!r.ok) throw new Error(`Failed to trigger cron job (${r.status})`)
+  },
+
+  async getCronJobHistory(id: string): Promise<CronJobRun[]> {
+    const r = await fetch(`/api/cron/jobs/${id}/history`)
+    if (!r.ok) throw new Error(`Failed to fetch cron history (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async listAuditLog(filters: {
+    connId?: string
+    queryType?: string
+    actorIp?: string
+    from?: string
+    to?: string
+    limit?: number
+  }): Promise<AuditEntry[]> {
+    const params = new URLSearchParams()
+    if (filters.connId) params.set('conn_id', filters.connId)
+    if (filters.queryType) params.set('query_type', filters.queryType)
+    if (filters.actorIp) params.set('actor_ip', filters.actorIp)
+    if (filters.from) params.set('from', filters.from)
+    if (filters.to) params.set('to', filters.to)
+    if (filters.limit) params.set('limit', String(filters.limit))
+    const r = await fetch(`/api/audit/entries?${params.toString()}`)
+    if (!r.ok) throw new Error(`Failed to fetch audit log (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  async verifyAuditChain(): Promise<AuditVerifyResult> {
+    const r = await fetch('/api/audit/verify')
+    if (!r.ok) throw new Error(`Failed to verify audit chain (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  // Feature-32: Live Feed
+  async liveFeedStatus(): Promise<{ active_feeds: number }> {
+    const r = await fetch('/api/live-feed/status')
+    if (!r.ok) throw new Error(`Failed to get live feed status (${r.status})`)
+    return r.json()
+  },
+
+  // ── Feature-33: Playbook ──────────────────────────────────────────────────
+  async listPlaybookEntries(tag?: string, q?: string): Promise<PlaybookEntry[]> {
+    const params = new URLSearchParams()
+    if (tag) params.set('tag', tag)
+    if (q) params.set('q', q)
+    const r = await fetch(`/api/playbook/entries?${params}`)
+    if (!r.ok) throw new Error(`Failed to list playbook (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+  async createPlaybookEntry(entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+    const r = await fetch('/api/playbook/entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create entry (${r.status})`)
+    return json.data ?? json
+  },
+  async getPlaybookEntry(id: string): Promise<PlaybookEntry> {
+    const r = await fetch(`/api/playbook/entries/${id}`)
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to get entry (${r.status})`)
+    return json.data ?? json
+  },
+  async updatePlaybookEntry(id: string, entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+    const r = await fetch(`/api/playbook/entries/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update entry (${r.status})`)
+    return json.data ?? json
+  },
+  async deletePlaybookEntry(id: string): Promise<void> {
+    const r = await fetch(`/api/playbook/entries/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete entry (${r.status})`)
+  },
+  async getPlaybookShareUri(id: string): Promise<string> {
+    const r = await fetch(`/api/playbook/entries/${id}/share`)
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to get share URI (${r.status})`)
+    return (json.data ?? json).uri
+  },
+  async importPlaybook(entries: Partial<PlaybookEntry>[]): Promise<{ imported: number }> {
+    const r = await fetch('/api/playbook/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entries }),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to import (${r.status})`)
+    return json.data ?? json
+  },
+
+  // ── Feature-34: Table Annotations & Collaborative Notes ─────────────────
+  async listAnnotations(filters?: { conn?: string; schema?: string; table?: string; q?: string }): Promise<Annotation[]> {
+    const params = new URLSearchParams()
+    if (filters?.conn) params.set('conn', filters.conn)
+    if (filters?.schema) params.set('schema', filters.schema)
+    if (filters?.table) params.set('table', filters.table)
+    if (filters?.q) params.set('q', filters.q)
+    const r = await fetch(`/api/annotations?${params}`)
+    if (!r.ok) throw new Error(`Failed to list annotations (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+  async createAnnotation(annotation: Partial<Annotation>): Promise<Annotation> {
+    const r = await fetch('/api/annotations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(annotation),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to create annotation (${r.status})`)
+    return json.data ?? json
+  },
+  async updateAnnotation(id: string, patch: Partial<Annotation>): Promise<Annotation> {
+    const r = await fetch(`/api/annotations/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    const json = await r.json()
+    if (!r.ok) throw new Error(json.error || `Failed to update annotation (${r.status})`)
+    return json.data ?? json
+  },
+  async deleteAnnotation(id: string): Promise<void> {
+    const r = await fetch(`/api/annotations/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(`Failed to delete annotation (${r.status})`)
+  },
+  annotationExportUrl(): string {
+    return '/api/annotations/export.md'
+  },
+
+  // ── Feature-35: Connection Health Dashboard ──────────────────────────────
+  async getConnectionHealth(): Promise<HealthPayload> {
+    const r = await fetch('/api/health/connections')
+    if (!r.ok) throw new Error(`Failed to load connection health (${r.status})`)
+    const json = await r.json()
+    return json.data ?? json
+  },
+
+  /** SSE endpoint for live health pushes (EventSource sends no headers, and the
+   *  server-side monitor needs no DSN: it probes the pool the server already holds). */
+  healthStreamUrl(): string {
+    return '/api/health/stream'
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2495,5 +2688,148 @@ export type {
   ToggleTriggerRequest,
   RefreshViewRequest,
 }
+
+// ── Feature-30: Cron Job types ──
+export interface CronAlertRule {
+  condition: 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | ''
+  threshold: number
+  webhook_url: string
+  message: string
+}
+
+export interface CronJobRun {
+  run_at: string
+  duration_ms: number
+  status: 'ok' | 'error' | 'alert'
+  output: string
+  error?: string
+}
+
+export interface CronJob {
+  id: string
+  name: string
+  conn_id: string
+  sql: string
+  interval_sec: number
+  enabled: boolean
+  alert_rule: CronAlertRule
+  dsn?: string
+  last_run: string
+  last_status: string
+  last_error: string
+  run_history: CronJobRun[]
+}
+
+// ── Feature-31: Audit Log ──────────────────────────────────────────────────
+
+export interface AuditEntry {
+  id: string
+  timestamp: string
+  actor_ip: string
+  user_agent: string
+  conn_id: string
+  db_name: string
+  schema: string
+  query_type: string
+  query_text: string
+  rows_affected: number
+  duration_ms: number
+  error: string
+  prev_hash: string
+  hash: string
+}
+
+export interface AuditVerifyResult {
+  ok: boolean
+  tampered_lines: number[]
+}
+
+// ── Feature-33: Playbook types ────────────────────────────────────────────
+
+export interface PlaybookVersionSnapshot {
+  version: number
+  query_snapshot: string
+  updated_at: string
+}
+
+export interface PlaybookParameter {
+  name: string
+  type?: string
+  default?: string
+}
+
+export interface PlaybookEntry {
+  id: string
+  slug: string
+  title: string
+  description?: string
+  tags: string[]
+  dialect?: string
+  query: string
+  parameters?: PlaybookParameter[]
+  author?: string
+  created_at: string
+  updated_at: string
+  version_history: PlaybookVersionSnapshot[]
+}
+
+// ── Feature-34: Table Annotation types ────────────────────────────────────
+
+export type AnnotationTargetType = 'table' | 'column' | 'connection'
+
+export interface Annotation {
+  id: string
+  target_type: AnnotationTargetType
+  connection_id: string
+  schema?: string
+  table?: string
+  column?: string
+  note: string
+  author?: string
+  pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
+// ── Feature-35: Connection Health types ────────────────────────────────────
+
+export type HealthStatus = 'green' | 'yellow' | 'red' | 'unknown'
+
+export interface HealthSample {
+  at: string
+  ms: number
+  ok: boolean
+}
+
+export interface ConnectionHealth {
+  connection_id: string
+  label?: string
+  status: HealthStatus
+  last_ping_ms: number
+  avg_ping_ms_1m: number
+  max_ping_ms_5m: number
+  consecutive_failures: number
+  samples: HealthSample[]
+  last_checked_at: string
+  total_checks: number
+  success_count: number
+}
+
+export interface HealthSummary {
+  healthy: number
+  degraded: number
+  down: number
+  unknown: number
+  total: number
+  total_checks: number
+  success_count: number
+  success_rate: number
+}
+
+export interface HealthPayload {
+  connections: ConnectionHealth[]
+  summary: HealthSummary
+}
+
 
 

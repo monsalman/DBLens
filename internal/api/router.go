@@ -22,6 +22,9 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	// Capture the true socket peer BEFORE RealIP rewrites r.RemoteAddr from the
+	// spoofable X-Forwarded-For header, so audit actor_ip is never attacker-chosen.
+	r.Use(CaptureTruePeer)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -51,6 +54,12 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 
 	// ── API routes FIRST (before catch-all) ──
 	api := chi.NewRouter()
+
+	// Apply audit middleware BEFORE routes (chi requirement)
+	if h.auditLogger != nil {
+		api.Use(AuditMiddleware(h.auditLogger))
+	}
+
 	api.Get("/profiles/global", h.ListGlobalProfiles)
 
 	api.Post("/tunnel/test", h.TestTunnelHandler)
@@ -138,6 +147,45 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Delete("/connections/{connId}/triggers/{schema}/{name}", h.DeleteTrigger)
 	api.Get("/connections/{connId}/views", h.GetViews)
 	api.Post("/connections/{connId}/views/refresh", h.RefreshView)
+
+	// ── Feature-30: Scheduled SQL Cron Jobs & Database Heartbeat Alerts ──
+	api.Get("/cron/jobs", h.ListCronJobs)
+	api.Post("/cron/jobs", h.CreateCronJob)
+	api.Put("/cron/jobs/{id}", h.UpdateCronJob)
+	api.Delete("/cron/jobs/{id}", h.DeleteCronJob)
+	api.Post("/cron/jobs/{id}/run", h.RunCronJobNow)
+	api.Get("/cron/jobs/{id}/history", h.GetCronJobHistory)
+
+	// ── Feature-31: Immutable Query Audit Log & Compliance Trail ──
+	api.Get("/audit/entries", h.ListAuditLog)
+	api.Get("/audit/verify", h.VerifyAuditChain)
+	api.Get("/audit/export.csv", h.ExportAuditCSV)
+
+	// ── Feature-32: Live Table Feed & WAL Change Stream Viewer ──
+	api.Get("/connections/{connId}/live-feed", h.LiveTableFeed)
+	api.Get("/live-feed/status", h.LiveFeedStatus)
+
+	// ── Feature-33: Shareable Query Library & Team Playbook ──
+	api.Get("/playbook/entries", h.PlaybookList)
+	api.Post("/playbook/entries", h.PlaybookCreate)
+	api.Get("/playbook/entries/{id}", h.PlaybookGet)
+	api.Put("/playbook/entries/{id}", h.PlaybookUpdate)
+	api.Delete("/playbook/entries/{id}", h.PlaybookDelete)
+	api.Get("/playbook/export.json", h.PlaybookExportJSON)
+	api.Get("/playbook/export.md", h.PlaybookExportMD)
+	api.Post("/playbook/import", h.PlaybookImport)
+	api.Get("/playbook/entries/{id}/share", h.PlaybookShare)
+
+	// ── Feature-34: Database Table Annotations & Collaborative Notes ──
+	api.Get("/annotations", h.AnnotationsList)
+	api.Post("/annotations", h.AnnotationCreate)
+	api.Put("/annotations/{id}", h.AnnotationUpdate)
+	api.Delete("/annotations/{id}", h.AnnotationDelete)
+	api.Get("/annotations/export.md", h.AnnotationsExportMD)
+
+	// ── Feature-35: Connection Health Dashboard & Latency Monitor ──
+	api.Get("/health/connections", h.HealthConnections)
+	api.Get("/health/stream", h.HealthStream)
 
 	r.Mount("/api", api)
 

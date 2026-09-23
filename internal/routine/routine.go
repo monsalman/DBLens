@@ -37,9 +37,9 @@ type TriggerItem struct {
 	Name        string `json:"name"`
 	TableSchema string `json:"tableSchema"`
 	TableName   string `json:"tableName"`
-	Timing      string `json:"timing"`      // "BEFORE", "AFTER", "INSTEAD OF"
-	Event       string `json:"event"`       // "INSERT", "UPDATE", "DELETE", "TRUNCATE"
-	Statement   string `json:"statement"`   // SQL body/definition
+	Timing      string `json:"timing"`    // "BEFORE", "AFTER", "INSTEAD OF"
+	Event       string `json:"event"`     // "INSERT", "UPDATE", "DELETE", "TRUNCATE"
+	Statement   string `json:"statement"` // SQL body/definition
 	Enabled     bool   `json:"enabled"`
 	Orientation string `json:"orientation"` // "ROW", "STATEMENT"
 }

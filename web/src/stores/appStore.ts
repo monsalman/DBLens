@@ -105,6 +105,8 @@ interface AppState {
   routineStudioInitialTab?: 'routines' | 'triggers' | 'views'
   openRoutineStudio: (tab?: 'routines' | 'triggers' | 'views') => void
   closeRoutineStudio: () => void
+  isCronStudioOpen: boolean
+  setIsCronStudioOpen: (open: boolean) => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -133,6 +135,24 @@ interface AppState {
   // Command Palette
   isCommandPaletteOpen: boolean
   setCommandPaletteOpen: (open: boolean) => void
+
+  // Audit Log
+  isAuditLogOpen: boolean
+  setIsAuditLogOpen: (open: boolean) => void
+
+  // Feature-33: Playbook
+  isPlaybookOpen: boolean
+  setIsPlaybookOpen: (open: boolean) => void
+
+  // Feature-35: Connection Health Dashboard
+  isHealthOpen: boolean
+  setIsHealthOpen: (open: boolean) => void
+
+  // Live Feed (Feature-32)
+  isLiveFeedOpen: boolean
+  liveFeedConfig: { connId: string; schema: string; table: string } | null
+  openLiveFeed: (connId: string, schema: string, table: string) => void
+  closeLiveFeed: () => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -353,6 +373,8 @@ export const useAppStore = create<AppState>()(
           routineStudioInitialTab: tab,
         }),
       closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
+      isCronStudioOpen: false,
+      setIsCronStudioOpen: (isCronStudioOpen) => set({ isCronStudioOpen }),
 
       peekDrawer: {
         isOpen: false,
@@ -419,6 +441,21 @@ export const useAppStore = create<AppState>()(
 
       isCommandPaletteOpen: false,
       setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
+
+      isAuditLogOpen: false,
+      setIsAuditLogOpen: (isAuditLogOpen) => set({ isAuditLogOpen }),
+
+      isPlaybookOpen: false,
+      setIsPlaybookOpen: (isPlaybookOpen) => set({ isPlaybookOpen }),
+
+      isHealthOpen: false,
+      setIsHealthOpen: (isHealthOpen) => set({ isHealthOpen }),
+
+      isLiveFeedOpen: false,
+      liveFeedConfig: null,
+      openLiveFeed: (connId, schema, table) =>
+        set({ isLiveFeedOpen: true, liveFeedConfig: { connId, schema, table } }),
+      closeLiveFeed: () => set({ isLiveFeedOpen: false, liveFeedConfig: null }),
     }),
     {
       name: 'dblens-storage',

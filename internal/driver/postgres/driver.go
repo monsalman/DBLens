@@ -1252,6 +1252,3 @@ func (p *PostgresDriver) InspectHealth(ctx context.Context) (*types.HealthReport
 
 	return report, nil
 }
-
-
-

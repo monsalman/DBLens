@@ -20,6 +20,11 @@ import { WebhookModal } from './features/webhook/WebhookModal'
 import { FederationModal } from './features/federation/FederationModal'
 import { MigrationHubModal } from './features/migration/MigrationHubModal'
 import { RoutineStudioModal } from './features/routine/RoutineStudioModal'
+import { CronStudio } from './features/cron/CronStudio'
+import { AuditLogPanel } from './features/audit/AuditLogPanel'
+import { PlaybookPanel } from './features/playbook/PlaybookPanel'
+import { HealthDashboard } from './features/health/HealthDashboard'
+import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -28,6 +33,23 @@ import { Monitor, Moon, Sun, Database, Zap, Shield, GitBranch } from 'lucide-rea
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 1000 * 30 } }
 })
+
+// Global Live Feed drawer — driven by appStore (Feature-32)
+function GlobalLiveFeedDrawer() {
+  const isOpen = useAppStore((s) => s.isLiveFeedOpen)
+  const config = useAppStore((s) => s.liveFeedConfig)
+  const close = useAppStore((s) => s.closeLiveFeed)
+  if (!isOpen || !config) return null
+  return (
+    <LiveFeedDrawer
+      isOpen={isOpen}
+      onClose={close}
+      connId={config.connId}
+      schema={config.schema}
+      table={config.table}
+    />
+  )
+}
 
 export function App() {
   const [isDark, setIsDark] = useState(() => {
@@ -64,6 +86,12 @@ export function App() {
   const [editingConfig, setEditingConfig] = useState<ConnectionConfig | null>(null)
   const activeTab = useAppStore((s) => s.activeTab)
   const setActiveTab = useAppStore((s) => s.setActiveTab)
+  const isCronStudioOpen = useAppStore((s) => s.isCronStudioOpen)
+  const setIsCronStudioOpen = useAppStore((s) => s.setIsCronStudioOpen)
+  const isPlaybookOpen = useAppStore((s) => s.isPlaybookOpen)
+  const setIsPlaybookOpen = useAppStore((s) => s.setIsPlaybookOpen)
+  const isHealthOpen = useAppStore((s) => s.isHealthOpen)
+  const setIsHealthOpen = useAppStore((s) => s.setIsHealthOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -350,6 +378,14 @@ export function App() {
       <FederationModal />
       <MigrationHubModal />
       <RoutineStudioModal />
+      <CronStudio
+        isOpen={isCronStudioOpen}
+        onClose={() => setIsCronStudioOpen(false)}
+      />
+      <AuditLogPanel />
+      <PlaybookPanel isOpen={isPlaybookOpen} onClose={() => setIsPlaybookOpen(false)} />
+      <HealthDashboard isOpen={isHealthOpen} onClose={() => setIsHealthOpen(false)} />
+      <GlobalLiveFeedDrawer />
     </QueryClientProvider>
   )
 }

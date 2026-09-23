@@ -157,6 +157,28 @@ func (m *Manager) GetByDSNWithTunnel(dsn string, tunnelCfg *tunnel.SSHTunnelConf
 	return newEntry, nil
 }
 
+// PooledConn is a snapshot of one live pool entry, used by background monitors
+// (e.g. the connection health prober) that must enumerate what is already open.
+type PooledConn struct {
+	Driver types.Driver
+	DSN    string
+}
+
+// PooledConnections lists every open pool entry. It never dials: the result
+// reflects only connections the manager already holds (empty when none).
+func (m *Manager) PooledConnections() []PooledConn {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PooledConn, 0, len(m.pools))
+	for _, e := range m.pools {
+		if e == nil || e.Driver == nil {
+			continue
+		}
+		out = append(out, PooledConn{Driver: e.Driver, DSN: e.DSN})
+	}
+	return out
+}
+
 // GlobalProfiles returns server-seeded connections (DBLENS_CONNECTIONS only)
 // These are the only "shared" profiles that appear in the UI when configured.
 func (m *Manager) GlobalProfiles() []map[string]string {

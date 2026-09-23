@@ -63,7 +63,11 @@ func TestBackendFlow(t *testing.T) {
 		t.Fatalf("expected 1 row, got %d", len(qRes.Rows))
 	}
 
-	handler := api.NewHandler(mgr)
+	handler, err := api.NewHandler(mgr)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	t.Cleanup(handler.Shutdown)
 	router := api.SetupRouter(handler, api.RouterConfig{})
 
 	// Test connection test endpoint (POST /api/connections/test) - Success

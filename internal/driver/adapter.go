@@ -37,4 +37,3 @@ type TableStorageStat = types.TableStorageStat
 type UnusedIndexStat = types.UnusedIndexStat
 type RemediationAction = types.RemediationAction
 type HealthReport = types.HealthReport
-
