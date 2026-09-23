@@ -61,21 +61,20 @@ func maskDollarQuotes(sql string) string {
 
 // MaskCommentsAndLiterals replaces comments and string literals with whitespace
 // so textual reference scanning does not match occurrences inside literals or comments.
+// PL/pgSQL function and procedure bodies (dollar quotes) are kept intact so routine bodies remain searchable.
 func MaskCommentsAndLiterals(sql string) string {
 	if sql == "" {
 		return ""
 	}
-	// 1. Dollar quoted strings (Postgres)
-	cleaned := maskDollarQuotes(sql)
-	// 2. Multi-line comments
-	cleaned = multiLineCommentRegex.ReplaceAllStringFunc(cleaned, func(m string) string {
+	// 1. Multi-line comments
+	cleaned := multiLineCommentRegex.ReplaceAllStringFunc(sql, func(m string) string {
 		return strings.Repeat(" ", len(m))
 	})
-	// 3. Single-line comments
+	// 2. Single-line comments
 	cleaned = singleLineCommentRegex.ReplaceAllStringFunc(cleaned, func(m string) string {
 		return strings.Repeat(" ", len(m))
 	})
-	// 4. String literals
+	// 3. String literals
 	cleaned = stringLiteralRegex.ReplaceAllStringFunc(cleaned, func(m string) string {
 		return strings.Repeat(" ", len(m))
 	})
@@ -159,12 +158,15 @@ func AnalyzeImpact(ctx context.Context, d types.Driver, req ImpactRequest) (*Imp
 		Kind:         req.ObjectType,
 		Schema:       req.Schema,
 		Name:         req.Object,
+		TableName:    req.Object,
 		RefKind:      "target",
 		Detail:       fmt.Sprintf("Target %s for impact analysis", req.ObjectType),
 		DropBehavior: "RESTRICT",
 	}
 	if req.Column != "" && req.ObjectType == "column" {
 		rootNode.Name = req.Column
+		rootNode.TableName = req.Object
+		rootNode.ColumnName = req.Column
 		rootNode.Detail = fmt.Sprintf("Target column %s on table %s", req.Column, req.Object)
 	}
 
@@ -405,7 +407,7 @@ func resolveSQLiteDependencies(ctx context.Context, d types.Driver, schema, targ
 
 	// 4. Indexes (if column analysis)
 	if targetCol != "" {
-		idxRes, err := d.ExecuteRaw(ctx, fmt.Sprintf("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = %q AND sql IS NOT NULL", targetTable))
+		idxRes, err := d.ExecuteRaw(ctx, "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL", targetTable)
 		if err == nil && idxRes != nil {
 			colIdx := buildColMap(idxRes.Columns)
 			for _, row := range idxRes.Rows {
@@ -418,6 +420,8 @@ func resolveSQLiteDependencies(ctx context.Context, d types.Driver, schema, targ
 						Kind:         "index",
 						Schema:       schema,
 						Name:         idxName,
+						TableName:    targetTable,
+						ColumnName:   targetCol,
 						RefKind:      "catalog_index",
 						Detail:       fmt.Sprintf("Index on column %s", targetCol),
 						DropBehavior: "NONE",
@@ -492,6 +496,8 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 				Kind:         "foreign_key",
 				Schema:       tblSchema,
 				Name:         cName,
+				TableName:    tblName,
+				ColumnName:   fromCol,
 				RefKind:      "catalog_fk",
 				Detail:       fmt.Sprintf("%s.%s(%s) -> %s(%s)", tblSchema, tblName, fromCol, targetTable, refCol),
 				DropBehavior: delRule,
@@ -508,6 +514,7 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 				Kind:         "table",
 				Schema:       tblSchema,
 				Name:         tblName,
+				TableName:    tblName,
 				RefKind:      "catalog_fk",
 				Detail:       fmt.Sprintf("Referencing table via FK %s", cName),
 				DropBehavior: "RESTRICT",
@@ -673,8 +680,14 @@ JOIN information_schema.referential_constraints rc
     ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
     AND kcu.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
 WHERE kcu.REFERENCED_TABLE_NAME = ?`
+	var fkArgs []interface{}
+	fkArgs = append(fkArgs, targetTable)
+	if schema != "" {
+		fkQuery += " AND kcu.REFERENCED_TABLE_SCHEMA = ?"
+		fkArgs = append(fkArgs, schema)
+	}
 
-	fkRes, err := d.ExecuteRaw(ctx, fkQuery, targetTable)
+	fkRes, err := d.ExecuteRaw(ctx, fkQuery, fkArgs...)
 	if err == nil && fkRes != nil {
 		colIdx := buildColMap(fkRes.Columns)
 		for _, row := range fkRes.Rows {
@@ -695,6 +708,8 @@ WHERE kcu.REFERENCED_TABLE_NAME = ?`
 				Kind:         "foreign_key",
 				Schema:       tblSchema,
 				Name:         cName,
+				TableName:    tblName,
+				ColumnName:   fromCol,
 				RefKind:      "catalog_fk",
 				Detail:       fmt.Sprintf("%s.%s(%s) -> %s(%s)", tblSchema, tblName, fromCol, targetTable, refCol),
 				DropBehavior: delRule,
@@ -711,6 +726,7 @@ WHERE kcu.REFERENCED_TABLE_NAME = ?`
 				Kind:         "table",
 				Schema:       tblSchema,
 				Name:         tblName,
+				TableName:    tblName,
 				RefKind:      "catalog_fk",
 				Detail:       fmt.Sprintf("Referencing table via FK %s", cName),
 				DropBehavior: "RESTRICT",

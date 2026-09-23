@@ -219,10 +219,13 @@ export function buildPivot(
   }
 }
 
-// Escape cell value for CSV
-function escapeCSV(val: unknown): string {
+// Escape cell value for CSV and sanitize formula injection
+export function escapeCSV(val: unknown): string {
   if (val === null || val === undefined) return ''
-  const s = String(val)
+  let s = String(val)
+  if (s.startsWith('=') || s.startsWith('+') || s.startsWith('-') || s.startsWith('@')) {
+    s = `'${s}`
+  }
   if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`
   }

@@ -37,6 +37,10 @@ import type {
   RenamePlan,
   RenameRequest,
 } from '../features/impact/impactHelper'
+import type {
+  PushdownRequest,
+  PushdownResult,
+} from '../features/pivot/pivotHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2744,6 +2748,47 @@ export const api = {
       throw new Error(err || `Failed to export impact report (${res.status})`)
     }
     return await res.text()
+  },
+
+  async pivotPushdown(
+    connId: string | undefined,
+    req: PushdownRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<PushdownResult> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const endpoint = connId
+      ? `/api/connections/${connId}/pivot/pushdown`
+      : '/api/pivot/pushdown'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Pushdown request failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async pivotRun(
+    connId: string,
+    req: PushdownRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<any> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/pivot/run`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Server query failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
   },
 }
 

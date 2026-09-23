@@ -38,6 +38,7 @@ func (r *PivotTransformRequest) toPivotRequest() pivot.PivotRequest {
 // PivotTransformHandler transforms raw rows into a 2D PivotMatrix.
 // POST /api/pivot/transform
 func (h *Handler) PivotTransformHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	var req PivotTransformRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
@@ -105,8 +106,8 @@ func (h *Handler) PivotRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) && IsNonSelectSQL(sql) {
-		sendError(w, http.StatusForbidden, "Connection is read-only. Safe mode blocked non-select query.")
+	if IsNonSelectSQL(sql) {
+		sendError(w, http.StatusForbidden, "Non-SELECT queries are not permitted in pivot run.")
 		return
 	}
 

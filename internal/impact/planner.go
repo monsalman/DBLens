@@ -2,11 +2,26 @@ package impact
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/dblens/dblens/internal/driver/types"
 )
+
+var reValidIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+func stripControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r >= 32 && r != 127 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 func quoteIdent(dialect, ident string) string {
 	switch normalizeDialect(dialect) {
@@ -27,6 +42,9 @@ func qualifyName(dialect, schema, name string) string {
 
 // BuildRemediationPlan generates an ordered safe drop plan with reversible UP/DOWN scripts.
 func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGraph, cascade bool) (*RemediationPlan, error) {
+	if d == nil {
+		return nil, errors.New("driver is required")
+	}
 	if graph == nil {
 		return nil, fmt.Errorf("impact graph is nil")
 	}
@@ -166,15 +184,28 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 
 	switch target.Kind {
 	case "column":
-		targetSQL = fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", qualifyName(dialect, target.Schema, target.Name), quoteIdent(dialect, target.Detail))
-		// In case Name is table and Detail has column or vice-versa
-		if strings.Contains(target.ID, ".") {
+		tableName := target.TableName
+		colName := target.ColumnName
+		if tableName == "" && colName == "" {
 			parts := strings.Split(target.ID, ".")
 			if len(parts) == 3 {
-				targetSQL = fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", qualifyName(dialect, parts[0], parts[1]), quoteIdent(dialect, parts[2]))
+				tableName = parts[1]
+				colName = parts[2]
+			} else if len(parts) == 2 {
+				tableName = parts[0]
+				colName = parts[1]
+			} else {
+				tableName = target.Name
+				colName = target.Detail
 			}
+		} else if tableName == "" {
+			tableName = target.Name
+		} else if colName == "" {
+			colName = target.Name
 		}
-		targetDesc = fmt.Sprintf("Permanently drop column %s and destroy stored column values", target.Name)
+
+		targetSQL = fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;", qualifyName(dialect, target.Schema, tableName), quoteIdent(dialect, colName))
+		targetDesc = fmt.Sprintf("Permanently drop column %s and destroy stored column values", colName)
 		isIrreversible = true
 
 	case "table":
@@ -223,7 +254,7 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 	}
 
 	for _, s := range steps {
-		upLines = append(upLines, fmt.Sprintf("-- Step %d: %s (%s)", s.Order, s.Description, s.ObjectKind))
+		upLines = append(upLines, fmt.Sprintf("-- Step %d: %s (%s)", s.Order, stripControlChars(s.Description), stripControlChars(s.ObjectKind)))
 		upLines = append(upLines, s.SQL)
 	}
 
@@ -239,7 +270,26 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 
 	downLines = append(downLines, "-- REVERT TARGET OBJECT (Recreate from backup or schema definition)")
 	if target.Kind == "column" {
-		downLines = append(downLines, fmt.Sprintf("-- ALTER TABLE %s ADD COLUMN %s <DATA_TYPE>;", qualifyName(dialect, target.Schema, target.Name), quoteIdent(dialect, target.Name)))
+		tableName := target.TableName
+		colName := target.ColumnName
+		if tableName == "" && colName == "" {
+			parts := strings.Split(target.ID, ".")
+			if len(parts) == 3 {
+				tableName = parts[1]
+				colName = parts[2]
+			} else if len(parts) == 2 {
+				tableName = parts[0]
+				colName = parts[1]
+			} else {
+				tableName = target.Name
+				colName = target.Detail
+			}
+		} else if tableName == "" {
+			tableName = target.Name
+		} else if colName == "" {
+			colName = target.Name
+		}
+		downLines = append(downLines, fmt.Sprintf("-- ALTER TABLE %s ADD COLUMN %s <DATA_TYPE>;", qualifyName(dialect, target.Schema, tableName), quoteIdent(dialect, colName)))
 	} else if target.Kind == "table" {
 		downLines = append(downLines, fmt.Sprintf("-- Recreate table %s and restore data from backup before proceeding.", qualifyName(dialect, target.Schema, target.Name)))
 	}
@@ -247,7 +297,7 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 	// Recreate FKs
 	for i := len(fkNodes) - 1; i >= 0; i-- {
 		fk := fkNodes[i]
-		downLines = append(downLines, fmt.Sprintf("-- Recreate foreign key: %s (%s)", fk.Name, fk.Detail))
+		downLines = append(downLines, fmt.Sprintf("-- Recreate foreign key: %s (%s)", stripControlChars(fk.Name), stripControlChars(fk.Detail)))
 	}
 
 	// Recreate Views
@@ -259,7 +309,7 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 	// Recreate Triggers
 	for i := len(triggerNodes) - 1; i >= 0; i-- {
 		tr := triggerNodes[i]
-		downLines = append(downLines, fmt.Sprintf("-- Recreate trigger: %s", tr.Name))
+		downLines = append(downLines, fmt.Sprintf("-- Recreate trigger: %s", stripControlChars(tr.Name)))
 	}
 
 	if dialect == "postgres" || dialect == "sqlite" {
@@ -280,11 +330,14 @@ func BuildRemediationPlan(ctx context.Context, d types.Driver, graph *ImpactGrap
 
 // BuildRenamePlan builds DDL and steps to rename an object or column and update dependents.
 func BuildRenamePlan(ctx context.Context, d types.Driver, graph *ImpactGraph, req RenameRequest) (*RenamePlan, error) {
+	if d == nil {
+		return nil, errors.New("driver is required")
+	}
 	if graph == nil {
 		return nil, fmt.Errorf("impact graph is nil")
 	}
-	if req.NewName == "" {
-		return nil, fmt.Errorf("new_name cannot be empty")
+	if strings.ContainsAny(req.NewName, "\r\n") || !reValidIdentifier.MatchString(req.NewName) {
+		return nil, errors.New("new_name must only contain alphanumeric characters and underscores, and cannot contain newlines")
 	}
 
 	dialect := normalizeDialect(d.Dialect())
@@ -304,9 +357,15 @@ func BuildRenamePlan(ctx context.Context, d types.Driver, graph *ImpactGraph, re
 	if req.ObjectType == "column" || req.Column != "" {
 		colName := req.Column
 		if colName == "" {
-			colName = target.Name
+			colName = target.ColumnName
+			if colName == "" {
+				colName = target.Name
+			}
 		}
 		tableName := req.Object
+		if tableName == "" {
+			tableName = target.TableName
+		}
 
 		renameSQL := ""
 		revertSQL := ""
@@ -355,8 +414,8 @@ func BuildRenamePlan(ctx context.Context, d types.Driver, graph *ImpactGraph, re
 					Action:       "ALTER",
 					ObjectKind:   "view",
 					ObjectName:   n.Name,
-					SQL:          fmt.Sprintf("-- Recreate view %s with new column reference %s", n.Name, req.NewName),
-					Description:  fmt.Sprintf("Update view %s referencing renamed column", n.Name),
+					SQL:          fmt.Sprintf("-- Recreate view %s with new column reference %s", stripControlChars(n.Name), stripControlChars(req.NewName)),
+					Description:  fmt.Sprintf("Update view %s referencing renamed column", stripControlChars(n.Name)),
 					Irreversible: false,
 				})
 				stepOrder++
@@ -411,8 +470,8 @@ func BuildRenamePlan(ctx context.Context, d types.Driver, graph *ImpactGraph, re
 					Action:       "ALTER",
 					ObjectKind:   "view",
 					ObjectName:   n.Name,
-					SQL:          fmt.Sprintf("-- Recreate view %s with updated reference to %s", n.Name, req.NewName),
-					Description:  fmt.Sprintf("Update view %s referencing renamed table", n.Name),
+					SQL:          fmt.Sprintf("-- Recreate view %s with updated reference to %s", stripControlChars(n.Name), stripControlChars(req.NewName)),
+					Description:  fmt.Sprintf("Update view %s referencing renamed table", stripControlChars(n.Name)),
 					Irreversible: false,
 				})
 				stepOrder++

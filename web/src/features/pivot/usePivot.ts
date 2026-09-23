@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
+import { api } from '../../lib/api'
 import {
   buildPivot,
   exportPivotToCSV,
@@ -123,23 +124,8 @@ export function usePivot({
           colValues: matrix.colHeaders,
         }
 
-        const endpoint = targetConnId
-          ? `/api/connections/${targetConnId}/pivot/pushdown`
-          : '/api/pivot/pushdown'
-
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.error || `Pushdown request failed (${res.status})`)
-        }
-
-        const json = await res.json()
-        const resultSQL = json.data?.sql || json.sql
+        const res = await api.pivotPushdown(targetConnId, payload)
+        const resultSQL = res.sql
         setPushdownSQL(resultSQL)
         return resultSQL
       } catch (err: any) {
@@ -184,19 +170,7 @@ export function usePivot({
           colValues: matrix.colHeaders,
         }
 
-        const res = await fetch(`/api/connections/${targetConnId}/pivot/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}))
-          throw new Error(err.error || `Server query failed (${res.status})`)
-        }
-
-        const json = await res.json()
-        const runData = json.data || json
+        const runData = await api.pivotRun(targetConnId, payload)
         setPushdownResult(runData)
         if (runData.sql) {
           setPushdownSQL(runData.sql)

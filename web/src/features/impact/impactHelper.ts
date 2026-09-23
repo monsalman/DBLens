@@ -3,6 +3,8 @@ export interface ImpactNode {
   kind: 'table' | 'column' | 'view' | 'routine' | 'trigger' | 'foreign_key' | 'index' | string
   schema: string
   name: string
+  table_name?: string
+  column_name?: string
   ref_kind: 'catalog_fk' | 'catalog_view' | 'catalog_routine' | 'trigger_target' | 'textual_reference' | 'target' | string
   detail: string
   drop_behavior: string

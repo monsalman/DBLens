@@ -3,7 +3,14 @@ package pivot
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+)
+
+var (
+	reBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	reLineComment  = regexp.MustCompile(`(?m)(?:--|#).*$`)
+	reCteMutation  = regexp.MustCompile(`(?i)\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b`)
 )
 
 // normalizeDialect standardizes dialect name to postgres, mysql, or sqlite.
@@ -31,15 +38,103 @@ func quoteIdent(name, dialect string) string {
 }
 
 // escapeLiteral escapes and wraps string literals in single quotes.
-func escapeLiteral(val string) string {
+func escapeLiteral(val, dialect string) string {
+	if normalizeDialect(dialect) == "mysql" {
+		val = strings.ReplaceAll(val, `\`, `\\`)
+	}
 	return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+}
+
+// hasUnquotedSemicolon checks if sql contains a semicolon outside quotes and comments.
+func hasUnquotedSemicolon(sql string) bool {
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	chars := []rune(sql)
+	n := len(chars)
+
+	for i := 0; i < n; i++ {
+		ch := chars[i]
+		if ch == '\'' && !inDouble && !inBacktick {
+			if inSingle && i+1 < n && chars[i+1] == '\'' {
+				i++
+				continue
+			}
+			inSingle = !inSingle
+		} else if ch == '"' && !inSingle && !inBacktick {
+			if inDouble && i+1 < n && chars[i+1] == '"' {
+				i++
+				continue
+			}
+			inDouble = !inDouble
+		} else if ch == '`' && !inSingle && !inDouble {
+			inBacktick = !inBacktick
+		} else if !inSingle && !inDouble && !inBacktick {
+			if ch == '-' && i+1 < n && chars[i+1] == '-' {
+				for i < n && chars[i] != '\n' {
+					i++
+				}
+				continue
+			}
+			if ch == '#' {
+				for i < n && chars[i] != '\n' {
+					i++
+				}
+				continue
+			}
+			if ch == '/' && i+1 < n && chars[i+1] == '*' {
+				i += 2
+				for i+1 < n && !(chars[i] == '*' && chars[i+1] == '/') {
+					i++
+				}
+				i++
+				continue
+			}
+			if ch == ';' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSelectOrWith(sql string) bool {
+	cleaned := reBlockComment.ReplaceAllString(sql, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	cleaned = strings.TrimSpace(cleaned)
+	for strings.HasPrefix(cleaned, "(") && strings.HasSuffix(cleaned, ")") {
+		cleaned = strings.TrimSpace(cleaned[1 : len(cleaned)-1])
+	}
+	fields := strings.Fields(cleaned)
+	if len(fields) == 0 {
+		return false
+	}
+	firstWord := strings.ToUpper(fields[0])
+	if firstWord != "SELECT" && firstWord != "WITH" {
+		return false
+	}
+	if firstWord == "WITH" && reCteMutation.MatchString(cleaned) {
+		return false
+	}
+	return true
 }
 
 // GeneratePushdownSQL builds a SQL statement pushing aggregation and pivoting into the DB engine.
 func GeneratePushdownSQL(req PushdownRequest) (string, error) {
-	q := strings.TrimRight(strings.TrimSpace(req.Query), ";")
+	q := strings.TrimSpace(req.Query)
+	for strings.HasSuffix(q, ";") {
+		q = strings.TrimSpace(strings.TrimSuffix(q, ";"))
+	}
 	if q == "" {
 		return "", errors.New("query is required for pushdown")
+	}
+
+	if hasUnquotedSemicolon(q) {
+		return "", errors.New("query cannot contain multiple statements or unquoted semicolons")
+	}
+
+	if !isSelectOrWith(q) {
+		return "", errors.New("query must be a SELECT or WITH statement")
 	}
 
 	colField := strings.TrimSpace(req.ColField)
@@ -86,7 +181,7 @@ func GeneratePushdownSQL(req PushdownRequest) (string, error) {
 
 	for _, cv := range req.ColValues {
 		alias := quoteIdent(cv, dialect)
-		colLit := escapeLiteral(cv)
+		colLit := escapeLiteral(cv, dialect)
 
 		var colSql string
 		if dialect == "postgres" {

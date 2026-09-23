@@ -15,6 +15,8 @@ type ImpactNode struct {
 	Kind         string `json:"kind"` // "table", "column", "view", "routine", "trigger", "foreign_key", "index"
 	Schema       string `json:"schema"`
 	Name         string `json:"name"`
+	TableName    string `json:"table_name,omitempty"`
+	ColumnName   string `json:"column_name,omitempty"`
 	RefKind      string `json:"ref_kind"`      // "catalog_fk", "catalog_view", "catalog_routine", "trigger_target", "textual_reference"
 	Detail       string `json:"detail"`        // e.g. "references users(id)"
 	DropBehavior string `json:"drop_behavior"` // "RESTRICT", "CASCADE", "NONE"

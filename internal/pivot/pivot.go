@@ -202,21 +202,25 @@ func TransformRows(rows []map[string]interface{}, req PivotRequest) (*PivotMatri
 		}, nil
 	}
 
+	if req.ColLimit <= 0 || req.ColLimit > 500 {
+		req.ColLimit = 100
+	}
+
 	// 1. Collect distinct column headers
 	var colHeaders []string
 	seenCols := make(map[string]bool)
+	var truncatedAt int
+
 	for _, row := range rows {
 		cv := formatVal(row[colField])
 		if !seenCols[cv] {
-			seenCols[cv] = true
-			colHeaders = append(colHeaders, cv)
+			if len(colHeaders) < req.ColLimit {
+				seenCols[cv] = true
+				colHeaders = append(colHeaders, cv)
+			} else {
+				truncatedAt = req.ColLimit
+			}
 		}
-	}
-
-	var truncatedAt int
-	if req.ColLimit > 0 && len(colHeaders) > req.ColLimit {
-		truncatedAt = req.ColLimit
-		colHeaders = colHeaders[:req.ColLimit]
 	}
 
 	colIdxMap := make(map[string]int, len(colHeaders))
@@ -336,6 +340,18 @@ func TransformRows(rows []map[string]interface{}, req PivotRequest) (*PivotMatri
 	}, nil
 }
 
+// sanitizeCSVCell prefixes spreadsheet formula characters with a single quote to prevent CSV injection.
+func sanitizeCSVCell(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@':
+		return "'" + v
+	}
+	return v
+}
+
 // ExportCSV formats a PivotMatrix into standard RFC 4180 CSV text.
 func ExportCSV(matrix *PivotMatrix, rowFieldNames []string) (string, error) {
 	if matrix == nil {
@@ -359,12 +375,14 @@ func ExportCSV(matrix *PivotMatrix, rowFieldNames []string) (string, error) {
 	var header []string
 	for i := 0; i < numRowFields; i++ {
 		if i < len(rowFieldNames) && rowFieldNames[i] != "" {
-			header = append(header, rowFieldNames[i])
+			header = append(header, sanitizeCSVCell(rowFieldNames[i]))
 		} else {
 			header = append(header, fmt.Sprintf("Row_%d", i+1))
 		}
 	}
-	header = append(header, matrix.ColHeaders...)
+	for _, ch := range matrix.ColHeaders {
+		header = append(header, sanitizeCSVCell(ch))
+	}
 	if hasRowTotals {
 		header = append(header, "Total")
 	}
@@ -376,7 +394,9 @@ func ExportCSV(matrix *PivotMatrix, rowFieldNames []string) (string, error) {
 	for r, cells := range matrix.Cells {
 		var row []string
 		if r < len(matrix.RowHeaders) {
-			row = append(row, matrix.RowHeaders[r]...)
+			for _, rh := range matrix.RowHeaders[r] {
+				row = append(row, sanitizeCSVCell(rh))
+			}
 		} else {
 			for i := 0; i < numRowFields; i++ {
 				row = append(row, "")
@@ -387,13 +407,13 @@ func ExportCSV(matrix *PivotMatrix, rowFieldNames []string) (string, error) {
 			if cell == nil {
 				row = append(row, "")
 			} else {
-				row = append(row, fmt.Sprint(cell))
+				row = append(row, sanitizeCSVCell(fmt.Sprint(cell)))
 			}
 		}
 
 		if hasRowTotals {
 			if r < len(matrix.RowTotals) && matrix.RowTotals[r] != nil {
-				row = append(row, fmt.Sprint(matrix.RowTotals[r]))
+				row = append(row, sanitizeCSVCell(fmt.Sprint(matrix.RowTotals[r])))
 			} else {
 				row = append(row, "")
 			}
@@ -418,12 +438,12 @@ func ExportCSV(matrix *PivotMatrix, rowFieldNames []string) (string, error) {
 			if ct == nil {
 				totalRow = append(totalRow, "")
 			} else {
-				totalRow = append(totalRow, fmt.Sprint(ct))
+				totalRow = append(totalRow, sanitizeCSVCell(fmt.Sprint(ct)))
 			}
 		}
 		if hasRowTotals {
 			if matrix.GrandTotal != nil {
-				totalRow = append(totalRow, fmt.Sprint(matrix.GrandTotal))
+				totalRow = append(totalRow, sanitizeCSVCell(fmt.Sprint(matrix.GrandTotal)))
 			} else {
 				totalRow = append(totalRow, "")
 			}
