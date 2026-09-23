@@ -211,6 +211,15 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/analyze/rules", h.GetAnalyzerRulesHandler)
 	api.Put("/analyze/rules", h.UpdateAnalyzerRulesHandler)
 
+	// ── Feature-39: Pivot & Cross-Tab Result Studio ─────────────────────
+	api.Post("/connections/{connId}/pivot/pushdown", h.PivotPushdownHandler)
+	api.Post("/connections/{connId}/pivot/run", h.PivotRunHandler)
+	api.Post("/connections/{connId}/pivot/export.csv", h.PivotExportCSVHandler)
+	api.Post("/connections/{connId}/pivot/export.md", h.PivotExportMDHandler)
+	api.Post("/pivot/transform", h.PivotTransformHandler)
+	api.Post("/pivot/export.csv", h.PivotExportCSVHandler)
+	api.Post("/pivot/export.md", h.PivotExportMDHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

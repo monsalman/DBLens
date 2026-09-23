@@ -31,6 +31,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Sliders,
+  Table,
 } from 'lucide-react'
 import type { EditorView } from '@codemirror/view'
 import { api } from '../../lib/api'
@@ -38,6 +39,7 @@ import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { ExplainPlanView } from './ExplainPlanView'
 import { SqlChartStudio } from './SqlChartStudio'
+import { PivotStudio } from '../pivot/PivotStudio'
 import { createSqlExtension } from '../../lib/sqlAutocomplete'
 import { extractQueryVariables, DBA_MAINTENANCE_SNIPPETS, type SqlSnippet } from './sqlVariableParser'
 import { sqlVariableHighlight } from './sqlVariableHighlight'
@@ -131,7 +133,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [tabExecuting, setTabExecuting] = useState<Record<string, boolean>>({})
   const [tabExplainResults, setTabExplainResults] = useState<Record<string, ExplainResult>>({})
   const [tabExplaining, setTabExplaining] = useState<Record<string, boolean>>({})
-  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain' | 'chart'>>({})
+  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain' | 'chart' | 'pivot'>>({})
 
   const currentResult = currentTab ? tabResults[currentTab.id] ?? null : null
   const isExecuting = Boolean(currentTab && tabExecuting[currentTab.id])
@@ -151,10 +153,21 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         e.preventDefault()
         setIsMaterializeOpen(true)
       }
+      if (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setTabActivePane((prev) => {
+          const tabId = currentTab?.id || ''
+          const cur = prev[tabId] ?? 'results'
+          return {
+            ...prev,
+            [tabId]: cur === 'pivot' ? 'results' : 'pivot',
+          }
+        })
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [currentTab?.id])
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -1221,10 +1234,35 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                   </span>
                 )}
               </button>
+
+              <button
+                role="tab"
+                aria-selected={activePane === 'pivot'}
+                onClick={() =>
+                  setTabActivePane((prev) => ({
+                    ...prev,
+                    [currentTab?.id || '']: 'pivot',
+                  }))
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs transition-colors ${
+                  activePane === 'pivot'
+                    ? 'bg-[var(--bg)] text-[var(--fg)] font-semibold shadow-xs border border-[var(--border)]'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                }`}
+                title="Pivot & Cross-Tab Studio (Alt+Shift+P)"
+              >
+                <Table className="w-3 h-3 text-purple-400" />
+                <span>Pivot</span>
+                {currentResult && !currentResult.error && (currentResult.rows?.length ?? 0) > 0 && (
+                  <span className="text-[10px] text-[var(--muted)] font-mono">
+                    ({currentResult.rows?.length})
+                  </span>
+                )}
+              </button>
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-[var(--muted)] font-mono">
-              {(activePane === 'results' || activePane === 'chart') && currentResult && (
+              {(activePane === 'results' || activePane === 'chart' || activePane === 'pivot') && currentResult && (
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {currentResult.durationMs}ms
@@ -1412,6 +1450,16 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         {/* Chart Studio Pane */}
         {activePane === 'chart' && (
           <SqlChartStudio result={currentResult} />
+        )}
+
+        {/* Pivot Studio Pane */}
+        {activePane === 'pivot' && (
+          <PivotStudio
+            result={currentResult}
+            connId={connId}
+            query={currentTab?.query}
+            dialect={currentDialect}
+          />
         )}
       </div>
 
