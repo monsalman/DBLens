@@ -194,6 +194,15 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/profile/export.md", h.ProfileExportMD)
 	api.Post("/connections/{connId}/profile/compare", h.ProfileCompare)
 
+	// ── Feature-37: Query Result Materialization & Scratch Table Workspace ──
+	api.Post("/connections/{connId}/materialize/preview", h.MaterializePreview)
+	api.Post("/connections/{connId}/materialize", h.MaterializeExecute)
+	api.Get("/connections/{connId}/materialize/scratch", h.ScratchList)
+	api.Delete("/connections/{connId}/materialize/scratch/{schema}/{table}", h.ScratchDelete)
+	api.Delete("/connections/{connId}/materialize/scratch/{table}", h.ScratchDelete)
+	api.Post("/connections/{connId}/materialize/scratch/promote", h.ScratchPromote)
+	api.Post("/connections/{connId}/materialize/scratch/expire", h.ScratchExpire)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

@@ -26,6 +26,7 @@ import (
 	"github.com/dblens/dblens/internal/dump"
 	"github.com/dblens/dblens/internal/healthmon"
 	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/materialize"
 	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
@@ -253,6 +254,7 @@ type Handler struct {
 	auditLogPath     string
 	playbookStore    *playbook.Store
 	annotationsStore *annotations.Store
+	scratchStore     *materialize.ScratchStore
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -339,6 +341,13 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 				return nil
 			}
 			return as
+		}(),
+		scratchStore: func() *materialize.ScratchStore {
+			ss, err := materialize.NewScratchStore(auditDir + "/scratch.json")
+			if err != nil {
+				return materialize.NewInMemoryScratchStore()
+			}
+			return ss
 		}(),
 	}
 	return h, nil
@@ -2733,4 +2742,11 @@ func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
 		"explanation": resp.Result,
 		"raw":         resp.Raw,
 	})
+}
+
+func (h *Handler) getScratchStore() *materialize.ScratchStore {
+	if h.scratchStore == nil {
+		h.scratchStore = materialize.NewInMemoryScratchStore()
+	}
+	return h.scratchStore
 }

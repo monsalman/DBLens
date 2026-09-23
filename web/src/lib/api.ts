@@ -18,6 +18,12 @@ import type {
   Suggestion as ProfileSuggestion,
   CompareResult as ProfileCompareResult,
 } from '../features/profile/profileHelper'
+import type {
+  MaterializeRequest,
+  MaterializePreview,
+  MaterializeResult,
+  ScratchTable,
+} from '../features/materialize/materializeHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2445,6 +2451,110 @@ export const api = {
     if (!res.ok) throw new Error(`Failed to export markdown (${res.status})`)
     return await res.text()
   },
+
+  async materializePreview(
+    connId: string,
+    req: MaterializeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaterializePreview> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to preview materialization (${res.status})`)
+    return json.data ?? json
+  },
+
+  async materializeExecute(
+    connId: string,
+    req: MaterializeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaterializeResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to execute materialization (${res.status})`)
+    return json.data ?? json
+  },
+
+  async getScratchTables(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ScratchTable[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to fetch scratch tables (${res.status})`)
+    return json.data ?? json ?? []
+  },
+
+  async deleteScratchTable(
+    connId: string,
+    schema: string,
+    table: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const path = schema
+      ? `/api/connections/${connId}/materialize/scratch/${encodeURIComponent(schema)}/${encodeURIComponent(table)}`
+      : `/api/connections/${connId}/materialize/scratch/${encodeURIComponent(table)}`
+    const res = await fetch(path, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to delete scratch table (${res.status})`)
+    return json
+  },
+
+  async promoteScratchTable(
+    connId: string,
+    schema: string,
+    table: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ migrationSql: string; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch/promote`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ schema, table }),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to promote scratch table (${res.status})`)
+    return json.data ?? json
+  },
+
+  async expireScratchTables(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ dropped: number; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch/expire`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to expire scratch tables (${res.status})`)
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2914,6 +3024,14 @@ export interface HealthPayload {
   connections: ConnectionHealth[]
   summary: HealthSummary
 }
+
+export type {
+  MaterializeMode,
+  MaterializeRequest,
+  MaterializePreview,
+  MaterializeResult,
+  ScratchTable,
+} from '../features/materialize/materializeHelper'
 
 
 

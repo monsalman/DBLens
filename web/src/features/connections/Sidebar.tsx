@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen, StickyNote, Activity } from 'lucide-react'
+import { Table2, Shield, GitBranch, Zap, Clock, ShieldCheck, BookOpen, StickyNote, Activity, Layers } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
 import { useAppStore } from '../../stores/appStore'
@@ -7,6 +7,9 @@ import { AnnotationPanel } from '../annotations/AnnotationPanel'
 import { HealthStatusDot } from '../health/HealthStatusDot'
 import { useHealth } from '../health/useHealth'
 import { findHealth } from '../health/healthHelper'
+import { useMaterialize } from '../materialize/useMaterialize'
+import { ScratchTableBadge } from '../materialize/ScratchTableBadge'
+import { ScratchTablePanel } from '../materialize/ScratchTablePanel'
 
 interface Props {
   connections: ConnectionConfig[]
@@ -32,6 +35,8 @@ export const Sidebar: React.FC<Props> = ({
   const [selectedDb, setSelectedDb] = useState<string>('')
   const [dbLoading, setDbLoading] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
+  const [showScratchpad, setShowScratchpad] = useState(false)
+  const { scratchTables } = useMaterialize(activeConnId, true)
   const { connections: healthConns } = useHealth(true)
 
   const loadTables = (connId: string, schema: string) => {
@@ -148,25 +153,51 @@ export const Sidebar: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Tables List / Schema Notes */}
+      {/* Tables List / Schema Notes / Scratchpad */}
       <div className="flex-1 overflow-y-auto p-2">
         <div className="flex items-center gap-1 mb-1">
           <label className="text-[10px] uppercase text-[var(--muted)] font-semibold tracking-wider ml-1">
-            {showNotes ? 'Schema Notes' : 'Tables'}
+            {showScratchpad ? 'Scratchpad' : showNotes ? 'Schema Notes' : 'Tables'}
           </label>
-          <button
-            onClick={() => setShowNotes(v => !v)}
-            title={showNotes ? 'Back to tables' : 'Open Schema Notes panel'}
-            className={`ml-auto p-0.5 rounded border transition-colors ${
-              showNotes
-                ? 'border-sky-500/40 bg-sky-500/15 text-sky-400'
-                : 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
-            }`}
-          >
-            <StickyNote className="w-3 h-3" />
-          </button>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => {
+                setShowScratchpad(v => !v)
+                if (!showScratchpad) setShowNotes(false)
+              }}
+              title={showScratchpad ? 'Back to tables' : 'Open Scratchpad Workspace'}
+              className={`p-0.5 rounded border flex items-center gap-1 transition-colors ${
+                showScratchpad
+                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-400'
+                  : 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+              }`}
+            >
+              <Layers className="w-3 h-3" />
+              <ScratchTableBadge count={scratchTables.length} />
+            </button>
+            <button
+              onClick={() => {
+                setShowNotes(v => !v)
+                if (!showNotes) setShowScratchpad(false)
+              }}
+              title={showNotes ? 'Back to tables' : 'Open Schema Notes panel'}
+              className={`p-0.5 rounded border transition-colors ${
+                showNotes
+                  ? 'border-sky-500/40 bg-sky-500/15 text-sky-400'
+                  : 'border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]'
+              }`}
+            >
+              <StickyNote className="w-3 h-3" />
+            </button>
+          </div>
         </div>
-        {showNotes ? (
+        {showScratchpad ? (
+          <ScratchTablePanel
+            connId={activeConnId}
+            onSelectTable={onSelectTable}
+            onClose={() => setShowScratchpad(false)}
+          />
+        ) : showNotes ? (
           <AnnotationPanel connId={activeConnId} schema={selectedSchema} table={selectedTable ?? undefined} />
         ) : (
           <>
@@ -188,6 +219,20 @@ export const Sidebar: React.FC<Props> = ({
 
       {/* Studio & Hub Triggers */}
       <div className="p-2 border-t border-[var(--border)] bg-[var(--surface)]/20 shrink-0 space-y-1.5">
+        <button
+          onClick={() => {
+            setShowScratchpad(v => !v)
+            if (showNotes) setShowNotes(false)
+          }}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-amber-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"
+          title="Open Scratch Table Workspace & Materialized Results"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Layers className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            <span className="truncate">Scratchpad</span>
+          </div>
+          <ScratchTableBadge count={scratchTables.length} />
+        </button>
         <button
           onClick={() => useAppStore.getState().openRoutineStudio('routines')}
           className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface)] hover:text-purple-500 rounded border border-[var(--border)] transition-colors cursor-pointer group"

@@ -27,6 +27,7 @@ import {
   Braces,
   Code,
   ChevronDown,
+  Layers,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { QueryResult, ExplainResult } from '../../lib/api'
@@ -41,6 +42,7 @@ import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
 import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { AiAssistantBar } from './AiAssistantBar'
+import { MaterializeModal } from '../materialize/MaterializeModal'
 
 interface Props {
   connId: string
@@ -132,6 +134,18 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [isAiBarOpen, setIsAiBarOpen] = useState(false)
   const [fixContext, setFixContext] = useState<{ query: string; error: string } | null>(null)
   const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
+  const [isMaterializeOpen, setIsMaterializeOpen] = useState(false)
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        setIsMaterializeOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -1074,6 +1088,14 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                         <Download className="w-3 h-3" />
                         <span>JSON</span>
                       </button>
+                      <button
+                        onClick={() => setIsMaterializeOpen(true)}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30 transition-colors"
+                        title="Materialize query results into table, view, or temp scratchpad (Cmd+Shift+M)"
+                      >
+                        <Layers className="w-3 h-3 text-amber-500" />
+                        <span>Materialize</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1565,6 +1587,23 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           dialect={currentDialect || 'postgres'}
           readOnly={true}
           onClose={() => setJsonStudioTarget(null)}
+        />
+      )}
+
+      {/* Materialize Result Modal */}
+      {isMaterializeOpen && (
+        <MaterializeModal
+          isOpen={isMaterializeOpen}
+          onClose={() => setIsMaterializeOpen(false)}
+          connId={connId}
+          dialect={currentDialect || 'postgres'}
+          initialQuery={currentTab?.query || ''}
+          initialRowsCount={currentResult?.rows?.length ?? 0}
+          initialColumns={currentResult?.columns ?? []}
+          isProduction={currentConn?.environment === 'production'}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['tables', connId] })
+          }}
         />
       )}
     </div>
