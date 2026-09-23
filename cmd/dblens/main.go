@@ -26,6 +26,7 @@ func main() {
 	port := flag.Int("port", 8080, "Port for DBLens server to listen on")
 	dataDir := flag.String("data", "", "Directory to store configuration or data")
 	staticDir := flag.String("static", "", "Custom path to static frontend dist files")
+	flag.StringVar(staticDir, "static-dir", "", "Custom path to static frontend dist files (alias)")
 	showVersion := flag.Bool("version", false, "Show DBLens version and exit")
 	flag.Parse()
 
