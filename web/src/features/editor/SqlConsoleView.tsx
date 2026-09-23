@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import CodeMirror, { keymap, Prec } from '@uiw/react-codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -28,7 +28,11 @@ import {
   Code,
   ChevronDown,
   Layers,
+  ShieldCheck,
+  ShieldAlert,
+  Sliders,
 } from 'lucide-react'
+import type { EditorView } from '@codemirror/view'
 import { api } from '../../lib/api'
 import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
@@ -43,6 +47,11 @@ import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { AiAssistantBar } from './AiAssistantBar'
 import { MaterializeModal } from '../materialize/MaterializeModal'
+import { useSqlLint } from '../lint/useSqlLint'
+import { createLintExtension } from '../lint/lintDecorations'
+import { LintPanel } from '../lint/LintPanel'
+import { RulesSettingsModal } from '../lint/RulesSettingsModal'
+import { applyQuickFix, type LintDiagnostic, type QuickFix } from '../lint/lintRules'
 
 interface Props {
   connId: string
@@ -453,11 +462,141 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     explainRef.current = handleExplain
   })
 
+  // Feature-38: SQL Static Analyzer & Quality Gate
+  const [isLintPanelOpen, setIsLintPanelOpen] = useState(false)
+  const [isLintSettingsOpen, setIsLintSettingsOpen] = useState(false)
+  const editorViewRef = useRef<EditorView | null>(null)
+  const diagIndexRef = useRef<number>(0)
+
+  const knownTables = useMemo(() => {
+    return (erdTables || []).map((t) => t.name)
+  }, [erdTables])
+
+  const knownCols = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    if (erdTables) {
+      for (const t of erdTables) {
+        map[t.name] = (t.columns || []).map((c) => c.name)
+      }
+    }
+    return map
+  }, [erdTables])
+
+  const {
+    diagnostics: lintDiagnostics,
+    summary: lintSummary,
+    isAnalyzing: isLintAnalyzing,
+    revalidate: revalidateLint,
+  } = useSqlLint({
+    sql: currentTab?.query || '',
+    connId,
+    dialect: currentDialect,
+    schema: selectedSchema,
+    knownTables,
+    knownCols,
+    profiles: effectiveConnections,
+  })
+
+  const handleApplyLintFix = useCallback(
+    (fix: QuickFix) => {
+      if (!currentTab) return
+      const newSql = applyQuickFix(currentTab.query, fix)
+      updateSqlTabQuery(connId, currentTab.id, newSql)
+      revalidateLint()
+    },
+    [currentTab, connId, updateSqlTabQuery, revalidateLint]
+  )
+
+  const handleJumpToDiagnostic = useCallback((d: LintDiagnostic) => {
+    const view = editorViewRef.current
+    if (!view) return
+    const docLen = view.state.doc.length
+    const from = Math.max(0, Math.min(d.start_offset, docLen))
+    const to = Math.max(from, Math.min(d.end_offset, docLen))
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: true,
+    })
+    view.focus()
+  }, [])
+
+  const handleNextDiagnostic = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      diagIndexRef.current = (diagIndexRef.current + 1) % lintDiagnostics.length
+      const d = lintDiagnostics[diagIndexRef.current]
+      const docLen = v.state.doc.length
+      const from = Math.max(0, Math.min(d.start_offset, docLen))
+      const to = Math.max(from, Math.min(d.end_offset, docLen))
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      })
+      v.focus()
+    },
+    [lintDiagnostics]
+  )
+
+  const handlePrevDiagnostic = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      diagIndexRef.current =
+        (diagIndexRef.current - 1 + lintDiagnostics.length) % lintDiagnostics.length
+      const d = lintDiagnostics[diagIndexRef.current]
+      const docLen = v.state.doc.length
+      const from = Math.max(0, Math.min(d.start_offset, docLen))
+      const to = Math.max(from, Math.min(d.end_offset, docLen))
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      })
+      v.focus()
+    },
+    [lintDiagnostics]
+  )
+
+  const handleApplyCurrentFix = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      const sel = v.state.selection.main
+      const match =
+        lintDiagnostics.find(
+          (d) =>
+            d.quick_fix &&
+            sel.head >= d.start_offset &&
+            sel.head <= Math.max(d.end_offset, d.start_offset + 1)
+        ) || lintDiagnostics.find((d) => d.quick_fix)
+
+      if (match?.quick_fix) {
+        handleApplyLintFix(match.quick_fix)
+      }
+    },
+    [lintDiagnostics, handleApplyLintFix]
+  )
+
+  const nextDiagRef = useRef(handleNextDiagnostic)
+  const prevDiagRef = useRef(handlePrevDiagnostic)
+  const applyFixRef = useRef(handleApplyCurrentFix)
+
+  useEffect(() => {
+    nextDiagRef.current = handleNextDiagnostic
+    prevDiagRef.current = handlePrevDiagnostic
+    applyFixRef.current = handleApplyCurrentFix
+  })
+
+  const lintExtension = useMemo(() => {
+    return createLintExtension(lintDiagnostics, handleApplyLintFix)
+  }, [lintDiagnostics, handleApplyLintFix])
+
   const extensions = useMemo(() => {
     const baseExtensions = createSqlExtension(currentDialect, erdTables, selectedSchema)
     return [
       ...baseExtensions,
       sqlVariableHighlight,
+      lintExtension,
       Prec.highest(
         keymap.of([
           {
@@ -481,10 +620,31 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               return true
             },
           },
+          {
+            key: 'F8',
+            run: (view) => {
+              nextDiagRef.current(view)
+              return true
+            },
+          },
+          {
+            key: 'Shift-F8',
+            run: (view) => {
+              prevDiagRef.current(view)
+              return true
+            },
+          },
+          {
+            key: 'Mod-.',
+            run: (view) => {
+              applyFixRef.current(view)
+              return true
+            },
+          },
         ])
       ),
     ]
-  }, [currentDialect, erdTables, selectedSchema])
+  }, [currentDialect, erdTables, selectedSchema, lintExtension])
 
   // Export handlers
   const handleExportCsv = () => {
@@ -646,6 +806,9 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                 height="100%"
                 theme={isDark ? oneDark : 'light'}
                 extensions={extensions}
+                onCreateEditor={(view) => {
+                  editorViewRef.current = view
+                }}
                 onChange={(val) => updateSqlTabQuery(connId, currentTab.id, val)}
                 basicSetup={{
                   lineNumbers: true,
@@ -659,6 +822,20 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               />
             )}
           </div>
+
+          {/* Feature-38: Collapsible Lint Panel */}
+          {isLintPanelOpen && (
+            <LintPanel
+              diagnostics={lintDiagnostics}
+              summary={lintSummary}
+              isAnalyzing={isLintAnalyzing}
+              onSelectDiagnostic={handleJumpToDiagnostic}
+              onApplyFix={handleApplyLintFix}
+              onOpenSettings={() => setIsLintSettingsOpen(true)}
+              onRevalidate={revalidateLint}
+              onClose={() => setIsLintPanelOpen(false)}
+            />
+          )}
 
           <div className="h-10 border-t border-[var(--border)] px-3 flex items-center justify-between shrink-0 bg-[var(--bg)]">
             <div className="flex items-center gap-2">
@@ -849,6 +1026,57 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                     : `IntelliSense: ${erdTables?.length || 0} tables`}
                 </span>
               </div>
+
+              {/* Feature-38: SQL Quality / Lint Badge */}
+              <button
+                id="dblens-lint-status-btn"
+                onClick={() => setIsLintPanelOpen((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border transition-colors ${
+                  isLintPanelOpen
+                    ? 'bg-[var(--surface)] border-[var(--border)] text-[var(--fg)]'
+                    : lintSummary.errors > 0
+                      ? 'border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20'
+                      : lintSummary.warnings > 0
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                        : 'border-transparent text-emerald-400 hover:bg-[var(--hover)] hover:text-emerald-300'
+                }`}
+                title={
+                  lintSummary.total === 0
+                    ? 'SQL Quality: Clean (No issues)'
+                    : `SQL Quality: ${lintSummary.errors} error(s), ${lintSummary.warnings} warning(s) (F8 to jump)`
+                }
+              >
+                {lintSummary.errors > 0 ? (
+                  <ShieldAlert className="w-3 h-3 text-red-400" />
+                ) : lintSummary.warnings > 0 ? (
+                  <ShieldAlert className="w-3 h-3 text-amber-400" />
+                ) : (
+                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                )}
+
+                {lintSummary.total === 0 ? (
+                  <span>SQL Clean</span>
+                ) : (
+                  <span className="flex items-center gap-1 font-mono">
+                    {lintSummary.errors > 0 && <span className="text-red-400">✖ {lintSummary.errors}</span>}
+                    {lintSummary.warnings > 0 && <span className="text-amber-400">⚠ {lintSummary.warnings}</span>}
+                    {lintSummary.errors === 0 && lintSummary.warnings === 0 && (
+                      <span className="text-sky-400">ℹ {lintSummary.info}</span>
+                    )}
+                  </span>
+                )}
+              </button>
+
+              {/* Lint Rules Config Button */}
+              <button
+                id="dblens-lint-rules-btn"
+                onClick={() => setIsLintSettingsOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border border-transparent text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+                title="Configure SQL Lint & Quality Gate Rules"
+              >
+                <Sliders className="w-3 h-3 text-indigo-400" />
+                <span>Rules</span>
+              </button>
             </div>
 
             {/* AI Assistant Toggle Button */}
@@ -1604,6 +1832,15 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           onSuccess={() => {
             qc.invalidateQueries({ queryKey: ['tables', connId] })
           }}
+        />
+      )}
+
+      {/* Feature-38: Rules Settings Modal */}
+      {isLintSettingsOpen && (
+        <RulesSettingsModal
+          isOpen={isLintSettingsOpen}
+          onClose={() => setIsLintSettingsOpen(false)}
+          onRulesUpdated={() => revalidateLint()}
         />
       )}
     </div>

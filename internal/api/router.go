@@ -203,6 +203,14 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/materialize/scratch/promote", h.ScratchPromote)
 	api.Post("/connections/{connId}/materialize/scratch/expire", h.ScratchExpire)
 
+	// ── Feature-38: In-Editor SQL Static Analyzer & Quality Gate ─────────
+	api.Post("/connections/{connId}/analyze", h.AnalyzeSQLHandler)
+	api.Post("/connections/{connId}/analyze/gate", h.AnalyzeGateHandler)
+	api.Post("/analyze", h.AnalyzeSQLHandler)
+	api.Post("/analyze/gate", h.AnalyzeGateHandler)
+	api.Get("/analyze/rules", h.GetAnalyzerRulesHandler)
+	api.Put("/analyze/rules", h.UpdateAnalyzerRulesHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

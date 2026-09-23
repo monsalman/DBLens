@@ -24,6 +24,13 @@ import type {
   MaterializeResult,
   ScratchTable,
 } from '../features/materialize/materializeHelper'
+import type {
+  RuleSetting,
+  RuleMeta,
+  AnalyzeResult,
+  GateRequest,
+  GateResult,
+} from '../features/lint/lintRules'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2555,6 +2562,76 @@ export const api = {
     if (!res.ok) throw new Error(json.error || `Failed to expire scratch tables (${res.status})`)
     return json.data ?? json
   },
+
+  // ── Feature-38: In-Editor SQL Static Analyzer & Quality Gate ─────────
+  async analyzeSql(
+    connId: string,
+    payload: {
+      sql: string
+      dialect?: string
+      schema?: string
+      known_tables?: string[]
+      known_cols?: Record<string, string[]>
+      rule_config?: Record<string, RuleSetting>
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AnalyzeResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const endpoint = connId && connId !== 'none'
+      ? `/api/connections/${connId}/analyze`
+      : '/api/analyze'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to analyze SQL (${res.status})`)
+    return json.data ?? json
+  },
+
+  async getLintRules(): Promise<RuleMeta[]> {
+    const res = await fetch('/api/analyze/rules')
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to fetch analyzer rules (${res.status})`)
+    return json.data ?? json
+  },
+
+  async updateLintRules(rules: Record<string, RuleSetting>): Promise<RuleMeta[]> {
+    const res = await fetch('/api/analyze/rules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rules),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to update analyzer rules (${res.status})`)
+    return json.data ?? json
+  },
+
+  async evaluateQualityGate(
+    connId: string,
+    payload: GateRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<GateResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const endpoint = connId && connId !== 'none'
+      ? `/api/connections/${connId}/analyze/gate`
+      : '/api/analyze/gate'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Quality gate request failed (${res.status})`)
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3032,6 +3109,17 @@ export type {
   MaterializeResult,
   ScratchTable,
 } from '../features/materialize/materializeHelper'
+
+export type {
+  LintSeverity,
+  QuickFix,
+  LintDiagnostic,
+  RuleSetting,
+  RuleMeta,
+  AnalyzeResult,
+  GateRequest,
+  GateResult,
+} from '../features/lint/lintRules'
 
 
 

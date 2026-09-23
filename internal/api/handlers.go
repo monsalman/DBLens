@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/analyzer"
 	"github.com/dblens/dblens/internal/annotations"
 	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/audit"
@@ -255,6 +256,7 @@ type Handler struct {
 	playbookStore    *playbook.Store
 	annotationsStore *annotations.Store
 	scratchStore     *materialize.ScratchStore
+	analyzerStore    *analyzer.Store
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -348,6 +350,13 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 				return materialize.NewInMemoryScratchStore()
 			}
 			return ss
+		}(),
+		analyzerStore: func() *analyzer.Store {
+			as, err := analyzer.NewStore(auditDir + "/analyzer.json")
+			if err != nil {
+				return nil
+			}
+			return as
 		}(),
 	}
 	return h, nil
