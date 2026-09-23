@@ -346,7 +346,7 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 		}(),
 		scratchStore: func() *materialize.ScratchStore {
 			ss, err := materialize.NewScratchStore(auditDir + "/scratch.json")
-			if err != nil {
+			if err != nil || ss == nil {
 				return materialize.NewInMemoryScratchStore()
 			}
 			return ss
@@ -358,6 +358,9 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 			}
 			return as
 		}(),
+	}
+	if h.scratchStore == nil {
+		h.scratchStore = materialize.NewInMemoryScratchStore()
 	}
 	return h, nil
 }

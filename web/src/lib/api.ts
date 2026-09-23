@@ -593,6 +593,9 @@ export const api = {
     if (match?.readOnly) {
       headers['X-DBLENS-READONLY'] = 'true'
     }
+    if (match?.environment) {
+      headers['X-DBLENS-ENVIRONMENT'] = match.environment
+    }
     if (match?.ssh_tunnel?.enabled) {
       headers['X-DBLENS-SSH-TUNNEL'] = JSON.stringify(match.ssh_tunnel)
     }

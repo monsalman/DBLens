@@ -124,16 +124,23 @@ func (h *Handler) ScratchDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	store := h.getScratchStore()
+	st := store.Get(connID, schema, table)
+	if st == nil {
+		sendError(w, http.StatusNotFound, fmt.Sprintf("scratch table '%s' not found", table))
+		return
+	}
+
 	// Drop underlying database table if driver resolves and not read-only
 	if !isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
 		if entry, err := h.resolveDriverWithFallback(r, "", connID); err == nil && entry != nil {
-			targetRef := materialize.QuoteTableRef(schema, table, entry.Driver.Dialect())
+			targetRef := materialize.QuoteTableRef(st.Schema, st.Table, entry.Driver.Dialect())
 			_, _ = entry.Driver.ExecuteQuery(r.Context(), fmt.Sprintf("DROP TABLE IF EXISTS %s;", targetRef))
 			_, _ = entry.Driver.ExecuteQuery(r.Context(), fmt.Sprintf("DROP VIEW IF EXISTS %s;", targetRef))
 		}
 	}
 
-	if err := h.getScratchStore().Delete(connID, schema, table); err != nil {
+	if err := store.Delete(connID, schema, table); err != nil {
 		sendError(w, http.StatusNotFound, err.Error())
 		return
 	}

@@ -91,7 +91,10 @@ func BuildTopValuesQuery(fromClause, quotedCol string, limit int) string {
 	)
 }
 
-func generateHistogram(ctx context.Context, drv types.Driver, fromClause, quotedCol string, minVal, maxVal float64, numBuckets int) []Bucket {
+func GenerateHistogram(ctx context.Context, drv types.Driver, fromClause, quotedCol string, minVal, maxVal float64, numBuckets int) []Bucket {
+	if math.IsNaN(minVal) || math.IsNaN(maxVal) || math.IsInf(minVal, 0) || math.IsInf(maxVal, 0) {
+		return []Bucket{}
+	}
 	if numBuckets <= 0 {
 		numBuckets = 5
 	}
@@ -141,6 +144,10 @@ func generateHistogram(ctx context.Context, drv types.Driver, fromClause, quoted
 	}
 
 	return buckets
+}
+
+func generateHistogram(ctx context.Context, drv types.Driver, fromClause, quotedCol string, minVal, maxVal float64, numBuckets int) []Bucket {
+	return GenerateHistogram(ctx, drv, fromClause, quotedCol, minVal, maxVal, numBuckets)
 }
 
 func toInt64(v interface{}) int64 {

@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,20 @@ func (s *Store) GetRuleConfig() map[string]RuleSetting {
 }
 
 func (s *Store) UpdateRules(updates map[string]RuleSetting) error {
+	validRules := make(map[string]bool, len(AllRules))
+	for _, r := range AllRules {
+		validRules[r.Meta().ID] = true
+	}
+
+	for id, setting := range updates {
+		if !validRules[id] {
+			return fmt.Errorf("unknown rule ID: %s", id)
+		}
+		if !setting.Severity.IsValid() {
+			return fmt.Errorf("invalid severity '%s' for rule '%s'", setting.Severity, id)
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

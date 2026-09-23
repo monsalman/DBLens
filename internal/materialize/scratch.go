@@ -90,6 +90,26 @@ func (s *ScratchStore) List(connID string) []ScratchTable {
 	return result
 }
 
+// Get returns the scratch table matching connID, schema, and table name if it exists.
+func (s *ScratchStore) Get(connID, schema, table string) *ScratchTable {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	table = strings.TrimSpace(table)
+	for _, item := range s.items {
+		if item == nil {
+			continue
+		}
+		if (connID == "" || strings.EqualFold(item.ConnID, connID)) &&
+			(schema == "" || item.Schema == "" || strings.EqualFold(item.Schema, schema)) &&
+			strings.EqualFold(item.Table, table) {
+			copied := *item
+			return &copied
+		}
+	}
+	return nil
+}
+
 // Register adds or updates a scratch table in the store.
 func (s *ScratchStore) Register(st ScratchTable) {
 	s.mu.Lock()
@@ -181,33 +201,50 @@ func (s *ScratchStore) Expire(ctx context.Context, drv types.Driver) (int, error
 
 // ExpireConn drops expired tables matching connID (or all if connID is empty) on drv.
 func (s *ScratchStore) ExpireConn(ctx context.Context, connID string, drv types.Driver) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now()
-	var remaining []*ScratchTable
-	var dropped int
 
+	s.mu.Lock()
+	var toDrop []*ScratchTable
 	for _, item := range s.items {
 		if item == nil {
 			continue
 		}
 		matchConn := (connID == "" || strings.EqualFold(item.ConnID, connID))
 		isExpired := !item.ExpiresAt.IsZero() && now.After(item.ExpiresAt)
-
 		if matchConn && isExpired {
-			if drv != nil {
-				targetRef := QuoteTableRef(item.Schema, item.Table, drv.Dialect())
-				dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s;", targetRef)
-				_, _ = drv.ExecuteQuery(ctx, dropSQL)
-			}
-			dropped++
-		} else {
+			toDrop = append(toDrop, item)
+		}
+	}
+	s.mu.Unlock()
+
+	if len(toDrop) == 0 {
+		return 0, nil
+	}
+
+	if drv != nil {
+		for _, item := range toDrop {
+			targetRef := QuoteTableRef(item.Schema, item.Table, drv.Dialect())
+			dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s;", targetRef)
+			_, _ = drv.ExecuteQuery(ctx, dropSQL)
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	droppedMap := make(map[*ScratchTable]bool, len(toDrop))
+	for _, item := range toDrop {
+		droppedMap[item] = true
+	}
+
+	var remaining []*ScratchTable
+	for _, item := range s.items {
+		if item != nil && !droppedMap[item] {
 			remaining = append(remaining, item)
 		}
 	}
 
 	s.items = remaining
 	_ = s.save()
-	return dropped, nil
+	return len(toDrop), nil
 }
