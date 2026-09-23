@@ -9,8 +9,17 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/connection"
+	"github.com/dblens/dblens/internal/driver/types"
 	"github.com/dblens/dblens/internal/impact"
 )
+
+type dummyPGDriver struct {
+	types.Driver
+}
+
+func (d *dummyPGDriver) Dialect() string {
+	return "postgres"
+}
 
 func TestTextualReferenceScanner(t *testing.T) {
 	t.Run("Mask comments and literals", func(t *testing.T) {
@@ -59,6 +68,26 @@ WHERE note = 'users';
 		}
 		if impact.TextualReferenceMatches(sql, "users", "phone_number") {
 			t.Errorf("did not expect phone_number column match")
+		}
+	})
+
+	t.Run("PL/pgSQL dollar-quoted routine bodies remain searchable", func(t *testing.T) {
+		routineSQL := `
+CREATE OR REPLACE FUNCTION process_user(p_id integer) RETURNS void AS $BODY$
+BEGIN
+    -- inside routine body
+    UPDATE users SET email = 'updated@example.com' WHERE id = p_id;
+END;
+$BODY$ LANGUAGE plpgsql;
+`
+		if !impact.TextualReferenceMatches(routineSQL, "users", "") {
+			t.Errorf("expected routine body to match table 'users'")
+		}
+		if !impact.TextualReferenceMatches(routineSQL, "users", "email") {
+			t.Errorf("expected routine body to match column 'email'")
+		}
+		if impact.TextualReferenceMatches(routineSQL, "users", "nonexistent") {
+			t.Errorf("did not expect match for nonexistent column")
 		}
 	})
 }
@@ -287,6 +316,104 @@ func TestImpactAnalyzerAndPlanner(t *testing.T) {
 		}
 		if graph.Root.Name != "employees" {
 			t.Errorf("expected employees, got %s", graph.Root.Name)
+		}
+	})
+
+	t.Run("Nil driver error handling", func(t *testing.T) {
+		graph := &impact.ImpactGraph{
+			Root: impact.ImpactNode{Kind: "table", Name: "users"},
+		}
+		_, err := impact.BuildRemediationPlan(ctx, nil, graph, false)
+		if err == nil || !strings.Contains(err.Error(), "driver is required") {
+			t.Errorf("expected 'driver is required', got: %v", err)
+		}
+
+		renameReq := impact.RenameRequest{NewName: "new_users"}
+		_, err = impact.BuildRenamePlan(ctx, nil, graph, renameReq)
+		if err == nil || !strings.Contains(err.Error(), "driver is required") {
+			t.Errorf("expected 'driver is required', got: %v", err)
+		}
+	})
+
+	t.Run("Column drop DDL with and without schema", func(t *testing.T) {
+		// With schema (Postgres style)
+		graphWithSchema := &impact.ImpactGraph{
+			Root: impact.ImpactNode{
+				Kind:       "column",
+				Schema:     "public",
+				Name:       "balance",
+				TableName:  "accounts",
+				ColumnName: "balance",
+			},
+		}
+		planWithSchema, err := impact.BuildRemediationPlan(ctx, &dummyPGDriver{}, graphWithSchema, false)
+		if err != nil {
+			t.Fatalf("failed building plan with schema: %v", err)
+		}
+		expectedDropWithSchema := "ALTER TABLE \"public\".\"accounts\" DROP COLUMN \"balance\";"
+		if !strings.Contains(planWithSchema.UpSQL, expectedDropWithSchema) {
+			t.Errorf("expected DDL %q in UpSQL:\n%s", expectedDropWithSchema, planWithSchema.UpSQL)
+		}
+
+		// Without schema (SQLite / default)
+		graphWithoutSchema := &impact.ImpactGraph{
+			Root: impact.ImpactNode{
+				Kind:       "column",
+				Schema:     "",
+				Name:       "balance",
+				TableName:  "accounts",
+				ColumnName: "balance",
+			},
+		}
+		planWithoutSchema, err := impact.BuildRemediationPlan(ctx, entry.Driver, graphWithoutSchema, false)
+		if err != nil {
+			t.Fatalf("failed building plan without schema: %v", err)
+		}
+		expectedDropWithoutSchema := "ALTER TABLE \"accounts\" DROP COLUMN \"balance\";"
+		if !strings.Contains(planWithoutSchema.UpSQL, expectedDropWithoutSchema) {
+			t.Errorf("expected DDL %q in UpSQL:\n%s", expectedDropWithoutSchema, planWithoutSchema.UpSQL)
+		}
+	})
+
+	t.Run("Rename name validation", func(t *testing.T) {
+		graph := &impact.ImpactGraph{
+			Root: impact.ImpactNode{
+				Kind:      "table",
+				Schema:    "main",
+				Name:      "users",
+				TableName: "users",
+			},
+		}
+
+		invalidNames := []string{
+			"users; DROP TABLE x;",
+			"users\nnew",
+			"users\rtest",
+			"users with spaces",
+			"users$invalid",
+			"users-dash",
+			"",
+		}
+
+		for _, inv := range invalidNames {
+			_, err := impact.BuildRenamePlan(ctx, entry.Driver, graph, impact.RenameRequest{
+				Object:  "users",
+				NewName: inv,
+			})
+			if err == nil {
+				t.Errorf("expected invalid name %q to be rejected", inv)
+			}
+		}
+
+		validPlan, err := impact.BuildRenamePlan(ctx, entry.Driver, graph, impact.RenameRequest{
+			Object:  "users",
+			NewName: "valid_name_123",
+		})
+		if err != nil {
+			t.Fatalf("expected valid name to succeed, got: %v", err)
+		}
+		if validPlan.NewName != "valid_name_123" {
+			t.Errorf("expected valid_name_123, got %s", validPlan.NewName)
 		}
 	})
 }

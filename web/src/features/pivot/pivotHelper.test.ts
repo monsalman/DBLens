@@ -174,6 +174,30 @@ test('exportPivotToCSV generates valid CSV with headers and totals', () => {
   assert(csv.includes('Total,40,60,100'), 'contains Total row')
 })
 
+test('exportPivotToCSV sanitizes formula injection characters', () => {
+  const matrix: PivotMatrix = {
+    colHeaders: ['=SUM(A1)', '@calc'],
+    rowHeaders: [['+Widgets'], ['-Gadgets']],
+    cells: [
+      ['=1+1', '@attack'],
+      ['+100', '-50'],
+    ],
+    rowTotals: ['=sum1', '-sum2'],
+    colTotals: ['+col1', '@col2'],
+    grandTotal: '=grand',
+  }
+
+  const csv = exportPivotToCSV(matrix, ['=Product'])
+  assert(csv.includes("'=Product"), 'header sanitized')
+  assert(csv.includes("'=SUM(A1)"), 'col header sanitized')
+  assert(csv.includes("'@calc"), 'col header sanitized')
+  assert(csv.includes("'+Widgets"), 'row header sanitized')
+  assert(csv.includes("'-Gadgets"), 'row header sanitized')
+  assert(csv.includes("'=1+1"), 'cell sanitized')
+  assert(csv.includes("'-50"), 'cell sanitized')
+  assert(csv.includes("'=grand"), 'grand total sanitized')
+})
+
 test('exportPivotToMarkdown generates clean Markdown table', () => {
   const matrix: PivotMatrix = {
     colHeaders: ['Q1', 'Q2'],

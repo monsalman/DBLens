@@ -201,3 +201,28 @@ func TestExportCSVAndMarkdown(t *testing.T) {
 		t.Errorf("expected MD totals, got:\n%s", mdOut)
 	}
 }
+
+func TestExportCSV_FormulaSanitization(t *testing.T) {
+	matrix := &PivotMatrix{
+		ColHeaders: []string{"=SUM(A1)", "@admin"},
+		RowHeaders: [][]string{{"+North"}, {"-South"}},
+		Cells: [][]interface{}{
+			{"=1+1", "@calc"},
+			{"+cmd", "-5"},
+		},
+		RowTotals:  []interface{}{"=sum1", "-sum2"},
+		ColTotals:  []interface{}{"+col1", "@col2"},
+		GrandTotal: "=grand",
+	}
+
+	csvOut, err := ExportCSV(matrix, []string{"=Region"})
+	if err != nil {
+		t.Fatalf("export CSV error: %v", err)
+	}
+
+	for _, dangerous := range []string{"'=Region", "'=SUM(A1)", "'@admin", "'+North", "'-South", "'=1+1", "'@calc", "'+cmd", "'-5", "'=sum1", "'-sum2", "'+col1", "'@col2", "'=grand"} {
+		if !strings.Contains(csvOut, dangerous) {
+			t.Errorf("expected sanitized formula token %q in CSV output:\n%s", dangerous, csvOut)
+		}
+	}
+}

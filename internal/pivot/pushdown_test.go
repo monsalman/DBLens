@@ -120,3 +120,61 @@ func TestGeneratePushdownSQL_Validation(t *testing.T) {
 		t.Errorf("expected valueField error, got %v", err)
 	}
 }
+
+func TestEscapeLiteral_MySQLBackslash(t *testing.T) {
+	// MySQL escapes backslash \ -> \\ first, then ' -> ''
+	raw := `C:\Windows\System32\'quotes'`
+	gotMySQL := escapeLiteral(raw, "mysql")
+	expectedMySQL := `'C:\\Windows\\System32\\''quotes'''`
+	if gotMySQL != expectedMySQL {
+		t.Errorf("mysql escaping failed: expected %s, got %s", expectedMySQL, gotMySQL)
+	}
+
+	// Postgres escapes ' -> '' but preserves \
+	gotPG := escapeLiteral(raw, "postgres")
+	expectedPG := `'C:\Windows\System32\''quotes'''`
+	if gotPG != expectedPG {
+		t.Errorf("postgres escaping failed: expected %s, got %s", expectedPG, gotPG)
+	}
+}
+
+func TestGeneratePushdownSQL_MultiStatementAndStatementType(t *testing.T) {
+	// Multi-statement with unquoted semicolon rejected
+	_, err := GeneratePushdownSQL(PushdownRequest{
+		Query:      "SELECT region FROM sales; DROP TABLE users;",
+		Dialect:    "postgres",
+		ColField:   "quarter",
+		ColValues:  []string{"Q1"},
+		Aggregator: "count",
+	})
+	if err == nil || !strings.Contains(err.Error(), "semicolon") {
+		t.Errorf("expected multi-statement error, got: %v", err)
+	}
+
+	// Non-SELECT query rejected
+	_, err = GeneratePushdownSQL(PushdownRequest{
+		Query:      "DELETE FROM sales WHERE region = 'US'",
+		Dialect:    "postgres",
+		ColField:   "quarter",
+		ColValues:  []string{"Q1"},
+		Aggregator: "count",
+	})
+	if err == nil || !strings.Contains(err.Error(), "SELECT or WITH") {
+		t.Errorf("expected SELECT or WITH error, got: %v", err)
+	}
+
+	// Single query with quoted semicolon and trailing semicolon accepted
+	sql, err := GeneratePushdownSQL(PushdownRequest{
+		Query:      "SELECT region, 'value;with;semicolons' AS val FROM sales;",
+		Dialect:    "postgres",
+		ColField:   "quarter",
+		ColValues:  []string{"Q1"},
+		Aggregator: "count",
+	})
+	if err != nil {
+		t.Fatalf("expected quoted semicolons to be allowed, got error: %v", err)
+	}
+	if !strings.Contains(sql, "FROM (SELECT region, 'value;with;semicolons' AS val FROM sales) AS _src") {
+		t.Errorf("unexpected generated SQL: %s", sql)
+	}
+}
