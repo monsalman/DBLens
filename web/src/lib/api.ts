@@ -12,6 +12,12 @@ import type {
   ToggleTriggerRequest,
   RefreshViewRequest,
 } from '../features/routine/routineHelper'
+import type {
+  ProfileReport,
+  ProfileRequest,
+  Suggestion as ProfileSuggestion,
+  CompareResult as ProfileCompareResult,
+} from '../features/profile/profileHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2360,6 +2366,84 @@ export const api = {
    *  server-side monitor needs no DSN: it probes the pool the server already holds). */
   healthStreamUrl(): string {
     return '/api/health/stream'
+  },
+
+  // ── Feature-36: Column Data Profiling & Quality Studio ──
+  async profileTable(
+    connId: string,
+    dsn: string,
+    req: ProfileRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileReport> {
+    const res = await fetch(`/api/connections/${connId}/profile`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to profile table (${res.status})`)
+    return json.data ?? json
+  },
+
+  async profileSuggest(
+    connId: string,
+    dsn: string,
+    target: ProfileRequest | ProfileReport,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileSuggestion[]> {
+    const res = await fetch(`/api/connections/${connId}/profile/suggest`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(target),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to generate suggestions (${res.status})`)
+    return json.data ?? json
+  },
+
+  async profileCompare(
+    connId: string,
+    dsn: string,
+    req: {
+      baseTable: string
+      targetTable: string
+      baseSchema?: string
+      targetSchema?: string
+      baseReport?: ProfileReport
+      targetReport?: ProfileReport
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileCompareResult> {
+    const res = await fetch(`/api/connections/${connId}/profile/compare`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to compare profiles (${res.status})`)
+    return json.data ?? json
+  },
+
+  async exportProfileMarkdown(
+    connId: string,
+    dsn: string,
+    table: string,
+    schema?: string,
+    report?: ProfileReport,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    let url = `/api/connections/${connId}/profile/export.md?table=${encodeURIComponent(table)}`
+    if (schema) url += `&schema=${encodeURIComponent(schema)}`
+    const opts: RequestInit = {
+      method: report ? 'POST' : 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    }
+    if (report) {
+      opts.body = JSON.stringify(report)
+    }
+    const res = await fetch(url, opts)
+    if (!res.ok) throw new Error(`Failed to export markdown (${res.status})`)
+    return await res.text()
   },
 }
 

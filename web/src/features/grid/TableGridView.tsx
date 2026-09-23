@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -17,6 +17,7 @@ import { isSpatialColumn, isSpatialValue } from '../gis/gisHelper'
 import { LiveFeedDrawer } from '../livefeed/LiveFeedDrawer'
 import { AnnotationBadge } from '../annotations/AnnotationBadge'
 import { useAnnotations } from '../annotations/useAnnotations'
+import { ProfileStudioModal } from '../profile/ProfileStudioModal'
 
 interface Props {
   connId: string
@@ -43,6 +44,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [showImportModal, setShowImportModal] = useState(false)
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
   const qc = useQueryClient()
   const { openPeekDrawer, connections, openRestModal } = useAppStore()
@@ -717,6 +719,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                   <span>Live Feed ▶</span>
                 </button>
               )}
+
+              {/* Data Profiling Studio */}
+              {table && (
+                <button
+                  onClick={() => setShowProfileModal(true)}
+                  title="Column Data Profiling & Quality Studio"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-indigo-400 hover:border-indigo-500/40 hover:bg-indigo-500/10 transition-colors"
+                >
+                  <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="hidden sm:inline">Profile</span>
+                </button>
+              )}
               
               <button onClick={() => refetch()} className="p-1 text-[var(--muted)] hover:text-[var(--fg)]" title="Refresh Table">
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -1222,6 +1236,15 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
         connId={connId}
         schema={schema}
         table={table}
+      />
+      <ProfileStudioModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        connId={connId}
+        dsn={activeConn?.dsn || ''}
+        table={table}
+        schema={schema}
+        profiles={connections}
       />
     </div>
   )

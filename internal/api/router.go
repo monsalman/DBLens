@@ -187,6 +187,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/health/connections", h.HealthConnections)
 	api.Get("/health/stream", h.HealthStream)
 
+	// ── Feature-36: Column Data Profiling & Dataset Quality Studio ──
+	api.Post("/connections/{connId}/profile", h.ProfileTable)
+	api.Post("/connections/{connId}/profile/suggest", h.ProfileSuggest)
+	api.Get("/connections/{connId}/profile/export.md", h.ProfileExportMD)
+	api.Post("/connections/{connId}/profile/export.md", h.ProfileExportMD)
+	api.Post("/connections/{connId}/profile/compare", h.ProfileCompare)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
