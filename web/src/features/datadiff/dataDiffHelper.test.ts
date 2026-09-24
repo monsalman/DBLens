@@ -148,6 +148,33 @@ test('generateCLICommand: constructs valid dblens command string', () => {
   assert(cmd.includes('--delete-excess'), 'delete excess')
 })
 
+test('null-safety: getRowKey and formatCellVal handle undefined or missing pkValues safely', () => {
+  const rowWithUndefinedPK = {
+    pkValues: undefined as any,
+    status: 'added' as const,
+  }
+  // Should not throw error
+  const key = getRowKey(rowWithUndefinedPK, ['id'])
+  assert(key.includes('id=NULL'), 'handles undefined pkValues')
+
+  const formatted = formatCellVal(rowWithUndefinedPK.pkValues?.['id'])
+  assert(formatted === 'NULL', 'formatCellVal handles undefined optional chain value')
+})
+
+test('generateCLICommand: supports target_wins strategy', () => {
+  const cmd = generateCLICommand(
+    {
+      sourceConnId: 'db_main',
+      sourceTable: 'items',
+      targetConnId: 'db_replica',
+      targetTable: 'items',
+      primaryKeys: ['id'],
+    },
+    'target_wins'
+  )
+  assert(cmd.includes('--strategy target_wins'), 'target_wins strategy in CLI command')
+})
+
 console.log(`\nData Diff Helper Tests Summary: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   throw new Error(`Data diff tests failed with ${failed} failures`)

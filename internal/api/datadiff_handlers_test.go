@@ -291,3 +291,90 @@ func TestDataDiff_ExportSQLEndpoint(t *testing.T) {
 		t.Errorf("exported SQL missing expected contents: %s", rec.Body.String())
 	}
 }
+
+func TestDataDiff_Regression_SecurityValidation(t *testing.T) {
+	router, srcDSN, tgtDSN, cleanup := setupDataDiffTestEnv(t)
+	defer cleanup()
+
+	t.Run("compare endpoint rejects SQL injection in whereClause", func(t *testing.T) {
+		reqBody := datadiff.DataDiffRequest{
+			SourceDSN:   srcDSN,
+			SourceTable: "items",
+			TargetDSN:   tgtDSN,
+			TargetTable: "items",
+			WhereClause: "id = 1; DROP TABLE items;",
+		}
+		b, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/datadiff/compare", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for SQL injection whereClause, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "where clause") {
+			t.Errorf("expected where clause error message, got: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("apply sync rejects DDL and prohibited statements", func(t *testing.T) {
+		reqBody := datadiff.ApplySyncRequest{
+			TargetDSN:   tgtDSN,
+			TargetTable: "items",
+			Statements:  []string{"DROP TABLE items;"},
+		}
+		b, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/datadiff/apply-sync", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for DDL statement, got %d", rec.Code)
+		}
+	})
+
+	t.Run("apply sync rejects statements targeting wrong table", func(t *testing.T) {
+		reqBody := datadiff.ApplySyncRequest{
+			TargetDSN:   tgtDSN,
+			TargetTable: "items",
+			Statements:  []string{"INSERT INTO accounts (id) VALUES (1);"},
+		}
+		b, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/datadiff/apply-sync", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for mismatched table, got %d", rec.Code)
+		}
+	})
+
+	t.Run("export endpoint rejects invalid table identifier", func(t *testing.T) {
+		reqBody := datadiff.SyncScriptRequest{
+			TargetDSN:   tgtDSN,
+			TargetTable: "items; DROP TABLE items;",
+			PrimaryKeys: []string{"id"},
+			Columns:     []string{"id"},
+		}
+		b, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/datadiff/export.sql", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for invalid table identifier in export, got %d", rec.Code)
+		}
+	})
+}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dblens/dblens/internal/driver/sqlite"
 	_ "modernc.org/sqlite"
@@ -407,4 +408,185 @@ func TestCompareDataAndExecutor(t *testing.T) {
 	if len(checkRes.Rows) > 0 {
 		t.Errorf("transaction rollback failed; row 99 was inserted: %+v", checkRes.Rows)
 	}
+}
+
+func TestRegression_SecurityAndLogic(t *testing.T) {
+	t.Run("where clause validation rejects injections and mutations", func(t *testing.T) {
+		invalidClauses := []string{
+			"id = 1; DROP TABLE users;",
+			"id = 1 -- comment",
+			"/* multiline */ id = 1",
+			"id = 1 */",
+			"id = 1 AND EXISTS (DELETE FROM users)",
+			"id = 1 UNION SELECT 1, 2; INSERT INTO audit VALUES (1)",
+			"id = 1; ALTER TABLE users ADD COLUMN hacked text",
+			"TRUNCATE users",
+			"CREATE TABLE foo (id int)",
+			"GRANT ALL ON users TO evil",
+			"REVOKE ALL ON users FROM admin",
+			"EXEC malicious_proc",
+		}
+		for _, clause := range invalidClauses {
+			if err := ValidateWhereClause(clause); err == nil {
+				t.Errorf("expected error for invalid where clause %q, got nil", clause)
+			}
+		}
+
+		validClauses := []string{
+			"",
+			"   ",
+			"status = 'active'",
+			"age > 18 AND age < 65",
+			"name LIKE 'Alice%'",
+			"created_at >= '2025-01-01' AND is_deleted = false",
+		}
+		for _, clause := range validClauses {
+			if err := ValidateWhereClause(clause); err != nil {
+				t.Errorf("expected valid where clause %q, got error: %v", clause, err)
+			}
+		}
+	})
+
+	t.Run("sync statement validation rejects DDL and invalid tables", func(t *testing.T) {
+		validStatements := []struct {
+			stmt  string
+			table string
+		}{
+			{"INSERT INTO \"users\" (\"id\", \"name\") VALUES (1, 'Alice');", "users"},
+			{"INSERT INTO users (id, name) VALUES (1, 'Alice')", "users"},
+			{"INSERT INTO `public`.`users` (`id`) VALUES (1)", "users"},
+			{"INSERT OR IGNORE INTO users (id) VALUES (1)", "users"},
+			{"INSERT IGNORE INTO users (id) VALUES (1)", "users"},
+			{"UPDATE users SET name = 'Bob' WHERE id = 1;", "users"},
+			{"UPDATE \"public\".\"users\" SET name = 'Bob' WHERE id = 1", "users"},
+			{"UPDATE `users` SET `name` = 'Bob' WHERE `id` = 1", "users"},
+			{"DELETE FROM users WHERE id = 1;", "users"},
+			{"DELETE FROM \"users\" WHERE \"id\" = 1", "users"},
+			{"BEGIN", ""},
+			{"COMMIT", ""},
+			{"START TRANSACTION", ""},
+		}
+
+		for _, tc := range validStatements {
+			if err := ValidateSyncStatement(tc.stmt, tc.table); err != nil {
+				t.Errorf("expected valid statement %q for table %q, got: %v", tc.stmt, tc.table, err)
+			}
+		}
+
+		invalidStatements := []struct {
+			stmt  string
+			table string
+		}{
+			{"DROP TABLE users;", "users"},
+			{"ALTER TABLE users ADD COLUMN x int;", "users"},
+			{"TRUNCATE TABLE users;", "users"},
+			{"CREATE TABLE hacker (id int);", "users"},
+			{"PRAGMA foreign_keys = OFF;", "users"},
+			{"SELECT * FROM users;", "users"},
+			{"INSERT INTO orders (id) VALUES (1);", "users"}, // wrong table
+			{"UPDATE items SET price = 1 WHERE id = 1;", "users"}, // wrong table
+			{"DELETE FROM items WHERE id = 1;", "users"}, // wrong table
+			{"INSERT INTO users (id) VALUES (1); DROP TABLE users;", "users"}, // multi-statement
+			{"DELETE FROM users WHERE id = 1 -- comment", "users"}, // comment
+		}
+
+		for _, tc := range invalidStatements {
+			if err := ValidateSyncStatement(tc.stmt, tc.table); err == nil {
+				t.Errorf("expected error for invalid statement %q (table: %q), got nil", tc.stmt, tc.table)
+			}
+		}
+	})
+
+	t.Run("primary key validation in GenerateSyncScript", func(t *testing.T) {
+		req := SyncScriptRequest{
+			TargetTable: "users",
+			PrimaryKeys: []string{}, // empty PKs
+			Columns:     []string{"id", "name"},
+			Strategy:    StrategySourceWins,
+		}
+		_, err := GenerateSyncScript(req)
+		if err == nil || !strings.Contains(err.Error(), "at least one primary key is required") {
+			t.Errorf("expected error requiring at least one primary key, got: %v", err)
+		}
+	})
+
+	t.Run("target_wins dialect and table inversion", func(t *testing.T) {
+		req := SyncScriptRequest{
+			SourceDialect: "mysql",
+			SourceSchema:  "",
+			SourceTable:   "origin_items",
+			TargetDialect: "postgres",
+			TargetSchema:  "public",
+			TargetTable:   "replica_items",
+			PrimaryKeys:   []string{"id"},
+			Columns:       []string{"id", "title"},
+			Strategy:      StrategyTargetWins,
+			Rows: []RowDiffItem{
+				{
+					Status:       StatusDeleted, // missing in source, exists in target -> insert into source
+					TargetValues: map[string]any{"id": 42, "title": "From Target"},
+					PKValues:     map[string]any{"id": 42},
+				},
+				{
+					Status:       StatusModified,
+					TargetValues: map[string]any{"id": 1, "title": "Updated in Target"},
+					PKValues:     map[string]any{"id": 1},
+				},
+			},
+		}
+
+		resp, err := GenerateSyncScript(req)
+		if err != nil {
+			t.Fatalf("GenerateSyncScript failed: %v", err)
+		}
+
+		if resp.TargetDialect != "mysql" {
+			t.Errorf("expected effective dialect mysql for target_wins, got %s", resp.TargetDialect)
+		}
+		if !strings.Contains(resp.SQL, "START TRANSACTION;") {
+			t.Errorf("expected mysql transaction marker in script: %s", resp.SQL)
+		}
+		// Should target `origin_items` using MySQL backticks
+		if !strings.Contains(resp.SQL, "`origin_items`") {
+			t.Errorf("expected script to target `origin_items` with backticks: %s", resp.SQL)
+		}
+	})
+
+	t.Run("literal formatting time and bytea", func(t *testing.T) {
+		fixedTime := time.Date(2025, 6, 15, 12, 30, 45, 123456000, time.UTC)
+		formattedTime := FormatLiteral(fixedTime, "postgres")
+		if formattedTime != "'2025-06-15 12:30:45.123456'" {
+			t.Errorf("expected '2025-06-15 12:30:45.123456', got %s", formattedTime)
+		}
+
+		byteData := []byte("hello")
+		pgBytea := FormatLiteral(byteData, "postgres")
+		if pgBytea != "decode('68656c6c6f', 'hex')" {
+			t.Errorf("expected decode('68656c6c6f', 'hex') for postgres bytea, got %s", pgBytea)
+		}
+
+		sqliteBlob := FormatLiteral(byteData, "sqlite")
+		if sqliteBlob != "X'68656C6C6F'" {
+			t.Errorf("expected X'68656C6C6F' for sqlite blob, got %s", sqliteBlob)
+		}
+	})
+
+	t.Run("boolean cross-database normalization", func(t *testing.T) {
+		// SQLite 0/1 vs Postgres bool
+		if NormalizeValue(0) != NormalizeValue(false) {
+			t.Errorf("0 and false should normalize identically: %s vs %s", NormalizeValue(0), NormalizeValue(false))
+		}
+		if NormalizeValue(1) != NormalizeValue(true) {
+			t.Errorf("1 and true should normalize identically: %s vs %s", NormalizeValue(1), NormalizeValue(true))
+		}
+		if NormalizeValue(int64(0)) != "false" || NormalizeValue(int64(1)) != "true" {
+			t.Errorf("int64 0/1 normalization failed")
+		}
+		if NormalizeValue(uint8(0)) != "false" || NormalizeValue(uint8(1)) != "true" {
+			t.Errorf("uint8 0/1 normalization failed")
+		}
+		if NormalizeValue("t") != "true" || NormalizeValue("f") != "false" {
+			t.Errorf("string t/f normalization failed")
+		}
+	})
 }
