@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/dblens/dblens/internal/driver/types"
@@ -18,19 +19,17 @@ type ApplyIndexRequest struct {
 	ReadOnly bool   `json:"readOnly,omitempty"`
 }
 
+var (
+	reWhereClause       = regexp.MustCompile(`(?i)\bWHERE\s+([\s\S]+?)(?:\s+\b(?:ORDER|GROUP|LIMIT|OFFSET|HAVING)\b|;|$)`)
+	reCreateIndexStrict = regexp.MustCompile(`(?i)^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*|"[^"]+"|` + "`[^`]+`" + `)\s+ON\s+(?:(?:[a-zA-Z_][a-zA-Z0-9_]*|"[^"]+"|` + "`[^`]+`" + `)\.)?(?:[a-zA-Z_][a-zA-Z0-9_]*|"[^"]+"|` + "`[^`]+`" + `)\s*(?:USING\s+[a-zA-Z0-9_]+\s*)?\([^;]+\)(?:\s+WHERE\s+[^;]+)?\s*;?\s*$`)
+)
+
 func extractWhereClause(sql string) string {
-	upper := strings.ToUpper(sql)
-	idx := strings.Index(upper, " WHERE ")
-	if idx == -1 {
-		return ""
+	match := reWhereClause.FindStringSubmatch(sql)
+	if len(match) > 1 {
+		return strings.TrimSpace(match[1])
 	}
-	clause := sql[idx+7:]
-	for _, stop := range []string{" ORDER ", " GROUP ", " LIMIT ", " OFFSET ", " HAVING ", ";"} {
-		if stopIdx := strings.Index(strings.ToUpper(clause), stop); stopIdx != -1 {
-			clause = clause[:stopIdx]
-		}
-	}
-	return strings.TrimSpace(clause)
+	return ""
 }
 
 // ComparePlanDiffHandler compares baseline and candidate queries or plans.
@@ -54,11 +53,24 @@ func (h *Handler) ComparePlanDiffHandler(w http.ResponseWriter, r *http.Request)
 		dialect = entry.Driver.Dialect()
 	}
 
+	isReadOnly := isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
+		isTruthy(r.URL.Query().Get("readonly")) ||
+		req.ReadOnly
+
+	if isReadOnly {
+		if (strings.TrimSpace(req.BaselineSQL) != "" && IsNonSelectSQL(req.BaselineSQL)) ||
+			(strings.TrimSpace(req.CandidateSQL) != "" && IsNonSelectSQL(req.CandidateSQL)) {
+			sendError(w, http.StatusForbidden, "Connection is read-only. Mutating query blocked by Safe Mode.")
+			return
+		}
+	}
+
 	// Explain Baseline if raw SQL is provided and plan is missing
 	if req.BaselinePlan == nil && strings.TrimSpace(req.BaselineSQL) != "" {
-		opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+		canAnalyze := !IsNonSelectSQL(req.BaselineSQL)
+		opts := types.ExplainOptions{Analyze: canAnalyze, Schema: req.Schema}
 		plan, err := entry.Driver.ExplainQuery(r.Context(), req.BaselineSQL, opts)
-		if err != nil {
+		if err != nil && opts.Analyze {
 			opts.Analyze = false
 			plan, err = entry.Driver.ExplainQuery(r.Context(), req.BaselineSQL, opts)
 		}
@@ -74,9 +86,10 @@ func (h *Handler) ComparePlanDiffHandler(w http.ResponseWriter, r *http.Request)
 
 	// Explain Candidate if raw SQL is provided and plan is missing
 	if req.CandidatePlan == nil && strings.TrimSpace(req.CandidateSQL) != "" {
-		opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+		canAnalyze := !IsNonSelectSQL(req.CandidateSQL)
+		opts := types.ExplainOptions{Analyze: canAnalyze, Schema: req.Schema}
 		plan, err := entry.Driver.ExplainQuery(r.Context(), req.CandidateSQL, opts)
-		if err != nil {
+		if err != nil && opts.Analyze {
 			opts.Analyze = false
 			plan, err = entry.Driver.ExplainQuery(r.Context(), req.CandidateSQL, opts)
 		}
@@ -115,11 +128,24 @@ func (h *Handler) AdvisePlanDiffHandler(w http.ResponseWriter, r *http.Request) 
 		dialect = entry.Driver.Dialect()
 	}
 
+	isReadOnly := isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
+		isTruthy(r.URL.Query().Get("readonly")) ||
+		req.ReadOnly
+
+	if isReadOnly {
+		if (strings.TrimSpace(req.BaselineSQL) != "" && IsNonSelectSQL(req.BaselineSQL)) ||
+			(strings.TrimSpace(req.CandidateSQL) != "" && IsNonSelectSQL(req.CandidateSQL)) {
+			sendError(w, http.StatusForbidden, "Connection is read-only. Mutating query blocked by Safe Mode.")
+			return
+		}
+	}
+
 	// If candidate plan is missing but SQL provided, explain candidate query
 	if req.CandidatePlan == nil && strings.TrimSpace(req.CandidateSQL) != "" {
-		opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+		canAnalyze := !IsNonSelectSQL(req.CandidateSQL)
+		opts := types.ExplainOptions{Analyze: canAnalyze, Schema: req.Schema}
 		plan, err := entry.Driver.ExplainQuery(r.Context(), req.CandidateSQL, opts)
-		if err != nil {
+		if err != nil && opts.Analyze {
 			opts.Analyze = false
 			plan, _ = entry.Driver.ExplainQuery(r.Context(), req.CandidateSQL, opts)
 		}
@@ -131,9 +157,10 @@ func (h *Handler) AdvisePlanDiffHandler(w http.ResponseWriter, r *http.Request) 
 
 	// If baseline plan is missing but SQL provided, explain baseline query
 	if req.BaselinePlan == nil && strings.TrimSpace(req.BaselineSQL) != "" {
-		opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+		canAnalyze := !IsNonSelectSQL(req.BaselineSQL)
+		opts := types.ExplainOptions{Analyze: canAnalyze, Schema: req.Schema}
 		plan, err := entry.Driver.ExplainQuery(r.Context(), req.BaselineSQL, opts)
-		if err != nil {
+		if err != nil && opts.Analyze {
 			opts.Analyze = false
 			plan, _ = entry.Driver.ExplainQuery(r.Context(), req.BaselineSQL, opts)
 		}
@@ -151,7 +178,7 @@ func (h *Handler) AdvisePlanDiffHandler(w http.ResponseWriter, r *http.Request) 
 // Safe Mode / Read-Only protected.
 // POST /api/connections/{connId}/plandiff/apply-index
 func (h *Handler) ApplyPlanIndexHandler(w http.ResponseWriter, r *http.Request) {
-	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) || isTruthy(r.URL.Query().Get("readonly")) {
 		sendError(w, http.StatusForbidden, "Connection is read-only. Index creation blocked by Safe Mode.")
 		return
 	}
@@ -174,8 +201,28 @@ func (h *Handler) ApplyPlanIndexHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	upper := strings.ToUpper(ddl)
-	if !strings.HasPrefix(upper, "CREATE INDEX") && !strings.HasPrefix(upper, "CREATE UNIQUE INDEX") {
+	cleaned := reBlockComment.ReplaceAllString(ddl, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	stmts := splitStatements(cleaned)
+	var validStmts []string
+	for _, s := range stmts {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			validStmts = append(validStmts, trimmed)
+		}
+	}
+	if len(validStmts) != 1 {
+		sendError(w, http.StatusBadRequest, "Only a single CREATE INDEX statement is permitted")
+		return
+	}
+
+	stmt := validStmts[0]
+	stmtWithoutTrailingSemicolon := strings.TrimSuffix(stmt, ";")
+	if strings.Contains(stmtWithoutTrailingSemicolon, ";") {
+		sendError(w, http.StatusBadRequest, "Multi-statement execution is strictly prohibited")
+		return
+	}
+
+	if !reCreateIndexStrict.MatchString(stmt) {
 		sendError(w, http.StatusBadRequest, "Only CREATE INDEX or CREATE UNIQUE INDEX statements are permitted")
 		return
 	}
@@ -208,30 +255,51 @@ func (h *Handler) ExportPlanDiffMDHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	isReadOnly := isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
+		isTruthy(r.URL.Query().Get("readonly"))
+
 	var diffResult *plandiff.PlanDiffResult
 
 	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 		bodyBytes, err := io.ReadAll(r.Body)
-		if err == nil && len(bodyBytes) > 0 {
+		if err != nil {
+			http.Error(w, "Request body too large: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(bodyBytes) > 0 {
 			// First try unmarshaling as full PlanDiffResult
 			var full plandiff.PlanDiffResult
-			if json.Unmarshal(bodyBytes, &full) == nil && full.Summary.BaselineTotalCost > 0 || full.Summary.CandidateTotalCost > 0 || full.AlignedTree != nil {
+			if json.Unmarshal(bodyBytes, &full) == nil && (full.Summary.BaselineTotalCost > 0 || full.Summary.CandidateTotalCost > 0 || full.AlignedTree != nil) {
 				diffResult = &full
 			} else {
 				// Otherwise unmarshal as PlanDiffRequest
 				var req plandiff.PlanDiffRequest
-				if json.Unmarshal(bodyBytes, &req) == nil {
+				if err := json.Unmarshal(bodyBytes, &req); err == nil {
+					if isReadOnly || req.ReadOnly {
+						if (strings.TrimSpace(req.BaselineSQL) != "" && IsNonSelectSQL(req.BaselineSQL)) ||
+							(strings.TrimSpace(req.CandidateSQL) != "" && IsNonSelectSQL(req.CandidateSQL)) {
+							http.Error(w, "Connection is read-only. Mutating query blocked by Safe Mode.", http.StatusForbidden)
+							return
+						}
+					}
 					dialect := req.Dialect
 					if dialect == "" && entry.Driver != nil {
 						dialect = entry.Driver.Dialect()
 					}
 					if req.BaselinePlan == nil && strings.TrimSpace(req.BaselineSQL) != "" {
-						opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+						opts := types.ExplainOptions{Analyze: !IsNonSelectSQL(req.BaselineSQL), Schema: req.Schema}
 						req.BaselinePlan, _ = entry.Driver.ExplainQuery(r.Context(), req.BaselineSQL, opts)
 					}
+					if req.BaselinePlan != nil && req.BaselinePlan.Root != nil && req.BaselinePlan.Root.Filter == "" && req.BaselineSQL != "" {
+						req.BaselinePlan.Root.Filter = extractWhereClause(req.BaselineSQL)
+					}
 					if req.CandidatePlan == nil && strings.TrimSpace(req.CandidateSQL) != "" {
-						opts := types.ExplainOptions{Analyze: true, Schema: req.Schema}
+						opts := types.ExplainOptions{Analyze: !IsNonSelectSQL(req.CandidateSQL), Schema: req.Schema}
 						req.CandidatePlan, _ = entry.Driver.ExplainQuery(r.Context(), req.CandidateSQL, opts)
+					}
+					if req.CandidatePlan != nil && req.CandidatePlan.Root != nil && req.CandidatePlan.Root.Filter == "" && req.CandidateSQL != "" {
+						req.CandidatePlan.Root.Filter = extractWhereClause(req.CandidateSQL)
 					}
 					diffResult = plandiff.ComparePlans(req.BaselinePlan, req.CandidatePlan, dialect, req.Schema)
 				}

@@ -12,7 +12,8 @@ var (
 	reStringLiteral = regexp.MustCompile(`'[^']*'`)
 	reTypeCast      = regexp.MustCompile(`::[a-zA-Z0-9_]+`)
 	reParens        = regexp.MustCompile(`[()]`)
-	reIdent         = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*)\b`)
+	reIdent         = regexp.MustCompile(`\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\b`)
+	reValidIdent    = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 )
 
 var sqlKeywords = map[string]bool{
@@ -39,20 +40,25 @@ func RecommendIndexes(candidate, baseline *types.ExplainResult, dialect, schema 
 		dialect = "postgres"
 	}
 
-	var recs []IndexRecommendation
+	recs := make([]IndexRecommendation, 0)
 	seen := make(map[string]bool)
 
-	// Collect nodes from candidate (or baseline if candidate is nil)
+	if schema != "" && !reValidIdent.MatchString(schema) {
+		schema = ""
+	}
+
+	// Collect nodes from candidate and baseline, deduplicating recommendations
 	var nodes []*types.PlanNode
 	if candidate != nil && candidate.Root != nil {
-		collectPlanNodes(candidate.Root, &nodes)
-	} else if baseline != nil && baseline.Root != nil {
-		collectPlanNodes(baseline.Root, &nodes)
+		collectPlanNodes(candidate.Root, &nodes, 0)
+	}
+	if baseline != nil && baseline.Root != nil {
+		collectPlanNodes(baseline.Root, &nodes, 0)
 	}
 
 	for _, node := range nodes {
 		table := node.RelationName
-		if table == "" {
+		if table == "" || !reValidIdent.MatchString(table) {
 			continue
 		}
 
@@ -135,13 +141,13 @@ func RecommendIndexes(candidate, baseline *types.ExplainResult, dialect, schema 
 	return recs
 }
 
-func collectPlanNodes(node *types.PlanNode, out *[]*types.PlanNode) {
-	if node == nil {
+func collectPlanNodes(node *types.PlanNode, out *[]*types.PlanNode, depth int) {
+	if node == nil || depth > 100 {
 		return
 	}
 	*out = append(*out, node)
 	for i := range node.Children {
-		collectPlanNodes(&node.Children[i], out)
+		collectPlanNodes(&node.Children[i], out, depth+1)
 	}
 }
 
@@ -234,15 +240,34 @@ func cleanColumn(w, table string) string {
 	if strings.EqualFold(w, table) {
 		return ""
 	}
-	// Check if identifier contains dot table.col
+	// Check if identifier contains dot table.col or schema.table.col
 	if strings.Contains(w, ".") {
 		parts := strings.Split(w, ".")
-		w = parts[len(parts)-1]
+		if len(parts) >= 2 {
+			tblPrefix := parts[len(parts)-2]
+			if !strings.EqualFold(tblPrefix, table) {
+				return "" // Foreign table column!
+			}
+			w = parts[len(parts)-1]
+		} else {
+			return ""
+		}
 	}
-	if len(w) < 2 {
+
+	lower = strings.ToLower(w)
+	if sqlKeywords[lower] {
 		return ""
 	}
-	return strings.ToLower(w)
+	if strings.HasPrefix(lower, "idx_") || strings.HasPrefix(lower, "pk_") || strings.HasPrefix(lower, "fk_") {
+		return ""
+	}
+	if strings.EqualFold(w, table) {
+		return ""
+	}
+	if !reValidIdent.MatchString(w) {
+		return ""
+	}
+	return lower
 }
 
 func contains(slice []string, s string) bool {
@@ -265,8 +290,34 @@ func summarizeFilter(f string) string {
 	return f
 }
 
+func quoteIdentifier(dialect, ident string) string {
+	switch strings.ToLower(dialect) {
+	case "mysql", "mariadb":
+		return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+	default: // postgres, sqlite
+		return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+	}
+}
+
 func generateIndexDDL(table, schema string, cols []string, indexType, dialect string) (string, string) {
-	colList := strings.Join(cols, ", ")
+	if !reValidIdent.MatchString(table) {
+		return "", ""
+	}
+	if schema != "" && !reValidIdent.MatchString(schema) {
+		schema = ""
+	}
+	for _, col := range cols {
+		if !reValidIdent.MatchString(col) {
+			return "", ""
+		}
+	}
+
+	quotedCols := make([]string, len(cols))
+	for i, c := range cols {
+		quotedCols[i] = quoteIdentifier(dialect, c)
+	}
+	colList := strings.Join(quotedCols, ", ")
+
 	colSuffix := strings.Join(cols, "_")
 	colSuffix = regexp.MustCompile(`[^a-zA-Z0-9_]`).ReplaceAllString(colSuffix, "")
 	if len(colSuffix) > 30 {
@@ -274,9 +325,9 @@ func generateIndexDDL(table, schema string, cols []string, indexType, dialect st
 	}
 
 	idxName := fmt.Sprintf("idx_%s_%s", table, colSuffix)
-	tableRef := table
+	tableRef := quoteIdentifier(dialect, table)
 	if schema != "" && !strings.EqualFold(schema, "public") && !strings.EqualFold(schema, "main") {
-		tableRef = fmt.Sprintf("%s.%s", schema, table)
+		tableRef = fmt.Sprintf("%s.%s", quoteIdentifier(dialect, schema), quoteIdentifier(dialect, table))
 	}
 
 	switch strings.ToLower(dialect) {

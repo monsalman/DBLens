@@ -307,11 +307,11 @@ export const PlanDiffModal: React.FC<PlanDiffModalProps> = ({
                   Index Advice
                 </span>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-indigo-400 bg-indigo-950/40 border border-indigo-800/40">
-                  {diffResult.recommendations.length} available
+                  {(diffResult.recommendations || []).length} available
                 </span>
               </div>
               <div className="text-xs text-[var(--muted)]">
-                {diffResult.recommendations.length > 0
+                {(diffResult.recommendations || []).length > 0
                   ? 'Estimated ~60-90% savings'
                   : 'Indexes adequately cover queries'}
               </div>
@@ -341,7 +341,7 @@ export const PlanDiffModal: React.FC<PlanDiffModalProps> = ({
               }`}
             >
               <Sparkles className="w-3 h-3 text-indigo-400" />
-              Index Advisor ({diffResult.recommendations.length})
+              Index Advisor ({(diffResult.recommendations || []).length})
             </button>
           </div>
         )}
@@ -390,14 +390,14 @@ export const PlanDiffModal: React.FC<PlanDiffModalProps> = ({
                     Smart Index Advisor
                   </span>
                   <span className="text-[11px] text-[var(--muted)]">
-                    {diffResult.recommendations.length}{' '}
-                    {diffResult.recommendations.length === 1 ? 'suggestion' : 'suggestions'}
+                    {(diffResult.recommendations || []).length}{' '}
+                    {(diffResult.recommendations || []).length === 1 ? 'suggestion' : 'suggestions'}
                   </span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                  {diffResult.recommendations.length > 0 ? (
-                    diffResult.recommendations.map((rec) => (
+                  {(diffResult.recommendations || []).length > 0 ? (
+                    (diffResult.recommendations || []).map((rec) => (
                       <IndexAdvisorCard
                         key={rec.ddl}
                         recommendation={rec}

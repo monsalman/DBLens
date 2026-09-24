@@ -47,7 +47,7 @@ export interface PlanDiffResult {
   candidatePlan?: ExplainResult | null
   alignedTree?: AlignedNode | null
   summary: PlanDiffSummary
-  recommendations: IndexRecommendation[]
+  recommendations?: IndexRecommendation[]
   dialect: string
 }
 
@@ -58,6 +58,7 @@ export interface PlanDiffRequest {
   candidatePlan?: ExplainResult | null
   dialect?: string
   schema?: string
+  readOnly?: boolean
 }
 
 export function calculateDeltaPct(before: number, after: number): number {

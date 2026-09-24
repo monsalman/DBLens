@@ -10,12 +10,13 @@ import (
 
 // PlanDiffRequest specifies inputs to compare two execution plans or queries.
 type PlanDiffRequest struct {
-	BaselineSQL  string               `json:"baselineSql,omitempty"`
-	CandidateSQL string               `json:"candidateSql,omitempty"`
-	BaselinePlan *types.ExplainResult `json:"baselinePlan,omitempty"`
+	BaselineSQL   string               `json:"baselineSql,omitempty"`
+	CandidateSQL  string               `json:"candidateSql,omitempty"`
+	BaselinePlan  *types.ExplainResult `json:"baselinePlan,omitempty"`
 	CandidatePlan *types.ExplainResult `json:"candidatePlan,omitempty"`
-	Dialect      string               `json:"dialect,omitempty"`
-	Schema       string               `json:"schema,omitempty"`
+	Dialect       string               `json:"dialect,omitempty"`
+	Schema        string               `json:"schema,omitempty"`
+	ReadOnly      bool                 `json:"readOnly,omitempty"`
 }
 
 // AlignedNode represents a paired node between Baseline and Candidate plans.
@@ -152,7 +153,11 @@ func ComparePlans(baseline, candidate *types.ExplainResult, dialect, schema stri
 }
 
 func countBottlenecks(node *AlignedNode) int {
-	if node == nil {
+	return countBottlenecksDepth(node, 0)
+}
+
+func countBottlenecksDepth(node *AlignedNode, depth int) int {
+	if node == nil || depth > 100 {
 		return 0
 	}
 	count := 0
@@ -160,7 +165,7 @@ func countBottlenecks(node *AlignedNode) int {
 		count++
 	}
 	for i := range node.Children {
-		count += countBottlenecks(&node.Children[i])
+		count += countBottlenecksDepth(&node.Children[i], depth+1)
 	}
 	return count
 }
@@ -237,7 +242,7 @@ func GenerateMarkdownReport(diff *PlanDiffResult) string {
 }
 
 func collectMarkdownRows(node *AlignedNode, depth int, rows *[]string) {
-	if node == nil {
+	if node == nil || depth > 100 {
 		return
 	}
 	indent := strings.Repeat("&nbsp;&nbsp;", depth)

@@ -2,6 +2,7 @@ package plandiff
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/dblens/dblens/internal/driver/types"
@@ -113,11 +114,11 @@ func AlignTrees(baseRoot, candRoot *types.PlanNode) *AlignedNode {
 	if baseRoot == nil && candRoot == nil {
 		return nil
 	}
-	return alignNodes(baseRoot, candRoot, "node-0")
+	return alignNodes(baseRoot, candRoot, "node-0", 0)
 }
 
-func alignNodes(before, after *types.PlanNode, id string) *AlignedNode {
-	if before == nil && after == nil {
+func alignNodes(before, after *types.PlanNode, id string, depth int) *AlignedNode {
+	if (before == nil && after == nil) || depth > 100 {
 		return nil
 	}
 
@@ -151,7 +152,7 @@ func alignNodes(before, after *types.PlanNode, id string) *AlignedNode {
 			after, before,
 		)
 
-		children := alignChildren(before.Children, after.Children, id)
+		children := alignChildren(before.Children, after.Children, id, depth+1)
 
 		return &AlignedNode{
 			ID:                 id,
@@ -180,7 +181,7 @@ func alignNodes(before, after *types.PlanNode, id string) *AlignedNode {
 		timeBefore := getNodeTime(before)
 		rowsBefore := getNodeRows(before)
 
-		children := alignChildren(before.Children, nil, id)
+		children := alignChildren(before.Children, nil, id, depth+1)
 
 		return &AlignedNode{
 			ID:                 id,
@@ -208,7 +209,7 @@ func alignNodes(before, after *types.PlanNode, id string) *AlignedNode {
 	rowsAfter := getNodeRows(after)
 
 	sev := determineSeverity(0, costAfter, 100.0, 0, timeAfter, 100.0, 0, rowsAfter, 100.0, after, nil)
-	children := alignChildren(nil, after.Children, id)
+	children := alignChildren(nil, after.Children, id, depth+1)
 
 	return &AlignedNode{
 		ID:                 id,
@@ -230,7 +231,10 @@ func alignNodes(before, after *types.PlanNode, id string) *AlignedNode {
 	}
 }
 
-func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string) []AlignedNode {
+func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string, depth int) []AlignedNode {
+	if depth > 100 {
+		return nil
+	}
 	M := len(beforeKids)
 	N := len(afterKids)
 
@@ -239,29 +243,29 @@ func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string) []Al
 	}
 
 	if M == 0 {
-		res := make([]AlignedNode, N)
+		res := make([]AlignedNode, 0, N)
 		for j := 0; j < N; j++ {
-			node := alignNodes(nil, &afterKids[j], fmt.Sprintf("%s-%d", parentID, j))
+			node := alignNodes(nil, &afterKids[j], fmt.Sprintf("%s-%d", parentID, j), depth)
 			if node != nil {
-				res[j] = *node
+				res = append(res, *node)
 			}
 		}
 		return res
 	}
 
 	if N == 0 {
-		res := make([]AlignedNode, M)
+		res := make([]AlignedNode, 0, M)
 		for i := 0; i < M; i++ {
-			node := alignNodes(&beforeKids[i], nil, fmt.Sprintf("%s-%d", parentID, i))
+			node := alignNodes(&beforeKids[i], nil, fmt.Sprintf("%s-%d", parentID, i), depth)
 			if node != nil {
-				res[i] = *node
+				res = append(res, *node)
 			}
 		}
 		return res
 	}
 
 	if M == 1 && N == 1 {
-		node := alignNodes(&beforeKids[0], &afterKids[0], fmt.Sprintf("%s-0", parentID))
+		node := alignNodes(&beforeKids[0], &afterKids[0], fmt.Sprintf("%s-0", parentID), depth)
 		if node != nil {
 			return []AlignedNode{*node}
 		}
@@ -304,24 +308,16 @@ func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string) []Al
 		}
 	}
 
-	// Greedy match by highest score
-	for {
-		bestScore := -1
-		bestIdx := -1
-		for idx, p := range pairs {
-			if !usedBefore[p.i] && matchedAfter[p.j] == -1 {
-				if p.score > bestScore {
-					bestScore = p.score
-					bestIdx = idx
-				}
-			}
+	// Sort once by score descending and greedily pick in O(P log P)
+	sort.Slice(pairs, func(a, b int) bool {
+		return pairs[a].score > pairs[b].score
+	})
+
+	for _, p := range pairs {
+		if !usedBefore[p.i] && matchedAfter[p.j] == -1 {
+			usedBefore[p.i] = true
+			matchedAfter[p.j] = p.i
 		}
-		if bestIdx == -1 {
-			break
-		}
-		chosen := pairs[bestIdx]
-		usedBefore[chosen.i] = true
-		matchedAfter[chosen.j] = chosen.i
 	}
 
 	var res []AlignedNode
@@ -329,12 +325,12 @@ func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string) []Al
 		id := fmt.Sprintf("%s-%d", parentID, len(res))
 		if matchedAfter[j] >= 0 {
 			i := matchedAfter[j]
-			node := alignNodes(&beforeKids[i], &afterKids[j], id)
+			node := alignNodes(&beforeKids[i], &afterKids[j], id, depth)
 			if node != nil {
 				res = append(res, *node)
 			}
 		} else {
-			node := alignNodes(nil, &afterKids[j], id)
+			node := alignNodes(nil, &afterKids[j], id, depth)
 			if node != nil {
 				res = append(res, *node)
 			}
@@ -344,7 +340,7 @@ func alignChildren(beforeKids, afterKids []types.PlanNode, parentID string) []Al
 	for i := 0; i < M; i++ {
 		if !usedBefore[i] {
 			id := fmt.Sprintf("%s-%d", parentID, len(res))
-			node := alignNodes(&beforeKids[i], nil, id)
+			node := alignNodes(&beforeKids[i], nil, id, depth)
 			if node != nil {
 				res = append(res, *node)
 			}
