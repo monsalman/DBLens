@@ -227,6 +227,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
 	api.Post("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
 
+	// ── Feature-41: Execution Plan Diff Studio & Smart Index Advisor ────
+	api.Post("/connections/{connId}/plandiff/compare", h.ComparePlanDiffHandler)
+	api.Post("/connections/{connId}/plandiff/advise", h.AdvisePlanDiffHandler)
+	api.Post("/connections/{connId}/plandiff/apply-index", h.ApplyPlanIndexHandler)
+	api.Get("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
+	api.Post("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

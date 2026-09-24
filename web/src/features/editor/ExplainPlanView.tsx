@@ -20,6 +20,7 @@ import {
   Minimize2,
   X,
   Zap,
+  GitCompare,
 } from 'lucide-react'
 import type { ExplainResult, PlanNode } from '../../lib/api'
 
@@ -27,6 +28,7 @@ interface Props {
   plan: ExplainResult | null
   isExplaining?: boolean
   onClose?: () => void
+  onComparePlan?: () => void
 }
 
 // Tree node augmented with unique ID and depth
@@ -121,7 +123,7 @@ function findNode(node: AugmentedNode | null, id: string | null): AugmentedNode 
   return null
 }
 
-export const ExplainPlanView: React.FC<Props> = ({ plan, isExplaining, onClose }) => {
+export const ExplainPlanView: React.FC<Props> = ({ plan, isExplaining, onClose, onComparePlan }) => {
   const [viewMode, setViewMode] = useState<'visual' | 'summary' | 'raw'>('visual')
   const [copied, setCopied] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -375,6 +377,18 @@ export const ExplainPlanView: React.FC<Props> = ({ plan, isExplaining, onClose }
               </>
             )}
           </button>
+
+          {onComparePlan && (
+            <button
+              onClick={onComparePlan}
+              className="flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/25 transition-colors font-medium cursor-pointer"
+              title="Compare with another query execution plan (Cmd+Shift+E)"
+              aria-label="Compare Plan"
+            >
+              <GitCompare className="w-3 h-3" />
+              <span>Compare Plan</span>
+            </button>
+          )}
 
           {onClose && (
             <button

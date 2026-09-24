@@ -41,6 +41,11 @@ import type {
   PushdownRequest,
   PushdownResult,
 } from '../features/pivot/pivotHelper'
+import type {
+  PlanDiffRequest,
+  PlanDiffResult,
+  IndexRecommendation,
+} from '../features/plandiff/planDiffHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2790,6 +2795,93 @@ export const api = {
     const json = await res.json()
     return json.data ?? json
   },
+
+  async comparePlanDiff(
+    connId: string,
+    req: PlanDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<PlanDiffResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/compare`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Plan diff comparison failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async advisePlanDiff(
+    connId: string,
+    req: Partial<PlanDiffRequest>,
+    profiles?: ConnectionConfig[]
+  ): Promise<IndexRecommendation[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/advise`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch index advice (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyPlanIndex(
+    connId: string,
+    ddl: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string; ddl: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/apply-index`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ddl }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to apply index (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportPlanDiffMd(
+    connId: string,
+    diff: PlanDiffResult,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/export.md`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(diff),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `Failed to export plan diff report (${res.status})`)
+    }
+    return await res.text()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3278,6 +3370,14 @@ export type {
   GateRequest,
   GateResult,
 } from '../features/lint/lintRules'
+
+export type {
+  PlanDiffRequest,
+  PlanDiffResult,
+  IndexRecommendation,
+  AlignedNode,
+  PlanDiffSummary,
+} from '../features/plandiff/planDiffHelper'
 
 
 

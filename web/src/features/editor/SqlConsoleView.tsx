@@ -32,6 +32,7 @@ import {
   ShieldAlert,
   Sliders,
   Table,
+  GitCompare,
 } from 'lucide-react'
 import type { EditorView } from '@codemirror/view'
 import { api } from '../../lib/api'
@@ -49,6 +50,7 @@ import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { AiAssistantBar } from './AiAssistantBar'
 import { MaterializeModal } from '../materialize/MaterializeModal'
+import { PlanDiffModal } from '../plandiff/PlanDiffModal'
 import { useSqlLint } from '../lint/useSqlLint'
 import { createLintExtension } from '../lint/lintDecorations'
 import { LintPanel } from '../lint/LintPanel'
@@ -146,12 +148,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [fixContext, setFixContext] = useState<{ query: string; error: string } | null>(null)
   const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
   const [isMaterializeOpen, setIsMaterializeOpen] = useState(false)
+  const [isPlanDiffOpen, setIsPlanDiffOpen] = useState(false)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
         e.preventDefault()
         setIsMaterializeOpen(true)
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault()
+        setIsPlanDiffOpen(true)
       }
       if (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault()
@@ -1144,6 +1151,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
             </button>
 
             <button
+              id="dblens-plan-diff-btn"
+              onClick={() => setIsPlanDiffOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-indigo-400 border border-indigo-500/25 transition-colors cursor-pointer"
+              title="Execution Plan Diff Studio & Smart Index Advisor (Cmd+Shift+E)"
+              aria-label="Compare Plan Diff"
+            >
+              <GitCompare className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Compare Plan</span>
+            </button>
+
+            <button
               id="dblens-run-query-btn"
               onClick={() => handleRun()}
               disabled={isExecuting || !currentTab?.query.trim()}
@@ -1289,6 +1307,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                 [currentTab?.id || '']: 'results',
               }))
             }
+            onComparePlan={() => setIsPlanDiffOpen(true)}
           />
         )}
 
@@ -1889,6 +1908,19 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           isOpen={isLintSettingsOpen}
           onClose={() => setIsLintSettingsOpen(false)}
           onRulesUpdated={() => revalidateLint()}
+        />
+      )}
+
+      {/* Feature-41: Execution Plan Diff Studio Modal */}
+      {isPlanDiffOpen && (
+        <PlanDiffModal
+          isOpen={isPlanDiffOpen}
+          onClose={() => setIsPlanDiffOpen(false)}
+          connId={connId}
+          initialBaselineSql={currentTab?.query || ''}
+          initialBaselinePlan={currentExplain}
+          schema={selectedSchema}
+          profiles={effectiveConnections}
         />
       )}
     </div>
