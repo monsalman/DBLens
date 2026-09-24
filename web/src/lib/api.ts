@@ -46,6 +46,14 @@ import type {
   PlanDiffResult,
   IndexRecommendation,
 } from '../features/plandiff/planDiffHelper'
+import type {
+  DataDiffRequest,
+  DataDiffResult,
+  SyncScriptRequest,
+  SyncScriptResponse,
+  ApplySyncRequest,
+  ApplySyncResponse,
+} from '../features/datadiff/dataDiffHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2882,6 +2890,89 @@ export const api = {
     }
     return await res.text()
   },
+
+  async compareDataDiff(
+    req: DataDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<DataDiffResult> {
+    const srcDSN = this._getDSN(req.sourceConnId, profiles)
+    const res = await fetch('/api/datadiff/compare', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(srcDSN, req.sourceConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Data diff comparison failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async generateDataDiffSync(
+    req: SyncScriptRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SyncScriptResponse> {
+    const tgtDSN = this._getDSN(req.targetConnId || req.sourceConnId || '', profiles)
+    const res = await fetch('/api/datadiff/generate-sync', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Sync script generation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyDataDiffSync(
+    req: ApplySyncRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ApplySyncResponse> {
+    const tgtDSN = this._getDSN(req.targetConnId, profiles)
+    const res = await fetch('/api/datadiff/apply-sync', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Applying sync failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportDataDiffSQL(
+    req: SyncScriptRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const tgtDSN = this._getDSN(req.targetConnId || req.sourceConnId || '', profiles)
+    const res = await fetch('/api/datadiff/export.sql', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error(err || `Exporting SQL failed (${res.status})`)
+    }
+    return await res.text()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3378,6 +3469,19 @@ export type {
   AlignedNode,
   PlanDiffSummary,
 } from '../features/plandiff/planDiffHelper'
+
+export type {
+  DataDiffRequest,
+  RowDiffItem,
+  DataDiffSummary,
+  DataDiffResult,
+  SyncConflictStrategy,
+  SyncScriptRequest,
+  SyncScriptResponse,
+  ApplySyncRequest,
+  ApplySyncResponse,
+  RowStatus,
+} from '../features/datadiff/dataDiffHelper'
 
 
 

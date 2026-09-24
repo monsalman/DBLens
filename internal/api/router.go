@@ -234,6 +234,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
 	api.Post("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
 
+	// ── Feature-42: Cross-Database Row-Level Data Diff & Bi-Directional Sync Studio ────
+	api.Post("/datadiff/compare", h.CompareDataDiffHandler)
+	api.Post("/datadiff/generate-sync", h.GenerateDataDiffSyncHandler)
+	api.Post("/datadiff/apply-sync", h.ApplyDataDiffSyncHandler)
+	api.Get("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
+	api.Post("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

@@ -107,6 +107,10 @@ interface AppState {
   closeRoutineStudio: () => void
   isCronStudioOpen: boolean
   setIsCronStudioOpen: (open: boolean) => void
+  isDataDiffOpen: boolean
+  setIsDataDiffOpen: (open: boolean) => void
+  openDataDiff: () => void
+  closeDataDiff: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -375,6 +379,10 @@ export const useAppStore = create<AppState>()(
       closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
       isCronStudioOpen: false,
       setIsCronStudioOpen: (isCronStudioOpen) => set({ isCronStudioOpen }),
+      isDataDiffOpen: false,
+      setIsDataDiffOpen: (isDataDiffOpen) => set({ isDataDiffOpen }),
+      openDataDiff: () => set({ isDataDiffOpen: true }),
+      closeDataDiff: () => set({ isDataDiffOpen: false }),
 
       peekDrawer: {
         isOpen: false,

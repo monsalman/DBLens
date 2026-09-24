@@ -16,6 +16,7 @@ import {
   Server,
   CornerDownLeft,
   GitCompare,
+  ArrowLeftRight,
   Activity,
   ShieldCheck,
   Shield,
@@ -238,6 +239,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['diff', 'schema', 'compare', 'sync', 'migration'],
       onSelect: () => {
         onTabChange('diff')
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:datadiff',
+      title: 'Row-Level Data Diff & Bi-Directional Sync Studio',
+      subtitle: 'Compare rows across databases, detect modified cell values, and sync DML',
+      category: 'Actions',
+      icon: ArrowLeftRight,
+      badge: 'DATA DIFF',
+      keywords: ['data diff', 'row diff', 'sync', 'bi-directional', 'dml', 'compare data'],
+      onSelect: () => {
+        useAppStore.getState().openDataDiff()
         closePalette()
       },
     })

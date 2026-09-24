@@ -25,6 +25,7 @@ import { AuditLogPanel } from './features/audit/AuditLogPanel'
 import { PlaybookPanel } from './features/playbook/PlaybookPanel'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
+import { DataDiffModal } from './features/datadiff/DataDiffModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -115,6 +116,22 @@ export function App() {
     setActiveConnId(null)
     setSelectedTable(null)
     useAppStore.getState().setActiveConnectionId('' as any)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.altKey && (e.key === 'd' || e.key === 'D')) || (e.metaKey && e.altKey && (e.key === 'd' || e.key === 'D'))) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isDataDiffOpen) {
+          store.closeDataDiff()
+        } else {
+          store.openDataDiff()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   useEffect(() => {
@@ -386,6 +403,7 @@ export function App() {
       <PlaybookPanel isOpen={isPlaybookOpen} onClose={() => setIsPlaybookOpen(false)} />
       <HealthDashboard isOpen={isHealthOpen} onClose={() => setIsHealthOpen(false)} />
       <GlobalLiveFeedDrawer />
+      <DataDiffModal />
     </QueryClientProvider>
   )
 }
