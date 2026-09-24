@@ -27,24 +27,84 @@ func NormalizeValue(val any) string {
 		return "false"
 
 	case int:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatInt(int64(v), 10)
 	case int8:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatInt(int64(v), 10)
 	case int16:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatInt(int64(v), 10)
 	case int32:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatInt(int64(v), 10)
 	case int64:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatInt(v, 10)
 	case uint:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatUint(uint64(v), 10)
 	case uint8:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatUint(uint64(v), 10)
 	case uint16:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatUint(uint64(v), 10)
 	case uint32:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatUint(uint64(v), 10)
 	case uint64:
+		if v == 0 {
+			return "false"
+		}
+		if v == 1 {
+			return "true"
+		}
 		return strconv.FormatUint(v, 10)
 
 	case float32:
@@ -85,6 +145,13 @@ func NormalizeValue(val any) string {
 
 	case string:
 		trimmed := strings.TrimSpace(v)
+		lower := strings.ToLower(trimmed)
+		if lower == "true" || lower == "t" {
+			return "true"
+		}
+		if lower == "false" || lower == "f" {
+			return "false"
+		}
 		// Check if it's a JSON object or array
 		if isJSON(trimmed) {
 			return canonicalizeJSON(trimmed)

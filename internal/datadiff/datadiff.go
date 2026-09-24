@@ -3,12 +3,33 @@ package datadiff
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
 	"github.com/dblens/dblens/internal/driver/types"
 )
+
+var reMutatingKeywords = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|EXEC|EXECUTE|CREATE|GRANT|REVOKE)\b`)
+
+// ValidateWhereClause checks for SQL injection tokens and mutating statements in WHERE filter.
+func ValidateWhereClause(where string) error {
+	trimmed := strings.TrimSpace(where)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.Contains(trimmed, ";") {
+		return fmt.Errorf("where clause must not contain semicolons")
+	}
+	if strings.Contains(trimmed, "--") || strings.Contains(trimmed, "/*") || strings.Contains(trimmed, "*/") {
+		return fmt.Errorf("where clause must not contain SQL comments")
+	}
+	if match := reMutatingKeywords.FindString(trimmed); match != "" {
+		return fmt.Errorf("where clause contains prohibited keyword: %s", strings.ToUpper(match))
+	}
+	return nil
+}
 
 type RowStatus string
 
@@ -82,6 +103,7 @@ type SyncScriptRequest struct {
 	SourceDSN     string               `json:"sourceDsn,omitempty"`
 	SourceSchema  string               `json:"sourceSchema,omitempty"`
 	SourceTable   string               `json:"sourceTable,omitempty"`
+	SourceDialect string               `json:"sourceDialect,omitempty"`
 	TargetConnID  string               `json:"targetConnId,omitempty"`
 	TargetDSN     string               `json:"targetDsn,omitempty"`
 	TargetSchema  string               `json:"targetSchema,omitempty"`
@@ -107,6 +129,8 @@ type SyncScriptResponse struct {
 type ApplySyncRequest struct {
 	TargetConnID string   `json:"targetConnId"`
 	TargetDSN    string   `json:"targetDsn,omitempty"`
+	TargetSchema string   `json:"targetSchema,omitempty"`
+	TargetTable  string   `json:"targetTable,omitempty"`
 	Statements   []string `json:"statements"`
 	SQL          string   `json:"sql,omitempty"`
 	ReadOnly     bool     `json:"readOnly,omitempty"`
@@ -143,6 +167,10 @@ func CompareData(ctx context.Context, req DataDiffRequest, srcDriver, tgtDriver 
 	}
 	if req.TargetSchema != "" && !IsValidIdentifier(req.TargetSchema) {
 		return nil, fmt.Errorf("invalid targetSchema identifier: %q", req.TargetSchema)
+	}
+
+	if err := ValidateWhereClause(req.WhereClause); err != nil {
+		return nil, fmt.Errorf("invalid where clause: %w", err)
 	}
 
 	srcDialect := alter.NormalizeDialect(srcDriver.Dialect())

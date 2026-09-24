@@ -15,6 +15,7 @@ import {
 import {
   api,
   type DataDiffResult,
+  type SyncConflictStrategy,
 } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { DiffSummaryBar } from './DiffSummaryBar'
@@ -93,6 +94,7 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
 
   // Modal controls
+  const [strategy, setStrategy] = useState<SyncConflictStrategy>('source_wins')
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false)
   const [copiedCLI, setCopiedCLI] = useState(false)
 
@@ -181,7 +183,7 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
     let mounted = true
 
     api
-      .getTableDetails(sourceConnId, sourceSchema, sourceTable, connections)
+      .getTableDetails(sourceConnId, sourceTable, sourceSchema, connections)
       .then((detail) => {
         if (!mounted || !detail?.columns) return
         const cols = detail.columns.map((c) => c.name)
@@ -189,14 +191,29 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
 
         setAvailableColumns(cols)
         setSelectedColumns(cols)
-        setSelectedPKs(pks.length > 0 ? pks : cols.slice(0, 1))
+        if (pks.length > 0) {
+          setSelectedPKs(pks)
+        } else if (targetConnId && targetTable) {
+          api
+            .getTableDetails(targetConnId, targetTable, targetSchema, connections)
+            .then((tgtDetail) => {
+              if (!mounted || !tgtDetail?.columns) return
+              const tgtPks = tgtDetail.columns.filter((c) => c.isPrimary).map((c) => c.name)
+              setSelectedPKs(tgtPks.length > 0 ? tgtPks : cols.slice(0, 1))
+            })
+            .catch(() => {
+              setSelectedPKs(cols.slice(0, 1))
+            })
+        } else {
+          setSelectedPKs(cols.slice(0, 1))
+        }
       })
       .catch(() => {})
 
     return () => {
       mounted = false
     }
-  }, [sourceConnId, sourceSchema, sourceTable, connections])
+  }, [sourceConnId, sourceSchema, sourceTable, targetConnId, targetSchema, targetTable, connections])
 
   // Swap Source & Target
   const handleSwap = () => {
@@ -333,8 +350,13 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
     setTimeout(() => setCopiedCLI(false), 2000)
   }
 
+  const sourceProfile = connections.find((c) => c.id === sourceConnId)
+  const isSourceReadOnly = sourceProfile?.readOnly || false
   const targetProfile = connections.find((c) => c.id === targetConnId)
   const isTargetReadOnly = targetProfile?.readOnly || false
+
+  const effectiveTargetConnId = strategy === 'target_wins' ? sourceConnId : targetConnId
+  const effectiveIsTargetReadOnly = strategy === 'target_wins' ? isSourceReadOnly : isTargetReadOnly
 
   if (!isOpen) return null
 
@@ -654,14 +676,17 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
             sourceConnId={sourceConnId}
             sourceSchema={sourceSchema}
             sourceTable={sourceTable}
-            targetConnId={targetConnId}
+            targetConnId={effectiveTargetConnId}
             targetSchema={targetSchema}
             targetTable={targetTable}
             primaryKeys={diffResult?.primaryKeys || selectedPKs}
             columns={diffResult?.comparedColumns || selectedColumns}
             selectedRows={rowsToSync}
+            sourceDialect={diffResult?.sourceDialect || 'postgres'}
             targetDialect={diffResult?.targetDialect || 'postgres'}
-            isTargetReadOnly={isTargetReadOnly}
+            isTargetReadOnly={effectiveIsTargetReadOnly}
+            strategy={strategy}
+            onStrategyChange={setStrategy}
             onSyncApplied={() => {
               // Re-run compare after sync applied
               handleCompare()

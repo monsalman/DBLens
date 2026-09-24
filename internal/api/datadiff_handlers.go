@@ -61,6 +61,13 @@ func (h *Handler) CompareDataDiffHandler(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if req.WhereClause != "" {
+		if err := datadiff.ValidateWhereClause(req.WhereClause); err != nil {
+			sendError(w, http.StatusBadRequest, "invalid where clause: "+err.Error())
+			return
+		}
+	}
+
 	// Resolve Source Driver
 	srcEntry, err := h.resolveDriverWithFallback(r, req.SourceDSN, req.SourceConnID)
 	if err != nil {
@@ -97,6 +104,11 @@ func (h *Handler) GenerateDataDiffSyncHandler(w http.ResponseWriter, r *http.Req
 	if req.TargetDialect == "" && req.TargetConnID != "" {
 		if tgtEntry, err := h.resolveDriverWithFallback(r, req.TargetDSN, req.TargetConnID); err == nil && tgtEntry.Driver != nil {
 			req.TargetDialect = tgtEntry.Driver.Dialect()
+		}
+	}
+	if req.SourceDialect == "" && req.SourceConnID != "" {
+		if srcEntry, err := h.resolveDriverWithFallback(r, req.SourceDSN, req.SourceConnID); err == nil && srcEntry.Driver != nil {
+			req.SourceDialect = srcEntry.Driver.Dialect()
 		}
 	}
 
@@ -158,6 +170,26 @@ func (h *Handler) ApplyDataDiffSyncHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if req.TargetTable != "" && !isValidDataDiffIdent(req.TargetTable, false) {
+		sendError(w, http.StatusBadRequest, "invalid targetTable identifier")
+		return
+	}
+	if req.TargetSchema != "" && !isValidDataDiffIdent(req.TargetSchema, false) {
+		sendError(w, http.StatusBadRequest, "invalid targetSchema identifier")
+		return
+	}
+
+	stmtsToValidate := req.Statements
+	if len(stmtsToValidate) == 0 && strings.TrimSpace(req.SQL) != "" {
+		stmtsToValidate = datadiff.SplitSQLStatements(req.SQL)
+	}
+	for _, stmt := range stmtsToValidate {
+		if err := datadiff.ValidateSyncStatement(stmt, req.TargetTable); err != nil {
+			sendError(w, http.StatusBadRequest, "invalid sync statement: "+err.Error())
+			return
+		}
+	}
+
 	tgtEntry, err := h.resolveDriverWithFallback(r, req.TargetDSN, req.TargetConnID)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, "target database connection failed: "+err.Error())
@@ -191,6 +223,7 @@ func (h *Handler) ExportDataDiffSQLHandler(w http.ResponseWriter, r *http.Reques
 		req.SourceDSN = q.Get("sourceDsn")
 		req.SourceSchema = q.Get("sourceSchema")
 		req.SourceTable = q.Get("sourceTable")
+		req.SourceDialect = q.Get("sourceDialect")
 		req.TargetConnID = q.Get("targetConnId")
 		req.TargetDSN = q.Get("targetDsn")
 		req.TargetSchema = q.Get("targetSchema")
@@ -207,9 +240,44 @@ func (h *Handler) ExportDataDiffSQLHandler(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	if !isValidDataDiffIdent(req.TargetTable, true) {
+		sendError(w, http.StatusBadRequest, "invalid targetTable identifier")
+		return
+	}
+	if !isValidDataDiffIdent(req.SourceTable, true) {
+		sendError(w, http.StatusBadRequest, "invalid sourceTable identifier")
+		return
+	}
+	if !isValidDataDiffIdent(req.TargetSchema, true) {
+		sendError(w, http.StatusBadRequest, "invalid targetSchema identifier")
+		return
+	}
+	if !isValidDataDiffIdent(req.SourceSchema, true) {
+		sendError(w, http.StatusBadRequest, "invalid sourceSchema identifier")
+		return
+	}
+
+	for _, pk := range req.PrimaryKeys {
+		if !isValidDataDiffIdent(pk, false) {
+			sendError(w, http.StatusBadRequest, fmt.Sprintf("invalid primary key identifier: %q", pk))
+			return
+		}
+	}
+	for _, col := range req.Columns {
+		if !isValidDataDiffIdent(col, false) {
+			sendError(w, http.StatusBadRequest, fmt.Sprintf("invalid column identifier: %q", col))
+			return
+		}
+	}
+
 	if req.TargetDialect == "" && req.TargetConnID != "" {
 		if tgtEntry, err := h.resolveDriverWithFallback(r, req.TargetDSN, req.TargetConnID); err == nil && tgtEntry.Driver != nil {
 			req.TargetDialect = alter.NormalizeDialect(tgtEntry.Driver.Dialect())
+		}
+	}
+	if req.SourceDialect == "" && req.SourceConnID != "" {
+		if srcEntry, err := h.resolveDriverWithFallback(r, req.SourceDSN, req.SourceConnID); err == nil && srcEntry.Driver != nil {
+			req.SourceDialect = alter.NormalizeDialect(srcEntry.Driver.Dialect())
 		}
 	}
 
@@ -220,7 +288,7 @@ func (h *Handler) ExportDataDiffSQLHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	filename := "sync.sql"
-	if req.TargetTable != "" {
+	if req.TargetTable != "" && isValidDataDiffIdent(req.TargetTable, false) {
 		filename = fmt.Sprintf("sync_%s.sql", req.TargetTable)
 	}
 

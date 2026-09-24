@@ -166,7 +166,7 @@ export const DataDiffGrid: React.FC<DataDiffGridProps> = ({
                     {/* PK values */}
                     {primaryKeys.map((pk) => (
                       <td key={pk} className="px-3 py-2 font-bold text-[var(--fg)] bg-amber-500/5 whitespace-nowrap">
-                        {formatCellVal(row.pkValues[pk])}
+                        {formatCellVal(row.pkValues?.[pk])}
                       </td>
                     ))}
 
@@ -268,7 +268,7 @@ export const DataDiffGrid: React.FC<DataDiffGridProps> = ({
                       </td>
                       {primaryKeys.map((pk) => (
                         <td key={pk} className="px-3 py-2 font-bold text-[var(--fg)] whitespace-nowrap">
-                          {formatCellVal(row.pkValues[pk])}
+                          {formatCellVal(row.pkValues?.[pk])}
                         </td>
                       ))}
                       {nonPkCols.map((col) => {

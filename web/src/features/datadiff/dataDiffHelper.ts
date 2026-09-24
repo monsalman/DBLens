@@ -56,6 +56,7 @@ export interface SyncScriptRequest {
   sourceDsn?: string
   sourceSchema?: string
   sourceTable?: string
+  sourceDialect?: string
   targetConnId?: string
   targetDsn?: string
   targetSchema?: string
@@ -81,6 +82,8 @@ export interface SyncScriptResponse {
 export interface ApplySyncRequest {
   targetConnId: string
   targetDsn?: string
+  targetSchema?: string
+  targetTable?: string
   statements: string[]
   sql?: string
   readOnly?: boolean

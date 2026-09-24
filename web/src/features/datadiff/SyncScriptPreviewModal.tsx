@@ -34,8 +34,11 @@ export interface SyncScriptPreviewModalProps {
   primaryKeys: string[]
   columns: string[]
   selectedRows: RowDiffItem[]
+  sourceDialect?: string
   targetDialect: string
   isTargetReadOnly?: boolean
+  strategy?: SyncConflictStrategy
+  onStrategyChange?: (strategy: SyncConflictStrategy) => void
   onSyncApplied?: () => void
 }
 
@@ -51,12 +54,15 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
   primaryKeys,
   columns,
   selectedRows,
+  sourceDialect,
   targetDialect,
   isTargetReadOnly = false,
+  strategy: propStrategy,
+  onStrategyChange,
   onSyncApplied,
 }) => {
   const connections = useAppStore((s) => s.connections)
-  const [strategy, setStrategy] = useState<SyncConflictStrategy>('source_wins')
+  const [strategy, setStrategy] = useState<SyncConflictStrategy>(propStrategy || 'source_wins')
   const [deleteExcess, setDeleteExcess] = useState(false)
   const [scriptResp, setScriptResp] = useState<SyncScriptResponse | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -65,6 +71,26 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
   const [applyResult, setApplyResult] = useState<ApplySyncResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (propStrategy) {
+      setStrategy(propStrategy)
+    }
+  }, [propStrategy])
+
+  const handleStrategyChange = (newStrategy: SyncConflictStrategy) => {
+    setStrategy(newStrategy)
+    if (onStrategyChange) {
+      onStrategyChange(newStrategy)
+    }
+  }
+
+  const isTargetWins = strategy === 'target_wins'
+  const effectiveConnId = isTargetWins ? sourceConnId : targetConnId
+  const effectiveSchema = isTargetWins ? sourceSchema : targetSchema
+  const effectiveTable = isTargetWins ? sourceTable : targetTable
+  const effectiveProfile = connections.find((c) => c.id === effectiveConnId)
+  const isEffectiveReadOnly = isTargetReadOnly || effectiveProfile?.readOnly || false
 
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true)
@@ -76,6 +102,7 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
           sourceConnId,
           sourceSchema,
           sourceTable,
+          sourceDialect,
           targetConnId,
           targetSchema,
           targetTable,
@@ -98,6 +125,7 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
     sourceConnId,
     sourceSchema,
     sourceTable,
+    sourceDialect,
     targetConnId,
     targetSchema,
     targetTable,
@@ -134,15 +162,17 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `sync_${targetTable || 'data'}.sql`
+    a.download = `sync_${effectiveTable || 'data'}.sql`
     a.click()
     URL.revokeObjectURL(url)
   }
 
   const handleApply = async () => {
     if (!scriptResp || !scriptResp.statements.length) return
-    if (isTargetReadOnly) {
-      setError('Target connection is in Read-Only Safe Mode. Mutations are blocked.')
+    if (isEffectiveReadOnly) {
+      setError(
+        `Safe Mode Active: ${isTargetWins ? 'Source' : 'Target'} connection (${effectiveConnId}) is read-only. Database mutations are blocked.`
+      )
       return
     }
     if (!confirmMutate) {
@@ -157,7 +187,9 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
     try {
       const res = await api.applyDataDiffSync(
         {
-          targetConnId: strategy === 'target_wins' ? sourceConnId : targetConnId,
+          targetConnId: effectiveConnId,
+          targetSchema: effectiveSchema,
+          targetTable: effectiveTable,
           statements: scriptResp.statements,
           sql: scriptResp.sql,
           readOnly: false,
@@ -210,13 +242,27 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
             <span className="text-[var(--muted)] font-medium">Sync Strategy:</span>
             <select
               value={strategy}
-              onChange={(e) => setStrategy(e.target.value as SyncConflictStrategy)}
+              onChange={(e) => handleStrategyChange(e.target.value as SyncConflictStrategy)}
               className="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[var(--fg)] focus:outline-hidden cursor-pointer"
             >
               <option value="source_wins">Source Wins (Update Target to match Source)</option>
               <option value="target_wins">Target Wins (Update Source to match Target)</option>
               <option value="insert_missing_only">Insert Missing Only (No updates or deletes)</option>
             </select>
+          </div>
+
+          {/* Target To Mutate Display */}
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <span className="text-[var(--muted)]">Target to Mutate:</span>
+            <span
+              className={`px-2 py-0.5 rounded font-semibold border ${
+                isTargetWins
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+              }`}
+            >
+              {isTargetWins ? `SOURCE: ${sourceConnId}` : `TARGET: ${targetConnId}`} ({effectiveTable})
+            </span>
           </div>
 
           {/* Delete Excess Toggle */}
@@ -338,10 +384,12 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
 
           <div className="flex items-center gap-3">
             {/* Safe Mode indicator or confirmation checkbox */}
-            {isTargetReadOnly ? (
+            {isEffectiveReadOnly ? (
               <div className="flex items-center gap-1.5 text-amber-400 font-semibold px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20">
                 <Shield className="w-3.5 h-3.5" />
-                <span>Read-Only Safe Mode Active</span>
+                <span>
+                  Safe Mode Active ({isTargetWins ? 'Source' : 'Target'}: {effectiveConnId})
+                </span>
               </div>
             ) : (
               <label className="flex items-center gap-2 text-[11px] text-[var(--muted)] cursor-pointer select-none">
@@ -351,14 +399,14 @@ export const SyncScriptPreviewModal: React.FC<SyncScriptPreviewModalProps> = ({
                   onChange={(e) => setConfirmMutate(e.target.checked)}
                   className="rounded border-[var(--border)] text-[var(--accent)] focus:ring-0"
                 />
-                <span>Confirm database mutation</span>
+                <span>Confirm database mutation on {effectiveConnId}</span>
               </label>
             )}
 
             <button
               type="button"
               onClick={handleApply}
-              disabled={isApplying || isTargetReadOnly || !confirmMutate || !scriptResp?.statements.length}
+              disabled={isApplying || isEffectiveReadOnly || !confirmMutate || !scriptResp?.statements.length}
               className="flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
             >
               <Play className={`w-3.5 h-3.5 ${isApplying ? 'animate-spin' : ''}`} />

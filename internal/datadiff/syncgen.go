@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/dblens/dblens/internal/alter"
 )
@@ -64,7 +65,13 @@ func FormatLiteral(val any, dialect string) string {
 	case float32, float64:
 		return fmt.Sprintf("%v", v)
 
+	case time.Time:
+		return fmt.Sprintf("'%s'", v.UTC().Format("2006-01-02 15:04:05.999999"))
+
 	case []byte:
+		if d == "postgres" {
+			return fmt.Sprintf("decode('%x', 'hex')", v)
+		}
 		return fmt.Sprintf("X'%X'", v)
 
 	case string:
@@ -94,15 +101,25 @@ func FormatLiteral(val any, dialect string) string {
 
 // GenerateSyncScript generates DML statements and a transactional script according to the strategy.
 func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
+	if len(req.PrimaryKeys) == 0 {
+		return nil, fmt.Errorf("at least one primary key is required for sync generation")
+	}
+
 	strategy := req.Strategy
 	if strategy == "" {
 		strategy = StrategySourceWins
 	}
 
-	// Validate target / source table names
-	targetDialect := alter.NormalizeDialect(req.TargetDialect)
-	if targetDialect == "" {
-		targetDialect = "postgres"
+	// Determine effective dialect based on strategy:
+	// target_wins mutates source, so it uses SourceDialect
+	effectiveDialect := alter.NormalizeDialect(req.TargetDialect)
+	if strategy == StrategyTargetWins {
+		if req.SourceDialect != "" {
+			effectiveDialect = alter.NormalizeDialect(req.SourceDialect)
+		}
+	}
+	if effectiveDialect == "" {
+		effectiveDialect = "postgres"
 	}
 
 	for _, pk := range req.PrimaryKeys {
@@ -137,13 +154,13 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 		if targetSchema != "" && !IsValidIdentifier(targetSchema) {
 			return nil, fmt.Errorf("invalid target schema identifier: %q", targetSchema)
 		}
-		tableRef := QuoteTableRef(targetSchema, targetTable, targetDialect)
+		tableRef := QuoteTableRef(targetSchema, targetTable, effectiveDialect)
 
 		for _, row := range req.Rows {
 			switch row.Status {
 			case StatusAdded:
 				// Row exists in source, missing in target -> INSERT into target
-				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.SourceValues, targetDialect)
+				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.SourceValues, effectiveDialect)
 				if stmt != "" {
 					statements = append(statements, stmt)
 					insertCount++
@@ -151,7 +168,7 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 
 			case StatusModified:
 				// Row exists in both, differs -> UPDATE target
-				stmt := buildUpdate(tableRef, req.Columns, req.PrimaryKeys, pkSet, row.SourceValues, row.PKValues, targetDialect)
+				stmt := buildUpdate(tableRef, req.Columns, req.PrimaryKeys, pkSet, row.SourceValues, row.PKValues, effectiveDialect)
 				if stmt != "" {
 					statements = append(statements, stmt)
 					updateCount++
@@ -160,7 +177,7 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 			case StatusDeleted:
 				// Row missing in source, exists in target -> DELETE from target if DeleteExcess
 				if req.DeleteExcess {
-					stmt := buildDelete(tableRef, req.PrimaryKeys, row.PKValues, targetDialect)
+					stmt := buildDelete(tableRef, req.PrimaryKeys, row.PKValues, effectiveDialect)
 					if stmt != "" {
 						statements = append(statements, stmt)
 						deleteCount++
@@ -179,13 +196,13 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 		if targetSchema != "" && !IsValidIdentifier(targetSchema) {
 			return nil, fmt.Errorf("invalid source schema identifier: %q", targetSchema)
 		}
-		tableRef := QuoteTableRef(targetSchema, targetTable, targetDialect)
+		tableRef := QuoteTableRef(targetSchema, targetTable, effectiveDialect)
 
 		for _, row := range req.Rows {
 			switch row.Status {
 			case StatusDeleted:
 				// Row exists in target, missing in source -> INSERT into source
-				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.TargetValues, targetDialect)
+				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.TargetValues, effectiveDialect)
 				if stmt != "" {
 					statements = append(statements, stmt)
 					insertCount++
@@ -193,7 +210,7 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 
 			case StatusModified:
 				// Row differs -> UPDATE source to target values
-				stmt := buildUpdate(tableRef, req.Columns, req.PrimaryKeys, pkSet, row.TargetValues, row.PKValues, targetDialect)
+				stmt := buildUpdate(tableRef, req.Columns, req.PrimaryKeys, pkSet, row.TargetValues, row.PKValues, effectiveDialect)
 				if stmt != "" {
 					statements = append(statements, stmt)
 					updateCount++
@@ -202,7 +219,7 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 			case StatusAdded:
 				// Row exists in source, missing in target -> DELETE from source if DeleteExcess
 				if req.DeleteExcess {
-					stmt := buildDelete(tableRef, req.PrimaryKeys, row.PKValues, targetDialect)
+					stmt := buildDelete(tableRef, req.PrimaryKeys, row.PKValues, effectiveDialect)
 					if stmt != "" {
 						statements = append(statements, stmt)
 						deleteCount++
@@ -221,11 +238,11 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 		if targetSchema != "" && !IsValidIdentifier(targetSchema) {
 			return nil, fmt.Errorf("invalid target schema identifier: %q", targetSchema)
 		}
-		tableRef := QuoteTableRef(targetSchema, targetTable, targetDialect)
+		tableRef := QuoteTableRef(targetSchema, targetTable, effectiveDialect)
 
 		for _, row := range req.Rows {
 			if row.Status == StatusAdded {
-				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.SourceValues, targetDialect)
+				stmt := buildInsertOrUpsert(tableRef, req.Columns, req.PrimaryKeys, row.SourceValues, effectiveDialect)
 				if stmt != "" {
 					statements = append(statements, stmt)
 					insertCount++
@@ -240,9 +257,9 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 	// Format full transactional script
 	var scriptBuilder strings.Builder
 	scriptBuilder.WriteString(fmt.Sprintf("-- Data Diff Sync Script (%s)\n", strategy))
-	scriptBuilder.WriteString(fmt.Sprintf("-- Dialect: %s | Generated Statements: %d\n", targetDialect, len(statements)))
+	scriptBuilder.WriteString(fmt.Sprintf("-- Dialect: %s | Generated Statements: %d\n", effectiveDialect, len(statements)))
 
-	switch targetDialect {
+	switch effectiveDialect {
 	case "mysql":
 		scriptBuilder.WriteString("START TRANSACTION;\n\n")
 	case "sqlite":
@@ -265,7 +282,7 @@ func GenerateSyncScript(req SyncScriptRequest) (*SyncScriptResponse, error) {
 		UpdateCount:   updateCount,
 		DeleteCount:   deleteCount,
 		Strategy:      strategy,
-		TargetDialect: targetDialect,
+		TargetDialect: effectiveDialect,
 	}, nil
 }
 
