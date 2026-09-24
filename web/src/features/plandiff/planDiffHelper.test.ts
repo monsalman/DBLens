@@ -169,6 +169,26 @@ test('formatPlanDiffMarkdown: renders full markdown report with tables and DDL',
   assert(md.includes('DROP INDEX CONCURRENTLY'), 'markdown must contain rollback block')
 })
 
+test('formatPlanDiffMarkdown: safely handles null or undefined recommendations', () => {
+  const diff: any = {
+    dialect: 'postgres',
+    summary: {
+      baselineTotalCost: 100,
+      candidateTotalCost: 100,
+      costDeltaPct: 0,
+      baselineTimeMs: 10,
+      candidateTimeMs: 10,
+      timeDeltaPct: 0,
+      bottleneckCount: 0,
+      recommendationsCount: 0,
+    },
+    alignedTree: null,
+    recommendations: null,
+  }
+  const md = formatPlanDiffMarkdown(diff)
+  assert(md.includes('No index bottlenecks identified'), 'markdown must handle null recommendations safely')
+})
+
 console.log(`\nPlan Diff Helper Tests Summary: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   process.exit(1)

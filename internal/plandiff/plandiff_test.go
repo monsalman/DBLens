@@ -1,6 +1,8 @@
 package plandiff
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -293,7 +295,7 @@ func TestAdvisor_Dialects(t *testing.T) {
 	if len(myRecs) == 0 || !strings.Contains(myRecs[0].DDL, "CREATE INDEX idx_items_") {
 		t.Fatalf("unexpected MySQL DDL: %v", myRecs)
 	}
-	if !strings.HasPrefix(myRecs[0].RollbackDDL, "DROP INDEX idx_items_") || !strings.Contains(myRecs[0].RollbackDDL, "ON items") {
+	if !strings.HasPrefix(myRecs[0].RollbackDDL, "DROP INDEX idx_items_") || (!strings.Contains(myRecs[0].RollbackDDL, "ON items") && !strings.Contains(myRecs[0].RollbackDDL, "ON `items`")) {
 		t.Fatalf("unexpected MySQL rollback: %s", myRecs[0].RollbackDDL)
 	}
 
@@ -350,5 +352,139 @@ func TestMarkdownReport(t *testing.T) {
 	}
 	if !strings.Contains(md, "Plan Tree Comparison") {
 		t.Fatal("missing plan tree comparison section")
+	}
+}
+
+func TestAdvisor_IdentifierInjectionPrevention(t *testing.T) {
+	// Table injection
+	planInjectionTable := &types.ExplainResult{
+		Root: &types.PlanNode{
+			NodeType:     "Seq Scan",
+			RelationName: "users; DROP TABLE users;--",
+			TotalCost:    1000.0,
+			Filter:       "id = 1",
+		},
+	}
+	recs := RecommendIndexes(planInjectionTable, nil, "postgres", "public")
+	if len(recs) != 0 {
+		t.Fatalf("expected 0 recommendations for malicious table name, got %d", len(recs))
+	}
+
+	// Schema injection
+	planSafe := &types.ExplainResult{
+		Root: &types.PlanNode{
+			NodeType:     "Seq Scan",
+			RelationName: "users",
+			TotalCost:    1000.0,
+			Filter:       "status = 'active'",
+		},
+	}
+	recsSchema := RecommendIndexes(planSafe, nil, "postgres", "public; DROP TABLE users;--")
+	if len(recsSchema) == 0 {
+		t.Fatal("expected recommendation with cleaned schema")
+	}
+	if strings.Contains(recsSchema[0].DDL, "DROP TABLE") {
+		t.Fatalf("DDL contains injected schema: %s", recsSchema[0].DDL)
+	}
+}
+
+func TestAdvisor_ForeignTableColumnsIgnored(t *testing.T) {
+	node := &types.PlanNode{
+		NodeType:     "Seq Scan",
+		RelationName: "orders",
+		TotalCost:    1500.0,
+		Filter:       "(orders.status = 'shipped') AND (customers.id = orders.customer_id)",
+	}
+	plan := &types.ExplainResult{Root: node}
+	recs := RecommendIndexes(plan, nil, "postgres", "public")
+	if len(recs) == 0 {
+		t.Fatal("expected at least 1 recommendation")
+	}
+	for _, col := range recs[0].Columns {
+		if col == "id" {
+			t.Fatalf("expected foreign table column 'id' to be discarded from orders index recommendation, got: %v", recs[0].Columns)
+		}
+	}
+}
+
+func TestAdvisor_BothCandidateAndBaselineAnalyzed(t *testing.T) {
+	cand := &types.ExplainResult{
+		Root: &types.PlanNode{
+			NodeType:     "Seq Scan",
+			RelationName: "orders",
+			TotalCost:    1000.0,
+			Filter:       "order_status = 'pending'",
+		},
+	}
+	base := &types.ExplainResult{
+		Root: &types.PlanNode{
+			NodeType:     "Seq Scan",
+			RelationName: "users",
+			TotalCost:    2000.0,
+			Filter:       "user_role = 'admin'",
+		},
+	}
+	recs := RecommendIndexes(cand, base, "postgres", "public")
+	foundOrders := false
+	foundUsers := false
+	for _, rec := range recs {
+		if rec.Table == "orders" {
+			foundOrders = true
+		}
+		if rec.Table == "users" {
+			foundUsers = true
+		}
+	}
+	if !foundOrders || !foundUsers {
+		t.Fatalf("expected both orders and users recommendations, got orders=%v, users=%v", foundOrders, foundUsers)
+	}
+}
+
+func TestAdvisor_EmptyRecommendationsJSONSafety(t *testing.T) {
+	recs := RecommendIndexes(nil, nil, "postgres", "public")
+	if recs == nil {
+		t.Fatal("expected non-nil recommendations slice")
+	}
+	b, err := json.Marshal(recs)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("expected '[]', got '%s'", string(b))
+	}
+
+	diff := ComparePlans(nil, nil, "postgres", "public")
+	diffBytes, err := json.Marshal(diff)
+	if err != nil {
+		t.Fatalf("failed to marshal diff: %v", err)
+	}
+	if !strings.Contains(string(diffBytes), `"recommendations":[]`) {
+		t.Fatalf("expected '\"recommendations\":[]' in json, got '%s'", string(diffBytes))
+	}
+}
+
+func TestRecursionDepthBounds(t *testing.T) {
+	// Build a 150-deep plan tree
+	root := &types.PlanNode{NodeType: "Node-0"}
+	curr := root
+	for i := 1; i <= 150; i++ {
+		child := types.PlanNode{NodeType: fmt.Sprintf("Node-%d", i), RelationName: "t"}
+		curr.Children = []types.PlanNode{child}
+		curr = &curr.Children[0]
+	}
+
+	aligned := AlignTrees(root, root)
+	if aligned == nil {
+		t.Fatal("expected aligned root")
+	}
+	bottlenecks := countBottlenecks(aligned)
+	if bottlenecks < 0 {
+		t.Fatal("invalid bottleneck count")
+	}
+
+	var nodes []*types.PlanNode
+	collectPlanNodes(root, &nodes, 0)
+	if len(nodes) > 105 {
+		t.Fatalf("expected collectPlanNodes depth bounded to 101, got %d nodes", len(nodes))
 	}
 }
