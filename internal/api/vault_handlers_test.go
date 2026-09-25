@@ -61,7 +61,6 @@ func TestVault_API_Lifecycle(t *testing.T) {
 			RequireAuditAllProd: true,
 		},
 		ScrubPasswords: true,
-		FastKDF:        true,
 	}
 	body, _ := json.Marshal(exportReq)
 	req = httptest.NewRequest("POST", "/api/vault/export", bytes.NewReader(body))
@@ -204,5 +203,35 @@ func VaultConnectionForTest(t *testing.T) []vault.VaultConnection {
 			Environment: "staging",
 			ReadOnly:    false,
 		},
+	}
+}
+
+func TestVault_API_MaxBytesReader_RejectsOversizedPayload(t *testing.T) {
+	router, _, cleanup := setupVaultTestEnv(t)
+	defer cleanup()
+
+	// 5 MB + 1024 bytes payload exceeds the 5MB MaxBytesReader limit
+	oversizedBody := make([]byte, (5<<20)+1024)
+	for i := range oversizedBody {
+		oversizedBody[i] = ' '
+	}
+
+	endpoints := []string{
+		"/api/vault/export",
+		"/api/vault/import",
+		"/api/vault/unlock",
+	}
+
+	for _, ep := range endpoints {
+		t.Run(ep, func(t *testing.T) {
+			req := httptest.NewRequest("POST", ep, bytes.NewReader(oversizedBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 Bad Request on oversized payload to %s, got %d", ep, w.Code)
+			}
+		})
 	}
 }

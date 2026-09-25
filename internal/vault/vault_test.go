@@ -193,6 +193,41 @@ func TestVault_ScrubDSN(t *testing.T) {
 			wantPass:    "op://vault/db/pass",
 			wantScrubbed: false,
 		},
+		{
+			name:        "Bare MySQL DSN without tcp wrapper",
+			rawDSN:      "root:SecretPass99@localhost:3306/ecommerce",
+			wantClean:   "root:$DATABASE_PASSWORD@localhost:3306/ecommerce",
+			wantPass:    "SecretPass99",
+			wantScrubbed: true,
+		},
+		{
+			name:        "Bare MySQL DSN with slash only",
+			rawDSN:      "root:SecretPass99@/ecommerce",
+			wantClean:   "root:$DATABASE_PASSWORD@/ecommerce",
+			wantPass:    "SecretPass99",
+			wantScrubbed: true,
+		},
+		{
+			name:        "MySQL DSN with @ in password",
+			rawDSN:      "root:p@ss@word@tcp(127.0.0.1:3306)/ecommerce",
+			wantClean:   "root:$DATABASE_PASSWORD@tcp(127.0.0.1:3306)/ecommerce",
+			wantPass:    "p@ss@word",
+			wantScrubbed: true,
+		},
+		{
+			name:        "ODBC Key-value DSN format with Pwd=",
+			rawDSN:      "Server=10.0.0.1;Uid=sa;Pwd=SecretP@ss;Database=master;",
+			wantClean:   "Server=10.0.0.1;Uid=sa;Pwd=$DATABASE_PASSWORD;Database=master;",
+			wantPass:    "SecretP@ss",
+			wantScrubbed: true,
+		},
+		{
+			name:        "URI DSN with special characters and @ in password",
+			rawDSN:      "postgres://user:p@ss:word!#@localhost:5432/db?sslmode=disable",
+			wantClean:   "postgres://user:$DATABASE_PASSWORD@localhost:5432/db?sslmode=disable",
+			wantPass:    "p@ss:word!#",
+			wantScrubbed: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -351,5 +386,139 @@ func TestVault_ManagerLifecycle(t *testing.T) {
 	statusAfterLock := mgr.Status()
 	if statusAfterLock.IsUnlocked {
 		t.Fatal("status reported is_unlocked = true after locking")
+	}
+}
+
+func TestVault_KDFValidation_RejectsMalformedAndZero(t *testing.T) {
+	// Zero KDFParams must be rejected without panic
+	zeroParams := KDFParams{}
+	if err := ValidateKDFParams(zeroParams); err == nil {
+		t.Fatal("expected error on zero KDFParams, got nil")
+	}
+
+	// Zero params in container decrypt must return error without panicking
+	container := &VaultContainer{
+		Version: CurrentVaultVersion,
+		KDF:     KDFArgon2id,
+		Params:  zeroParams,
+		Nonce:   hex.EncodeToString(make([]byte, GCMNonceLength)),
+	}
+	_, err := DecryptPayload(container, "some-passphrase")
+	if err == nil {
+		t.Fatal("expected error when decrypting container with zero KDF params")
+	}
+
+	// Invalid short salt must be rejected
+	shortSaltParams := KDFParams{
+		SaltHex:     "aabbcc", // 3 bytes < 16 bytes
+		MemoryKB:    FastMemoryKB,
+		Iterations:  FastIterations,
+		Parallelism: FastParallelism,
+		KeyLen:      KeyLengthTotal,
+	}
+	if err := ValidateKDFParams(shortSaltParams); err == nil {
+		t.Fatal("expected error on short salt, got nil")
+	}
+
+	// Zero iterations must be rejected
+	zeroIterParams := FastKDFParams()
+	zeroIterParams.Iterations = 0
+	if err := ValidateKDFParams(zeroIterParams); err == nil {
+		t.Fatal("expected error on zero iterations, got nil")
+	}
+
+	// Zero parallelism must be rejected
+	zeroParallelismParams := FastKDFParams()
+	zeroParallelismParams.Parallelism = 0
+	if err := ValidateKDFParams(zeroParallelismParams); err == nil {
+		t.Fatal("expected error on zero parallelism, got nil")
+	}
+}
+
+func TestVault_KDFValidation_RejectsOversizedMemory(t *testing.T) {
+	// MemoryKB > 512 MB (e.g. 1 GB = 1048576 KB)
+	oversized := FastKDFParams()
+	oversized.MemoryKB = 1024 * 1024 // 1 GB
+	if err := ValidateKDFParams(oversized); err == nil {
+		t.Fatal("expected error on oversized memory (1 GB), got nil")
+	}
+
+	// DecryptPayload with oversized container params must reject before executing KDF
+	container := &VaultContainer{
+		Version: CurrentVaultVersion,
+		KDF:     KDFArgon2id,
+		Params:  oversized,
+		Nonce:   hex.EncodeToString(make([]byte, GCMNonceLength)),
+	}
+	_, err := DecryptPayload(container, "some-passphrase")
+	if err == nil {
+		t.Fatal("expected error on container with oversized memory")
+	}
+}
+
+func TestVault_MandatoryPolicyEnforcement_OnImport(t *testing.T) {
+	mgr := NewManager()
+	mgr.SetFastKDF(true)
+
+	conns := []VaultConnection{
+		{
+			ID:          "conn_prod_unrestricted",
+			Name:        "Production Core DB",
+			Driver:      "postgres",
+			DSN:         "postgres://admin:***@prod.internal:5432/core",
+			Environment: "production",
+			ReadOnly:    false,
+		},
+		{
+			ID:          "conn_unauthorized_env",
+			Name:        "Shadow Sandbox",
+			Driver:      "postgres",
+			DSN:         "postgres://admin:***@sandbox.internal:5432/test",
+			Environment: "sandbox",
+			ReadOnly:    false,
+		},
+	}
+
+	policy := VaultPolicy{
+		GlobalReadOnlyProd:  true,
+		RequireAuditAllProd: true,
+		AllowedEnvironments: []string{"production", "staging"},
+	}
+
+	expRes, err := mgr.Export(ExportRequest{
+		Passphrase:     "MandatoryPolicyPass#1",
+		Name:           "Core Vault",
+		Connections:    conns,
+		Policies:       policy,
+		ScrubPasswords: false,
+	})
+	if err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	// Import with ApplyPolicies explicitly set to FALSE — policy enforcement MUST still occur
+	impRes, err := mgr.Import(ImportRequest{
+		Container:     &expRes.Container,
+		Passphrase:    "MandatoryPolicyPass#1",
+		ApplyPolicies: false, // Attempt to bypass policies
+	})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	// 1. Shadow Sandbox must be filtered out because "sandbox" is not in AllowedEnvironments
+	if len(impRes.Connections) != 1 {
+		t.Fatalf("expected 1 connection after AllowedEnvironments filtering, got %d", len(impRes.Connections))
+	}
+	if impRes.Connections[0].ID != "conn_prod_unrestricted" {
+		t.Fatalf("expected conn_prod_unrestricted to be retained, got %s", impRes.Connections[0].ID)
+	}
+
+	// 2. Production connection MUST have ReadOnly=true and RequireAuditLog=true enforced
+	if !impRes.Connections[0].ReadOnly {
+		t.Fatal("expected ReadOnly=true to be mandatorily enforced on production connection")
+	}
+	if !impRes.Connections[0].Policy.RequireAuditLog {
+		t.Fatal("expected RequireAuditLog=true to be mandatorily enforced on production connection")
 	}
 }

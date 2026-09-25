@@ -7,6 +7,7 @@ import {
   getPolicySummary,
   convertConnectionToVaultItem,
   convertVaultItemToConnection,
+  scrubDSN,
 } from './vaultHelper.ts'
 
 let passed = 0
@@ -143,6 +144,30 @@ test('convertConnectionToVaultItem & convertVaultItemToConnection roundtrip', ()
   assert(backToConn.id === 'conn_test_1', 'id back')
   assert(backToConn.label === 'Primary Postgres', 'label back')
   assert(backToConn.dsn === conn.dsn, 'dsn preserved')
+})
+
+test('scrubDSN: scrubs URI with @ in password, bare MySQL DSN, and ODBC Pwd=', () => {
+  const uriWithAt = scrubDSN('postgres://user:p@ss:word!#@localhost:5432/db')
+  assert(uriWithAt.scrubbed === true, 'URI with @ should be scrubbed')
+  assert(uriWithAt.dsn === 'postgres://user:$DATABASE_PASSWORD@localhost:5432/db', 'URI with @ scrubbed correctly')
+
+  const bareMysql = scrubDSN('root:SecretPass@localhost:3306/db')
+  assert(bareMysql.scrubbed === true, 'bare MySQL DSN should be scrubbed')
+  assert(bareMysql.dsn === 'root:$DATABASE_PASSWORD@localhost:3306/db', 'bare MySQL scrubbed correctly')
+
+  const mysqlSlash = scrubDSN('root:SecretPass@/db')
+  assert(mysqlSlash.scrubbed === true, 'MySQL DSN with /db should be scrubbed')
+  assert(mysqlSlash.dsn === 'root:$DATABASE_PASSWORD@/db', 'MySQL /db scrubbed correctly')
+
+  const odbcPwd = scrubDSN('Server=10.0.0.1;Uid=sa;Pwd=Secret123;Database=test;')
+  assert(odbcPwd.scrubbed === true, 'ODBC Pwd= should be scrubbed')
+  assert(odbcPwd.dsn === 'Server=10.0.0.1;Uid=sa;Pwd=$DATABASE_PASSWORD;Database=test;', 'ODBC Pwd= scrubbed correctly')
+
+  const alreadyScrubbed = scrubDSN('postgres://user:$DB_PASS@localhost:5432/db')
+  assert(alreadyScrubbed.scrubbed === false, 'already scrubbed DSN not altered')
+
+  const secretRef = scrubDSN('postgres://user:op://vault/db/pw@localhost:5432/db')
+  assert(secretRef.scrubbed === false, 'secret reference not altered')
 })
 
 console.log(`Vault Helper Tests Summary: ${passed} passed, ${failed} failed`)
