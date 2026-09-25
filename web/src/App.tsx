@@ -27,6 +27,7 @@ import { HealthDashboard } from './features/health/HealthDashboard'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { DataDiffModal } from './features/datadiff/DataDiffModal'
 import { DataSeederModal } from './features/seeder/DataSeederModal'
+import { TeamVaultModal } from './features/vault/TeamVaultModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -94,6 +95,8 @@ export function App() {
   const setIsPlaybookOpen = useAppStore((s) => s.setIsPlaybookOpen)
   const isHealthOpen = useAppStore((s) => s.isHealthOpen)
   const setIsHealthOpen = useAppStore((s) => s.setIsHealthOpen)
+  const isTeamVaultOpen = useAppStore((s) => s.isTeamVaultOpen)
+  const setIsTeamVaultOpen = useAppStore((s) => s.setIsTeamVaultOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -415,6 +418,10 @@ export function App() {
       <GlobalLiveFeedDrawer />
       <DataDiffModal />
       <DataSeederModal />
+      <TeamVaultModal
+        isOpen={isTeamVaultOpen}
+        onClose={() => setIsTeamVaultOpen(false)}
+      />
     </QueryClientProvider>
   )
 }

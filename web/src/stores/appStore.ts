@@ -162,6 +162,12 @@ interface AppState {
   liveFeedConfig: { connId: string; schema: string; table: string } | null
   openLiveFeed: (connId: string, schema: string, table: string) => void
   closeLiveFeed: () => void
+
+  // Feature-44: Team Connection Vault
+  isTeamVaultOpen: boolean
+  setIsTeamVaultOpen: (open: boolean) => void
+  isVaultUnlocked: boolean
+  setVaultUnlocked: (unlocked: boolean) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -474,6 +480,11 @@ export const useAppStore = create<AppState>()(
       openLiveFeed: (connId, schema, table) =>
         set({ isLiveFeedOpen: true, liveFeedConfig: { connId, schema, table } }),
       closeLiveFeed: () => set({ isLiveFeedOpen: false, liveFeedConfig: null }),
+
+      isTeamVaultOpen: false,
+      setIsTeamVaultOpen: (isTeamVaultOpen) => set({ isTeamVaultOpen }),
+      isVaultUnlocked: false,
+      setVaultUnlocked: (isVaultUnlocked) => set({ isVaultUnlocked }),
     }),
     {
       name: 'dblens-storage',

@@ -26,6 +26,7 @@ import {
   Network,
   GitBranch,
   Zap,
+  KeyRound,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -351,6 +352,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['new', 'connection', 'add', 'connect', 'database', 'profile'],
       onSelect: () => {
         onNewConnection()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:open_team_vault',
+      title: 'Open Team Vault',
+      subtitle: 'Zero-knowledge encrypted team connections & environment sync',
+      category: 'Actions',
+      icon: KeyRound,
+      badge: 'VAULT',
+      keywords: ['vault', 'secrets', 'team', 'encrypt', 'decrypt', 'argon2', 'credentials', 'sync'],
+      onSelect: () => {
+        useAppStore.getState().setIsTeamVaultOpen(true)
         closePalette()
       },
     })

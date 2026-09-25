@@ -32,6 +32,7 @@ import (
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/dblens/dblens/internal/tunnel"
+	"github.com/dblens/dblens/internal/vault"
 	"github.com/dblens/dblens/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
@@ -257,6 +258,7 @@ type Handler struct {
 	annotationsStore *annotations.Store
 	scratchStore     *materialize.ScratchStore
 	analyzerStore    *analyzer.Store
+	vaultMgr         *vault.Manager
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -358,6 +360,7 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 			}
 			return as
 		}(),
+		vaultMgr: vault.NewManager(),
 	}
 	if h.scratchStore == nil {
 		h.scratchStore = materialize.NewInMemoryScratchStore()

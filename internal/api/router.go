@@ -246,6 +246,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/seeder/run", h.SeederRunHandler)
 	api.Post("/connections/{connId}/seeder/export", h.SeederExportHandler)
 
+	// ── Feature-44: Zero-Knowledge Encrypted Team Connection Vault & Environment Sync ────
+	api.Post("/vault/export", h.ExportVault)
+	api.Post("/vault/import", h.ImportVault)
+	api.Post("/vault/unlock", h.UnlockVault)
+	api.Post("/vault/lock", h.LockVault)
+	api.Get("/vault/status", h.GetVaultStatus)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

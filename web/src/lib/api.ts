@@ -3043,6 +3043,68 @@ export const api = {
     }
     return await res.text()
   },
+
+  // ── Feature-44: Zero-Knowledge Encrypted Team Connection Vault ──
+
+  async exportVault(req: ExportVaultRequest): Promise<ExportVaultResponse> {
+    const res = await fetch('/api/vault/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to export vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async importVault(req: ImportVaultRequest): Promise<ImportVaultResponse> {
+    const res = await fetch('/api/vault/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to import vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async unlockVault(req: UnlockVaultRequest): Promise<UnlockVaultResponse> {
+    const res = await fetch('/api/vault/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to unlock vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async lockVault(): Promise<LockVaultResponse> {
+    const res = await fetch('/api/vault/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to lock vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async getVaultStatus(): Promise<VaultStatusResponse> {
+    const res = await fetch('/api/vault/status')
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to fetch vault status (${res.status})`)
+    }
+    return json.data
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3563,6 +3625,119 @@ export type {
   SeedResult,
   SeederOptions,
 } from '../features/seeder/seederHelper'
+
+// ── Feature-44: Vault Types ──
+
+export interface VaultKDFParams {
+  salt: string
+  memory_kb: number
+  iterations: number
+  parallelism: number
+  key_len: number
+}
+
+export interface VaultContainer {
+  version: number
+  kdf: string
+  params: VaultKDFParams
+  nonce: string
+  ciphertext: string
+  hmac: string
+  created_at?: string
+}
+
+export interface ConnectionPolicy {
+  enforce_read_only: boolean
+  require_audit_log: boolean
+  allowed_roles?: string[]
+}
+
+export interface VaultConnection {
+  id: string
+  name: string
+  driver: string
+  dsn: string
+  environment?: string
+  read_only: boolean
+  policy: ConnectionPolicy
+}
+
+export interface VaultPolicy {
+  global_read_only_prod: boolean
+  require_audit_all_prod: boolean
+  allowed_environments?: string[]
+}
+
+export interface VaultPayload {
+  version: number
+  name?: string
+  description?: string
+  exported_at: string
+  exported_by?: string
+  connections: VaultConnection[]
+  policies: VaultPolicy
+}
+
+export interface ExportVaultRequest {
+  passphrase: string
+  name?: string
+  description?: string
+  exported_by?: string
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  scrub_passwords: boolean
+  fast_kdf?: boolean
+}
+
+export interface ExportVaultResponse {
+  container: VaultContainer
+  raw_json: string
+  filename: string
+}
+
+export interface ImportVaultRequest {
+  container?: VaultContainer
+  raw_container?: string
+  passphrase: string
+  apply_policies: boolean
+  interpolate_env: boolean
+}
+
+export interface ImportVaultResponse {
+  valid: boolean
+  payload?: VaultPayload
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  substituted_vars: string[]
+  enforced_policies: string[]
+}
+
+export interface UnlockVaultRequest {
+  passphrase: string
+  container?: VaultContainer
+  raw_container?: string
+}
+
+export interface UnlockVaultResponse {
+  unlocked: boolean
+  connections_count: number
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  unlocked_at: string
+}
+
+export interface LockVaultResponse {
+  locked: boolean
+}
+
+export interface VaultStatusResponse {
+  is_unlocked: boolean
+  has_container: boolean
+  connections_count: number
+  active_policies: VaultPolicy
+  unlocked_at?: string
+}
+
 
 
 
