@@ -10,15 +10,17 @@ import (
 
 // SeederRunRequest specifies the payload for executing a seed run.
 type SeederRunRequest struct {
-	Plan    *seeder.SeedPlan       `json:"plan,omitempty"`
-	Options *seeder.SeederOptions  `json:"options,omitempty"`
+	ReadOnly bool                  `json:"readOnly,omitempty"`
+	Plan     *seeder.SeedPlan      `json:"plan,omitempty"`
+	Options  *seeder.SeederOptions `json:"options,omitempty"`
 }
 
 // SeederExportRequest specifies the payload for exporting standalone seed fixtures.
 type SeederExportRequest struct {
-	Format  string                 `json:"format,omitempty"` // "sql" or "json"
-	Plan    *seeder.SeedPlan       `json:"plan,omitempty"`
-	Options *seeder.SeederOptions  `json:"options,omitempty"`
+	ReadOnly bool                  `json:"readOnly,omitempty"`
+	Format   string                `json:"format,omitempty"` // "sql" or "json"
+	Plan     *seeder.SeedPlan      `json:"plan,omitempty"`
+	Options  *seeder.SeederOptions `json:"options,omitempty"`
 }
 
 // SeederPlanHandler introspects tables, resolves DAG order, and returns execution plan with preview.
@@ -36,6 +38,15 @@ func (h *Handler) SeederPlanHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&opts)
 	}
 
+	if opts.DefaultRowCount > seeder.MaxRowsPerTable {
+		opts.DefaultRowCount = seeder.MaxRowsPerTable
+	}
+	for tbl, cnt := range opts.RowCount {
+		if cnt > seeder.MaxRowsPerTable {
+			opts.RowCount[tbl] = seeder.MaxRowsPerTable
+		}
+	}
+
 	plan, err := seeder.BuildPlan(r.Context(), entry.Driver, opts)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "failed to build seed plan: "+err.Error())
@@ -49,10 +60,11 @@ func (h *Handler) SeederPlanHandler(w http.ResponseWriter, r *http.Request) {
 // Enforces Safe Mode rejection if connection is read-only or marked production.
 // POST /api/connections/{connId}/seeder/run
 func (h *Handler) SeederRunHandler(w http.ResponseWriter, r *http.Request) {
-	// Safe Mode / Read-Only check
+	// Safe Mode / Read-Only check from headers and query parameters
 	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
 		strings.EqualFold(r.Header.Get("X-DBLENS-ENVIRONMENT"), "production") ||
-		isTruthy(r.URL.Query().Get("readonly")) {
+		isTruthy(r.URL.Query().Get("readonly")) ||
+		strings.EqualFold(r.URL.Query().Get("environment"), "production") {
 		sendError(w, http.StatusForbidden, "Connection is read-only or in production environment. Seeding blocked by Safe Mode.")
 		return
 	}
@@ -69,11 +81,25 @@ func (h *Handler) SeederRunHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 
+	// Safe Mode / Read-Only check from request body
+	if req.ReadOnly || (req.Options != nil && req.Options.ReadOnly) {
+		sendError(w, http.StatusForbidden, "Connection is read-only or in production environment. Seeding blocked by Safe Mode.")
+		return
+	}
+
 	plan := req.Plan
 	if plan == nil {
 		opts := seeder.SeederOptions{}
 		if req.Options != nil {
 			opts = *req.Options
+		}
+		if opts.DefaultRowCount > seeder.MaxRowsPerTable {
+			opts.DefaultRowCount = seeder.MaxRowsPerTable
+		}
+		for tbl, cnt := range opts.RowCount {
+			if cnt > seeder.MaxRowsPerTable {
+				opts.RowCount[tbl] = seeder.MaxRowsPerTable
+			}
 		}
 		p, err := seeder.BuildPlan(r.Context(), entry.Driver, opts)
 		if err != nil {
@@ -81,6 +107,14 @@ func (h *Handler) SeederRunHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plan = p
+	} else {
+		for i := range plan.Tables {
+			if plan.Tables[i].RowCount > seeder.MaxRowsPerTable {
+				plan.Tables[i].RowCount = seeder.MaxRowsPerTable
+			} else if plan.Tables[i].RowCount < 1 {
+				plan.Tables[i].RowCount = 1
+			}
+		}
 	}
 
 	res, err := seeder.Run(r.Context(), entry.Driver, plan, nil)
@@ -123,12 +157,28 @@ func (h *Handler) SeederExportHandler(w http.ResponseWriter, r *http.Request) {
 		if req.Options != nil {
 			opts = *req.Options
 		}
+		if opts.DefaultRowCount > seeder.MaxRowsPerTable {
+			opts.DefaultRowCount = seeder.MaxRowsPerTable
+		}
+		for tbl, cnt := range opts.RowCount {
+			if cnt > seeder.MaxRowsPerTable {
+				opts.RowCount[tbl] = seeder.MaxRowsPerTable
+			}
+		}
 		p, err := seeder.BuildPlan(r.Context(), entry.Driver, opts)
 		if err != nil {
 			sendError(w, http.StatusInternalServerError, "failed to build seed plan: "+err.Error())
 			return
 		}
 		plan = p
+	} else {
+		for i := range plan.Tables {
+			if plan.Tables[i].RowCount > seeder.MaxRowsPerTable {
+				plan.Tables[i].RowCount = seeder.MaxRowsPerTable
+			} else if plan.Tables[i].RowCount < 1 {
+				plan.Tables[i].RowCount = 1
+			}
+		}
 	}
 
 	data, err := seeder.Export(r.Context(), entry.Driver, plan, format)

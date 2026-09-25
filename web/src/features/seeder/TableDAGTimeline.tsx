@@ -25,17 +25,19 @@ interface TableDAGTimelineProps {
 }
 
 export const TableDAGTimeline: React.FC<TableDAGTimelineProps> = ({
-  tables,
-  dagOrder,
-  selectedTables,
+  tables: propTables,
+  dagOrder: propDagOrder,
+  selectedTables = [],
   onToggleTable,
   onSelectAll,
   onDeselectAll,
-  customRowCounts,
+  customRowCounts = {},
   onUpdateRowCount,
-  defaultRowCount,
+  defaultRowCount = 20,
   cyclesDetected,
 }) => {
+  const tables = propTables || []
+  const dagOrder = propDagOrder || []
   const [filter, setFilter] = useState('')
 
   // Group tables by DAG level

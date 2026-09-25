@@ -132,8 +132,8 @@ func ExportSQL(dialect, schema string, tables []TableData) (string, error) {
 		sb.WriteString("START TRANSACTION;\n\n")
 	case "postgres":
 		sb.WriteString("-- DBLens Relational Synthetic Fixture (PostgreSQL)\n")
-		sb.WriteString("SET CONSTRAINTS ALL DEFERRED;\n")
-		sb.WriteString("BEGIN;\n\n")
+		sb.WriteString("BEGIN;\n")
+		sb.WriteString("SET CONSTRAINTS ALL DEFERRED;\n\n")
 	default: // sqlite
 		sb.WriteString("-- DBLens Relational Synthetic Fixture (SQLite)\n")
 		sb.WriteString("PRAGMA foreign_keys = OFF;\n")

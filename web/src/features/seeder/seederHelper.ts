@@ -123,8 +123,9 @@ export const GENERATOR_PRESETS: Array<{ type: GeneratorType; label: string; desc
  */
 export function computeDAGLevels(tables: TableSeedPlan[]): Map<string, number> {
   const levelMap = new Map<string, number>()
+  const safeTables = tables || []
   const tableMap = new Map<string, TableSeedPlan>()
-  for (const t of tables) {
+  for (const t of safeTables) {
     tableMap.set(t.table, t)
   }
 
@@ -149,7 +150,7 @@ export function computeDAGLevels(tables: TableSeedPlan[]): Map<string, number> {
     return lvl
   }
 
-  for (const t of tables) {
+  for (const t of safeTables) {
     getLevel(t.table, new Set())
   }
   return levelMap
@@ -163,7 +164,8 @@ export function calculateRowEstimates(
   defaultCount: number = 20
 ): { totalRows: number; estimatedDurationSec: number } {
   let totalRows = 0
-  for (const t of tables) {
+  const safeTables = tables || []
+  for (const t of safeTables) {
     totalRows += t.rowCount || defaultCount
   }
   // Rough benchmark: ~1,500 rows per second batch insertion

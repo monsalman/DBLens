@@ -73,7 +73,13 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
     fetchPlan,
     runSeeder,
     exportFixture,
+    resetState,
   } = useSeeder(targetTable)
+
+  const handleModalClose = () => {
+    resetState()
+    handleClose()
+  }
 
   // Fetch plan on initial open
   useEffect(() => {
@@ -86,17 +92,17 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen && !running) {
-        handleClose()
+        handleModalClose()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, running, handleClose])
+  }, [isOpen, running, handleModalClose])
 
   if (!isOpen) return null
 
   const rowEstimates = plan
-    ? calculateRowEstimates(plan.tables, defaultRowCount)
+    ? calculateRowEstimates(plan.tables || [], defaultRowCount)
     : { totalRows: 0, estimatedDurationSec: 0 }
 
   return (
@@ -150,7 +156,7 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
 
             <button
               type="button"
-              onClick={handleClose}
+              onClick={handleModalClose}
               disabled={running}
               className="text-zinc-400 hover:text-zinc-200 p-1 rounded-md hover:bg-zinc-800 transition disabled:opacity-30"
             >
@@ -288,15 +294,15 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
 
               {/* Table DAG Timeline */}
               <TableDAGTimeline
-                tables={plan.tables}
-                dagOrder={plan.dagOrder}
+                tables={plan.tables || []}
+                dagOrder={plan.dagOrder || []}
                 selectedTables={selectedTables}
                 onToggleTable={(tbl) => {
                   setSelectedTables((prev) =>
                     prev.includes(tbl) ? prev.filter((t) => t !== tbl) : [...prev, tbl]
                   )
                 }}
-                onSelectAll={() => setSelectedTables(plan.tables.map((t) => t.table))}
+                onSelectAll={() => setSelectedTables((plan.tables || []).map((t) => t.table))}
                 onDeselectAll={() => setSelectedTables([])}
                 customRowCounts={customRowCounts}
                 onUpdateRowCount={(tbl, count) => {
@@ -311,7 +317,7 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
           {/* Tab 2: Column Generators & Preview Samples */}
           {activeTab === 'columns' && plan && (
             <FieldGeneratorConfig
-              tables={plan.tables}
+              tables={plan.tables || []}
               onUpdateGenerator={updateColumnGenerator}
             />
           )}
@@ -458,7 +464,7 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={handleClose}
+                onClick={handleModalClose}
                 disabled={running}
                 className="px-4 py-1.5 rounded-md text-zinc-400 hover:text-zinc-200 transition"
               >

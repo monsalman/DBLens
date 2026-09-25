@@ -18,9 +18,10 @@ interface FieldGeneratorConfigProps {
 }
 
 export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
-  tables,
+  tables: propTables,
   onUpdateGenerator,
 }) => {
+  const tables = propTables || []
   const [activeTableIdx, setActiveTableIdx] = useState(0)
 
   if (tables.length === 0) {
@@ -31,7 +32,10 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
     )
   }
 
-  const activeTable = tables[activeTableIdx] || tables[0]
+  const clampedIdx = Math.min(activeTableIdx, Math.max(0, tables.length - 1))
+  const activeTable = tables[clampedIdx] || tables[0]
+  const columns = activeTable.columns || []
+  const sampleRows = activeTable.sampleRows || []
 
   return (
     <div className="space-y-4">
@@ -43,7 +47,7 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
             type="button"
             onClick={() => setActiveTableIdx(idx)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium border-b-2 transition whitespace-nowrap ${
-              idx === activeTableIdx
+              idx === clampedIdx
                 ? 'border-indigo-500 text-indigo-400 bg-indigo-500/10'
                 : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
             }`}
@@ -51,7 +55,7 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
             <TableIcon className="w-3.5 h-3.5" />
             <span>{t.table}</span>
             <span className="text-[10px] text-zinc-500 px-1 rounded bg-zinc-800">
-              {t.columns.length}
+              {(t.columns || []).length}
             </span>
           </button>
         ))}
@@ -71,7 +75,7 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
-              {activeTable.columns.map((c) => {
+              {columns.map((c) => {
                 const isFK = c.isForeignKey || c.generator === 'fk'
                 return (
                   <tr key={c.name} className="hover:bg-zinc-800/30 transition">
@@ -220,7 +224,7 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
             <thead className="bg-zinc-900/80 text-zinc-400 text-[11px] border-b border-zinc-800">
               <tr>
                 <th className="px-3 py-1.5 text-zinc-500 font-sans">#</th>
-                {activeTable.columns.map((c) => (
+                {columns.map((c) => (
                   <th key={c.name} className="px-3 py-1.5">
                     {c.name}
                   </th>
@@ -228,11 +232,11 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/50 text-zinc-300">
-              {activeTable.sampleRows && activeTable.sampleRows.length > 0 ? (
-                activeTable.sampleRows.map((row, rIdx) => (
+              {sampleRows.length > 0 ? (
+                sampleRows.map((row, rIdx) => (
                   <tr key={rIdx} className="hover:bg-zinc-900/40">
                     <td className="px-3 py-1.5 text-zinc-600 font-sans">{rIdx + 1}</td>
-                    {activeTable.columns.map((c) => {
+                    {columns.map((c) => {
                       const val = row[c.name]
                       return (
                         <td key={c.name} className="px-3 py-1.5 truncate max-w-xs">
@@ -255,7 +259,7 @@ export const FieldGeneratorConfig: React.FC<FieldGeneratorConfigProps> = ({
               ) : (
                 <tr>
                   <td
-                    colSpan={activeTable.columns.length + 1}
+                    colSpan={columns.length + 1}
                     className="px-3 py-4 text-center text-zinc-500 italic font-sans"
                   >
                     No preview data generated.

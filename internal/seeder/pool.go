@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 
 	"github.com/dblens/dblens/internal/driver/types"
@@ -88,7 +89,8 @@ func (p *KeyPool) SampleSequential(table, col string, idx int) (interface{}, boo
 		return nil, false
 	}
 
-	return vals[idx%len(vals)], true
+	pos := ((idx % len(vals)) + len(vals)) % len(vals)
+	return vals[pos], true
 }
 
 // GetKeys returns a copy of all recorded keys for a table and column.
@@ -159,9 +161,11 @@ func (p *KeyPool) LoadExistingKeys(ctx context.Context, drv types.Driver, schema
 func quoteIdent(dialect, name string) string {
 	switch dialect {
 	case "mysql":
-		return fmt.Sprintf("`%s`", name)
+		escaped := strings.ReplaceAll(name, "`", "``")
+		return fmt.Sprintf("`%s`", escaped)
 	default:
-		return fmt.Sprintf(`"%s"`, name)
+		escaped := strings.ReplaceAll(name, `"`, `""`)
+		return fmt.Sprintf(`"%s"`, escaped)
 	}
 }
 
@@ -169,10 +173,5 @@ func quoteTable(dialect, schema, table string) string {
 	if schema == "" {
 		return quoteIdent(dialect, table)
 	}
-	switch dialect {
-	case "mysql":
-		return fmt.Sprintf("`%s`.`%s`", schema, table)
-	default:
-		return fmt.Sprintf(`"%s"."%s"`, schema, table)
-	}
+	return fmt.Sprintf("%s.%s", quoteIdent(dialect, schema), quoteIdent(dialect, table))
 }

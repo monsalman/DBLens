@@ -9,6 +9,9 @@ import (
 	"github.com/dblens/dblens/internal/driver/types"
 )
 
+// MaxRowsPerTable limits the maximum row count to prevent OOM / DoS.
+const MaxRowsPerTable = 100000
+
 // SeederOptions specifies parameters for constructing a seed plan.
 type SeederOptions struct {
 	Schema           string                            `json:"schema"`
@@ -19,6 +22,7 @@ type SeederOptions struct {
 	CustomGenerators map[string]map[string]GeneratorConfig `json:"customGenerators,omitempty"` // table -> col -> cfg
 	BatchSize        int                               `json:"batchSize,omitempty"`
 	Cascade          bool                              `json:"cascade,omitempty"`
+	ReadOnly         bool                              `json:"readOnly,omitempty"`
 }
 
 // ColumnPlan describes how a single column will be generated.
@@ -81,6 +85,9 @@ type SeedResult struct {
 func BuildPlan(ctx context.Context, drv types.Driver, opts SeederOptions) (*SeedPlan, error) {
 	if opts.DefaultRowCount <= 0 {
 		opts.DefaultRowCount = 20
+	}
+	if opts.DefaultRowCount > MaxRowsPerTable {
+		opts.DefaultRowCount = MaxRowsPerTable
 	}
 	if opts.Seed == 0 {
 		opts.Seed = time.Now().UnixNano()
@@ -162,7 +169,7 @@ func BuildPlan(ctx context.Context, drv types.Driver, opts SeederOptions) (*Seed
 	previewGen := NewDataGenerator(opts.Seed)
 	previewPool := NewKeyPool()
 
-	var tablePlans []TableSeedPlan
+	tablePlans := make([]TableSeedPlan, 0)
 	totalRows := 0
 
 	for _, tbl := range dag.DAGOrder {
@@ -173,6 +180,12 @@ func BuildPlan(ctx context.Context, drv types.Driver, opts SeederOptions) (*Seed
 		rc := opts.DefaultRowCount
 		if custom, ok := opts.RowCount[tbl]; ok && custom > 0 {
 			rc = custom
+		}
+		if rc <= 0 {
+			rc = 1
+		}
+		if rc > MaxRowsPerTable {
+			rc = MaxRowsPerTable
 		}
 		totalRows += rc
 
@@ -222,6 +235,18 @@ func BuildPlan(ctx context.Context, drv types.Driver, opts SeederOptions) (*Seed
 			}
 
 			colPlans = append(colPlans, cp)
+		}
+
+		// Check existing max PK if table has sequence PK and no custom starting offset
+		if pkCol != "" && drv != nil {
+			for i := range colPlans {
+				if colPlans[i].Name == pkCol && colPlans[i].Generator == GenSequence && colPlans[i].Config.Min <= 0 {
+					if maxPK := QueryMaxPK(ctx, drv, opts.Schema, tbl, pkCol); maxPK > 0 {
+						colPlans[i].Config.Min = maxPK + 1
+					}
+					break
+				}
+			}
 		}
 
 		// Generate 3 sample preview rows
@@ -380,6 +405,21 @@ func Run(ctx context.Context, drv types.Driver, plan *SeedPlan, progressCb func(
 		if !ok || tp.RowCount <= 0 {
 			continue
 		}
+		if tp.RowCount > MaxRowsPerTable {
+			tp.RowCount = MaxRowsPerTable
+		}
+
+		// If table has PK column with GenSequence and no starting offset, check DB
+		if tp.PKColumn != "" && drv != nil {
+			for i := range tp.Columns {
+				if tp.Columns[i].Name == tp.PKColumn && tp.Columns[i].Generator == GenSequence && tp.Columns[i].Config.Min <= 0 {
+					if maxPK := QueryMaxPK(ctx, drv, plan.Schema, tbl, tp.PKColumn); maxPK > 0 {
+						tp.Columns[i].Config.Min = maxPK + 1
+					}
+					break
+				}
+			}
+		}
 
 		emitProgress(tbl, "seeding", "")
 
@@ -515,6 +555,20 @@ func Export(ctx context.Context, drv types.Driver, plan *SeedPlan, format string
 		if !ok || tp.RowCount <= 0 {
 			continue
 		}
+		if tp.RowCount > MaxRowsPerTable {
+			tp.RowCount = MaxRowsPerTable
+		}
+
+		if tp.PKColumn != "" && drv != nil {
+			for i := range tp.Columns {
+				if tp.Columns[i].Name == tp.PKColumn && tp.Columns[i].Generator == GenSequence && tp.Columns[i].Config.Min <= 0 {
+					if maxPK := QueryMaxPK(ctx, drv, plan.Schema, tbl, tp.PKColumn); maxPK > 0 {
+						tp.Columns[i].Config.Min = maxPK + 1
+					}
+					break
+				}
+			}
+		}
 
 		selfFKCols := make(map[string]bool)
 		for _, fk := range tp.SelfFKs {
@@ -599,4 +653,39 @@ func Export(ctx context.Context, drv types.Driver, plan *SeedPlan, format string
 		return nil, err
 	}
 	return []byte(sqlScript), nil
+}
+
+// QueryMaxPK queries the current maximum primary key value for a table.
+func QueryMaxPK(ctx context.Context, drv types.Driver, schema, table, pkCol string) int64 {
+	if drv == nil || pkCol == "" {
+		return 0
+	}
+	dialect := drv.Dialect()
+	quotedCol := quoteIdent(dialect, pkCol)
+	quotedTable := quoteTable(dialect, schema, table)
+	query := fmt.Sprintf("SELECT MAX(%s) FROM %s", quotedCol, quotedTable)
+	res, err := drv.ExecuteQuery(ctx, query)
+	if err != nil || res == nil || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	val := res.Rows[0][0]
+	if val == nil {
+		return 0
+	}
+	switch v := val.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case string:
+		var n int64
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return 0
 }

@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -105,8 +106,10 @@ var sampleWords = []string{
 
 // DataGenerator generates deterministic synthetic data.
 type DataGenerator struct {
-	rng *rand.Rand
-	seq int64
+	rng  *rand.Rand
+	seq  int64
+	mu   sync.Mutex
+	seqs map[int64]*int64
 }
 
 // NewDataGenerator initializes a generator with a reproducible seed.
@@ -115,14 +118,37 @@ func NewDataGenerator(seed int64) *DataGenerator {
 		seed = 42
 	}
 	return &DataGenerator{
-		rng: rand.New(rand.NewSource(seed)),
-		seq: 0,
+		rng:  rand.New(rand.NewSource(seed)),
+		seq:  0,
+		seqs: make(map[int64]*int64),
 	}
+}
+
+// SetSequence sets the current sequence counter.
+func (g *DataGenerator) SetSequence(val int64) {
+	atomic.StoreInt64(&g.seq, val)
 }
 
 // NextSequence increments and returns the next sequential integer.
 func (g *DataGenerator) NextSequence() int64 {
 	return atomic.AddInt64(&g.seq, 1)
+}
+
+// NextSequenceWithStart increments and returns the next sequential integer starting at start.
+func (g *DataGenerator) NextSequenceWithStart(start int64) int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.seqs == nil {
+		g.seqs = make(map[int64]*int64)
+	}
+	ptr, ok := g.seqs[start]
+	if !ok {
+		val := start
+		g.seqs[start] = &val
+		return val
+	}
+	*ptr++
+	return *ptr
 }
 
 // GenerateValue produces a synthetic value conforming to config.
@@ -200,9 +226,15 @@ func (g *DataGenerator) GenerateValue(cfg GeneratorConfig) interface{} {
 			maxVal = minVal + 100
 		}
 		diff := maxVal - minVal + 1
+		if diff <= 0 {
+			diff = 10000
+		}
 		return minVal + g.rng.Int63n(diff)
 
 	case GenSequence:
+		if cfg.Min > 0 {
+			return g.NextSequenceWithStart(cfg.Min)
+		}
 		return g.NextSequence()
 
 	case GenDecimal:
@@ -219,6 +251,9 @@ func (g *DataGenerator) GenerateValue(cfg GeneratorConfig) interface{} {
 		decs := cfg.Decimals
 		if decs <= 0 {
 			decs = 2
+		}
+		if decs > 10 {
+			decs = 10
 		}
 		formatStr := fmt.Sprintf("%%.%df", decs)
 		resStr := fmt.Sprintf(formatStr, val)

@@ -10,8 +10,13 @@ import type {
 } from './seederHelper'
 
 export function useSeeder(initialTable?: string) {
-  const { activeConnectionId, connections } = useAppStore()
+  const { activeConnectionId, connections, selectedSchema } = useAppStore()
   const activeConn = connections.find((c) => c.id === activeConnectionId)
+  const connType = (activeConn as any)?.type || activeConn?.dialect || activeConn?.driver
+  const resolvedSchema =
+    selectedSchema ||
+    (activeConn as any)?.schema ||
+    (connType === 'postgres' ? 'public' : connType === 'sqlite' ? 'main' : '')
 
   const [selectedTables, setSelectedTables] = useState<string[]>([])
   const [defaultRowCount, setDefaultRowCount] = useState<number>(20)
@@ -29,12 +34,26 @@ export function useSeeder(initialTable?: string) {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'dag' | 'columns' | 'run'>('dag')
 
-  // Initialize selected tables
+  const resetState = useCallback(() => {
+    setPlan(null)
+    setLoadingPlan(false)
+    setRunning(false)
+    setExporting(false)
+    setProgress(null)
+    setResult(null)
+    setError(null)
+    setCustomGenerators({})
+    setCustomRowCounts({})
+    setActiveTab('dag')
+  }, [])
+
+  // Initialize selected tables and reset stale state on target table change
   useEffect(() => {
     if (initialTable) {
       setSelectedTables([initialTable])
+      resetState()
     }
-  }, [initialTable])
+  }, [initialTable, resetState])
 
   const fetchPlan = useCallback(async () => {
     if (!activeConnectionId) return
@@ -42,7 +61,7 @@ export function useSeeder(initialTable?: string) {
     setError(null)
     try {
       const opts: SeederOptions = {
-        schema: 'main',
+        schema: resolvedSchema,
         tables: selectedTables.length > 0 ? selectedTables : undefined,
         rowCount: customRowCounts,
         defaultRowCount,
@@ -52,15 +71,15 @@ export function useSeeder(initialTable?: string) {
       }
       const p = await api.getSeederPlan(activeConnectionId, opts, activeConn?.dsn, connections)
       setPlan(p)
-      if (selectedTables.length === 0 && p.tables.length > 0) {
-        setSelectedTables(p.tables.map((t) => t.table))
+      if (selectedTables.length === 0 && (p.tables || []).length > 0) {
+        setSelectedTables((p.tables || []).map((t) => t.table))
       }
     } catch (err: any) {
       setError(err.message || 'Failed to generate seeder DAG plan')
     } finally {
       setLoadingPlan(false)
     }
-  }, [activeConnectionId, activeConn?.dsn, connections, selectedTables, customRowCounts, defaultRowCount, seed, customGenerators, cascade])
+  }, [activeConnectionId, activeConn?.dsn, connections, resolvedSchema, selectedTables, customRowCounts, defaultRowCount, seed, customGenerators, cascade])
 
   const runSeeder = useCallback(async () => {
     if (!activeConnectionId || !plan) return
@@ -141,9 +160,9 @@ export function useSeeder(initialTable?: string) {
     // Also update current plan preview in-place
     setPlan((prev) => {
       if (!prev) return prev
-      const newTables = prev.tables.map((tbl) => {
+      const newTables = (prev.tables || []).map((tbl) => {
         if (tbl.table !== table) return tbl
-        const newCols = tbl.columns.map((c) => {
+        const newCols = (tbl.columns || []).map((c) => {
           if (c.name !== column) return c
           return {
             ...c,
@@ -188,5 +207,6 @@ export function useSeeder(initialTable?: string) {
     fetchPlan,
     runSeeder,
     exportFixture,
+    resetState,
   }
 }
