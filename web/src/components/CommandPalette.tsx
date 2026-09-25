@@ -258,6 +258,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     items.push({
+      id: 'action:seeder',
+      title: 'Relational Synthetic Test Data Pipeline & DAG Fixture Seeder',
+      subtitle: 'Topologically resolve foreign keys, generate test data, and export fixtures (Alt+S)',
+      category: 'Actions',
+      icon: Database,
+      badge: 'SEEDER',
+      keywords: ['seeder', 'seed', 'synthetic', 'fixture', 'test data', 'dag', 'generate data', 'populate'],
+      onSelect: () => {
+        useAppStore.getState().openSeeder()
+        closePalette()
+      },
+    })
+
+    items.push({
       id: 'action:processes',
       title: 'Go to Process Activity & Query Killer',
       subtitle: 'Monitor active queries, connections, and terminate processes',

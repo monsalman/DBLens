@@ -54,6 +54,11 @@ import type {
   ApplySyncRequest,
   ApplySyncResponse,
 } from '../features/datadiff/dataDiffHelper'
+import type {
+  SeedPlan,
+  SeederOptions,
+  SeedResult,
+} from '../features/seeder/seederHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -2973,6 +2978,71 @@ export const api = {
     }
     return await res.text()
   },
+
+  async getSeederPlan(
+    connId: string,
+    opts: SeederOptions,
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SeedPlan> {
+    const res = await fetch(`/api/connections/${connId}/seeder/plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(opts),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate seeder plan (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async runSeeder(
+    connId: string,
+    req: { plan?: SeedPlan; options?: SeederOptions },
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SeedResult> {
+    const res = await fetch(`/api/connections/${connId}/seeder/run`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Seeding execution failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportSeederFixture(
+    connId: string,
+    req: { format: 'sql' | 'json'; plan?: SeedPlan; options?: SeederOptions },
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const res = await fetch(`/api/connections/${connId}/seeder/export?format=${req.format}`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error(err || `Exporting fixture failed (${res.status})`)
+    }
+    return await res.text()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3482,6 +3552,18 @@ export type {
   ApplySyncResponse,
   RowStatus,
 } from '../features/datadiff/dataDiffHelper'
+
+export type {
+  GeneratorType,
+  GeneratorConfig,
+  ColumnPlan,
+  TableSeedPlan,
+  SeedPlan,
+  SeedProgress,
+  SeedResult,
+  SeederOptions,
+} from '../features/seeder/seederHelper'
+
 
 
 

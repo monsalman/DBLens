@@ -26,6 +26,7 @@ import { PlaybookPanel } from './features/playbook/PlaybookPanel'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { DataDiffModal } from './features/datadiff/DataDiffModal'
+import { DataSeederModal } from './features/seeder/DataSeederModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -127,6 +128,15 @@ export function App() {
           store.closeDataDiff()
         } else {
           store.openDataDiff()
+        }
+      }
+      if ((e.altKey && (e.key === 's' || e.key === 'S')) || (e.metaKey && e.altKey && (e.key === 's' || e.key === 'S'))) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isSeederOpen) {
+          store.closeSeeder()
+        } else {
+          store.openSeeder()
         }
       }
     }
@@ -404,6 +414,7 @@ export function App() {
       <HealthDashboard isOpen={isHealthOpen} onClose={() => setIsHealthOpen(false)} />
       <GlobalLiveFeedDrawer />
       <DataDiffModal />
+      <DataSeederModal />
     </QueryClientProvider>
   )
 }

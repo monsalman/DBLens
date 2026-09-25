@@ -241,6 +241,11 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
 	api.Post("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
 
+	// ── Feature-43: Relational Synthetic Test Data Pipeline & DAG Fixture Seeder ────
+	api.Post("/connections/{connId}/seeder/plan", h.SeederPlanHandler)
+	api.Post("/connections/{connId}/seeder/run", h.SeederRunHandler)
+	api.Post("/connections/{connId}/seeder/export", h.SeederExportHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

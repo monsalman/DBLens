@@ -111,6 +111,11 @@ interface AppState {
   setIsDataDiffOpen: (open: boolean) => void
   openDataDiff: () => void
   closeDataDiff: () => void
+  isSeederOpen: boolean
+  setIsSeederOpen: (open: boolean) => void
+  seederTargetTable?: string
+  openSeeder: (targetTable?: string) => void
+  closeSeeder: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -383,6 +388,11 @@ export const useAppStore = create<AppState>()(
       setIsDataDiffOpen: (isDataDiffOpen) => set({ isDataDiffOpen }),
       openDataDiff: () => set({ isDataDiffOpen: true }),
       closeDataDiff: () => set({ isDataDiffOpen: false }),
+      isSeederOpen: false,
+      seederTargetTable: undefined,
+      setIsSeederOpen: (isSeederOpen) => set({ isSeederOpen }),
+      openSeeder: (targetTable) => set({ isSeederOpen: true, seederTargetTable: targetTable }),
+      closeSeeder: () => set({ isSeederOpen: false, seederTargetTable: undefined }),
 
       peekDrawer: {
         isOpen: false,

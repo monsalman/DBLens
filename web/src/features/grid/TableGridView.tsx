@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity, Network } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity, Network, Database } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -50,7 +50,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [impactColumn, setImpactColumn] = useState<string | undefined>(undefined)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
   const qc = useQueryClient()
-  const { openPeekDrawer, connections, openRestModal } = useAppStore()
+  const { openPeekDrawer, connections, openRestModal, openSeeder } = useAppStore()
   const activeConn = connections.find((c) => c.id === connId)
   const isProd = activeConn?.environment === 'production'
 
@@ -694,6 +694,16 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)]"
               >
                 <Sparkles className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Relational DAG Seeder */}
+              <button
+                onClick={() => openSeeder(table)}
+                title="Relational Synthetic Test Data & DAG Fixture Seeder (Alt+S)"
+                className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+              >
+                <Database className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Seeder</span>
               </button>
 
               {/* Import Data */}
