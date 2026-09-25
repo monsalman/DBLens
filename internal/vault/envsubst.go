@@ -11,14 +11,8 @@ var (
 	// Matches ${VAR_NAME} or $VAR_NAME
 	reEnvVar = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
-	// URI style: scheme://user:pass@host/db
-	reURIDSN = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*://)([^:@]+):([^@]+)@(.*)$`)
-
-	// Standard MySQL DSN: user:pass@tcp(host:port)/db or user:pass@unix(socket)/db
-	reMySQLDSN = regexp.MustCompile(`^([^:@]+):([^@]+)@(tcp|unix)\((.+)\)/([^?]*)(.*)$`)
-
-	// Key-value DSNs (e.g. host=... password=secret ...)
-	reKVPassword = regexp.MustCompile(`(?i)\bpassword\s*=\s*('[^']*'|"[^"]*"|[^\s;]+)`)
+	// Key-value DSNs (e.g. host=... password=secret ... or Pwd=secret ...)
+	reKVPassword = regexp.MustCompile(`(?i)\b(?:password|pwd)\s*=\s*('[^']*'|"[^"]*"|[^\s;]+)`)
 )
 
 // IsSecretReference detects CLI / manager secret patterns (1Password op:// or pass:).
@@ -77,40 +71,81 @@ func ScrubDSN(rawDSN string, placeholderVar string) (string, string, bool) {
 		placeholderVar = "$" + placeholderVar
 	}
 
-	// 1. Try URL parser and URI regex (postgres://, mysql://, etc.)
-	if m := reURIDSN.FindStringSubmatch(raw); len(m) > 3 {
-		scheme := m[1]
-		user := m[2]
-		pass := m[3]
-		rest := m[4]
-		if strings.HasPrefix(pass, "$") || IsSecretReference(pass) {
-			return raw, pass, false
-		}
-		return fmt.Sprintf("%s%s:%s@%s", scheme, user, placeholderVar, rest), pass, true
-	}
+	// 1. URI style: scheme://user:pass@host/db
+	if idx := strings.Index(raw, "://"); idx != -1 {
+		scheme := raw[:idx+3]
+		rest := raw[idx+3:]
 
-	// 2. MySQL user:pass@tcp(...) format
-	if m := reMySQLDSN.FindStringSubmatch(raw); len(m) > 2 {
-		user := m[1]
-		pass := m[2]
-		if pass != "" && !strings.HasPrefix(pass, "$") && !IsSecretReference(pass) {
-			target := fmt.Sprintf("%s:%s@", user, pass)
-			replacement := fmt.Sprintf("%s:%s@", user, placeholderVar)
-			if strings.Contains(raw, target) {
-				return strings.Replace(raw, target, replacement, 1), pass, true
+		// Exclude query parameters when looking for host separator @
+		base := rest
+		if qIdx := strings.Index(rest, "?"); qIdx != -1 {
+			base = rest[:qIdx]
+		}
+
+		if lastAt := strings.LastIndex(base, "@"); lastAt != -1 {
+			userInfo := rest[:lastAt]
+			hostAndPath := rest[lastAt+1:]
+
+			var host, pathAndQuery string
+			if slashIdx := strings.Index(hostAndPath, "/"); slashIdx != -1 {
+				host = hostAndPath[:slashIdx]
+				pathAndQuery = hostAndPath[slashIdx:]
+			} else if qIdx := strings.Index(hostAndPath, "?"); qIdx != -1 {
+				host = hostAndPath[:qIdx]
+				pathAndQuery = hostAndPath[qIdx:]
+			} else {
+				host = hostAndPath
+			}
+
+			// First : in userInfo separates user from password
+			if firstColon := strings.Index(userInfo, ":"); firstColon != -1 {
+				user := userInfo[:firstColon]
+				pass := userInfo[firstColon+1:]
+
+				if pass != "" {
+					if strings.HasPrefix(pass, "$") || IsSecretReference(pass) {
+						return raw, pass, false
+					}
+					cleanDSN := fmt.Sprintf("%s%s:%s@%s%s", scheme, user, placeholderVar, host, pathAndQuery)
+					return cleanDSN, pass, true
+				}
 			}
 		}
 	}
 
-	// 3. Key-Value format (password=secret)
+	// 2. Key-Value format (password=secret or pwd=secret)
 	if match := reKVPassword.FindStringSubmatchIndex(raw); len(match) >= 4 {
 		valStart, valEnd := match[2], match[3]
 		val := raw[valStart:valEnd]
 		cleanVal := strings.Trim(val, `"'`)
-		if cleanVal != "" && !strings.HasPrefix(cleanVal, "$") && !IsSecretReference(cleanVal) {
+		if cleanVal != "" {
+			if strings.HasPrefix(cleanVal, "$") || IsSecretReference(cleanVal) {
+				return raw, cleanVal, false
+			}
 			prefix := raw[:valStart]
 			suffix := raw[valEnd:]
 			return prefix + placeholderVar + suffix, cleanVal, true
+		}
+	}
+
+	// 3. MySQL bare DSN: user:pass@tcp(host:port)/db, user:pass@unix(socket)/db, user:pass@host:port/db, user:pass@/db
+	if strings.Contains(raw, "@") && !strings.Contains(raw, "://") {
+		lastAt := strings.LastIndex(raw, "@")
+		userInfo := raw[:lastAt]
+		rest := raw[lastAt+1:]
+
+		// Ensure userInfo has : and doesn't look like key=value pair
+		if firstColon := strings.Index(userInfo, ":"); firstColon != -1 && !strings.Contains(userInfo, "=") {
+			user := userInfo[:firstColon]
+			pass := userInfo[firstColon+1:]
+
+			if pass != "" {
+				if strings.HasPrefix(pass, "$") || IsSecretReference(pass) {
+					return raw, pass, false
+				}
+				cleanDSN := fmt.Sprintf("%s:%s@%s", user, placeholderVar, rest)
+				return cleanDSN, pass, true
+			}
 		}
 	}
 

@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -29,6 +28,13 @@ const (
 	FastMemoryKB    = 1024 // 1 MB for tests
 	FastIterations  = 1
 	FastParallelism = 1
+
+	MinMemoryKB    = 1024       // 1 MB
+	MaxMemoryKB    = 512 * 1024 // 512 MB
+	MinIterations  = 1
+	MaxIterations  = 50
+	MinParallelism = 1
+	MaxParallelism = 16
 )
 
 var (
@@ -68,10 +74,54 @@ func FastKDFParams() KDFParams {
 	}
 }
 
+// zeroBytes clears sensitive bytes in memory.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+// ValidateKDFParams ensures Argon2id parameters fall within safe operating boundaries.
+func ValidateKDFParams(p KDFParams) error {
+	if p.MemoryKB < MinMemoryKB || p.MemoryKB > MaxMemoryKB {
+		return fmt.Errorf("memory_kb %d out of bounds (must be %d to %d KB)", p.MemoryKB, MinMemoryKB, MaxMemoryKB)
+	}
+	if p.Iterations < MinIterations || p.Iterations > MaxIterations {
+		return fmt.Errorf("iterations %d out of bounds (must be %d to %d)", p.Iterations, MinIterations, MaxIterations)
+	}
+	if p.Parallelism < MinParallelism || p.Parallelism > MaxParallelism {
+		return fmt.Errorf("parallelism %d out of bounds (must be %d to %d)", p.Parallelism, MinParallelism, MaxParallelism)
+	}
+	if p.MemoryKB < uint32(p.Parallelism)*8 {
+		return fmt.Errorf("memory_kb %d too low for parallelism %d (minimum %d KB)", p.MemoryKB, p.Parallelism, uint32(p.Parallelism)*8)
+	}
+	if p.KeyLen != 0 && (p.KeyLen < KeyLengthTotal || p.KeyLen > 1024) {
+		return fmt.Errorf("key_len %d out of bounds (must be %d to 1024)", p.KeyLen, KeyLengthTotal)
+	}
+
+	saltBytes, err := hex.DecodeString(strings.TrimSpace(p.SaltHex))
+	if err != nil {
+		return fmt.Errorf("invalid salt hex: %w", err)
+	}
+	if len(saltBytes) < SaltLength {
+		return fmt.Errorf("salt length %d bytes is too short (minimum %d bytes)", len(saltBytes), SaltLength)
+	}
+
+	return nil
+}
+
+func validateKDFParams(p KDFParams) error {
+	return ValidateKDFParams(p)
+}
+
 // deriveKeys computes 32-byte AES key and 32-byte HMAC key from passphrase using Argon2id.
 func deriveKeys(passphrase string, p KDFParams) ([]byte, []byte, error) {
+	if err := validateKDFParams(p); err != nil {
+		return nil, nil, fmt.Errorf("invalid KDF parameters: %w", err)
+	}
+
 	salt, err := decodeBytes(p.SaltHex)
-	if err != nil || len(salt) == 0 {
+	if err != nil || len(salt) < SaltLength {
 		return nil, nil, fmt.Errorf("invalid salt: %w", err)
 	}
 
@@ -88,31 +138,32 @@ func deriveKeys(passphrase string, p KDFParams) ([]byte, []byte, error) {
 		p.Parallelism,
 		keyLen,
 	)
+	defer zeroBytes(derived)
 
-	aesKey := derived[:32]
-	hmacKey := derived[32:64]
+	aesKey := make([]byte, 32)
+	hmacKey := make([]byte, 32)
+	copy(aesKey, derived[:32])
+	copy(hmacKey, derived[32:64])
+
 	return aesKey, hmacKey, nil
 }
 
 // computeHMAC calculates HMAC-SHA256 across container header, nonce, and ciphertext.
 func computeHMAC(hmacKey []byte, version int, kdf string, p KDFParams, nonceHex string, ciphertextHex string) []byte {
 	mac := hmac.New(sha256.New, hmacKey)
-	header := fmt.Sprintf("v%d:%s:%s:%d:%d:%d:%s:%s",
-		version, kdf, p.SaltHex, p.MemoryKB, p.Iterations, p.Parallelism, nonceHex, ciphertextHex)
+	keyLen := p.KeyLen
+	if keyLen < KeyLengthTotal {
+		keyLen = KeyLengthTotal
+	}
+	header := fmt.Sprintf("v%d:%s:%s:%d:%d:%d:%d:%s:%s",
+		version, kdf, p.SaltHex, p.MemoryKB, p.Iterations, p.Parallelism, keyLen, nonceHex, ciphertextHex)
 	mac.Write([]byte(header))
 	return mac.Sum(nil)
 }
 
-// decodeBytes flexibly parses hex or base64 strings.
+// decodeBytes strictly parses hex-encoded strings.
 func decodeBytes(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	if b, err := hex.DecodeString(s); err == nil {
-		return b, nil
-	}
-	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
-		return b, nil
-	}
-	return nil, errors.New("failed to decode bytes as hex or base64")
+	return hex.DecodeString(strings.TrimSpace(s))
 }
 
 // EncryptPayload derives keys, encrypts plaintext via AES-256-GCM, and binds an HMAC tag.
@@ -120,11 +171,16 @@ func EncryptPayload(plaintext []byte, passphrase string, params KDFParams) (*Vau
 	if params.SaltHex == "" {
 		params = DefaultKDFParams()
 	}
+	if params.KeyLen < KeyLengthTotal {
+		params.KeyLen = KeyLengthTotal
+	}
 
 	aesKey, hmacKey, err := deriveKeys(passphrase, params)
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(aesKey)
+	defer zeroBytes(hmacKey)
 
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
@@ -173,6 +229,8 @@ func DecryptPayload(c *VaultContainer, passphrase string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidContainerData, err)
 	}
+	defer zeroBytes(aesKey)
+	defer zeroBytes(hmacKey)
 
 	expectedHMAC := computeHMAC(hmacKey, c.Version, c.KDF, c.Params, c.Nonce, c.Ciphertext)
 	providedHMAC, err := decodeBytes(c.HMAC)

@@ -22,6 +22,7 @@ func (h *Handler) ExportVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
 	var req vault.ExportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
@@ -49,6 +50,7 @@ func (h *Handler) ImportVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
 	var req vault.ImportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())
@@ -76,6 +78,7 @@ func (h *Handler) UnlockVault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
 	var req vault.UnlockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sendError(w, http.StatusBadRequest, "Invalid JSON payload: "+err.Error())

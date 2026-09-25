@@ -27,6 +27,7 @@ import {
   downloadEncryptedVaultFile,
   convertVaultItemToConnection,
   formatVaultEnvironment,
+  scrubDSN,
 } from './vaultHelper'
 
 interface Props {
@@ -85,7 +86,6 @@ export const TeamVaultModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [rawContainerText, setRawContainerText] = useState('')
   const [importPassphrase, setImportPassphrase] = useState('')
   const [showImportPass, setShowImportPass] = useState(false)
-  const [applyPolicies, setApplyPolicies] = useState(true)
   const [interpolateEnv, setInterpolateEnv] = useState(true)
   const [importPreview, setImportPreview] = useState<ImportVaultResponse | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
@@ -165,7 +165,7 @@ export const TeamVaultModal: React.FC<Props> = ({ isOpen, onClose }) => {
       const res = await importVault({
         container: parseRes.container,
         passphrase: importPassphrase,
-        apply_policies: applyPolicies,
+        apply_policies: true,
         interpolate_env: interpolateEnv,
       })
       setImportPreview(res)
@@ -192,7 +192,12 @@ export const TeamVaultModal: React.FC<Props> = ({ isOpen, onClose }) => {
       if (existingNames.has(label)) {
         label = `${label} (Vault)`
       }
-      return { ...base, id, label }
+      // Scrub plaintext credentials before persisting to localStorage
+      const placeholder = vc.environment
+        ? `$${vc.environment.toUpperCase()}_DB_PASSWORD`
+        : '$DATABASE_PASSWORD'
+      const scrubbedDsn = scrubDSN(base.dsn, placeholder).dsn
+      return { ...base, id, label, dsn: scrubbedDsn }
     })
 
     const updated = [...existing, ...newProfiles]
@@ -588,17 +593,12 @@ export const TeamVaultModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     </span>
                   </label>
 
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={applyPolicies}
-                      onChange={(e) => setApplyPolicies(e.target.checked)}
-                      className="rounded text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span className="text-xs text-[var(--fg)]">
-                      Enforce team guardrail policies (Safe Mode & Audit)
+                  <div className="flex items-center gap-2 text-xs text-[var(--muted)] py-1">
+                    <Shield className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <span>
+                      Team guardrail policies (Safe Mode & Audit) are strictly enforced
                     </span>
-                  </label>
+                  </div>
                 </div>
               </div>
 

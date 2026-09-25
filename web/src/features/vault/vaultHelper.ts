@@ -171,6 +171,99 @@ export function convertVaultItemToConnection(vconn: VaultConnection): Connection
 }
 
 /**
+ * Sanitizes passwords from connection strings, replacing them with an env variable placeholder.
+ */
+export function scrubDSN(rawDSN: string, placeholderVar = '$DATABASE_PASSWORD'): { dsn: string; scrubbed: boolean } {
+  const raw = (rawDSN || '').trim()
+  if (!raw) return { dsn: raw, scrubbed: false }
+
+  const placeholder = placeholderVar.startsWith('$') ? placeholderVar : `$${placeholderVar}`
+
+  // 1. URI style (scheme://user:pass@host/db)
+  const schemeIdx = raw.indexOf('://')
+  if (schemeIdx !== -1) {
+    const scheme = raw.slice(0, schemeIdx + 3)
+    const rest = raw.slice(schemeIdx + 3)
+
+    const qIdx = rest.indexOf('?')
+    const base = qIdx !== -1 ? rest.slice(0, qIdx) : rest
+    const lastAt = base.lastIndexOf('@')
+
+    if (lastAt !== -1) {
+      const userInfo = rest.slice(0, lastAt)
+      const hostAndPath = rest.slice(lastAt + 1)
+
+      let host = hostAndPath
+      let pathAndQuery = ''
+      const slashIdx = hostAndPath.indexOf('/')
+      if (slashIdx !== -1) {
+        host = hostAndPath.slice(0, slashIdx)
+        pathAndQuery = hostAndPath.slice(slashIdx)
+      } else {
+        const queryIdx = hostAndPath.indexOf('?')
+        if (queryIdx !== -1) {
+          host = hostAndPath.slice(0, queryIdx)
+          pathAndQuery = hostAndPath.slice(queryIdx)
+        }
+      }
+
+      const firstColon = userInfo.indexOf(':')
+      if (firstColon !== -1) {
+        const user = userInfo.slice(0, firstColon)
+        const pass = userInfo.slice(firstColon + 1)
+        if (pass.startsWith('$') || pass.startsWith('op://') || pass.startsWith('pass:')) {
+          return { dsn: raw, scrubbed: false }
+        }
+        return {
+          dsn: `${scheme}${user}:${placeholder}@${host}${pathAndQuery}`,
+          scrubbed: true,
+        }
+      }
+    }
+  }
+
+  // 2. Key-value format (password=secret or pwd=secret)
+  const kvRegex = /\b(password|pwd)\s*=\s*('[^']*'|"[^"]*"|[^\s;]+)/i
+  const kvMatch = kvRegex.exec(raw)
+  if (kvMatch) {
+    const fullMatch = kvMatch[0]
+    const key = kvMatch[1]
+    const valWithQuotes = kvMatch[2]
+    const cleanVal = valWithQuotes.replace(/^['"]|['"]$/g, '')
+    if (cleanVal && !cleanVal.startsWith('$') && !cleanVal.startsWith('op://') && !cleanVal.startsWith('pass:')) {
+      const keyIndex = raw.indexOf(fullMatch)
+      const prefix = raw.slice(0, keyIndex)
+      const suffix = raw.slice(keyIndex + fullMatch.length)
+      return {
+        dsn: `${prefix}${key}=${placeholder}${suffix}`,
+        scrubbed: true,
+      }
+    }
+  }
+
+  // 3. MySQL bare DSN (user:pass@tcp(...), user:pass@/db, user:pass@host:port/db)
+  if (raw.includes('@') && !raw.includes('://')) {
+    const lastAt = raw.lastIndexOf('@')
+    const userInfo = raw.slice(0, lastAt)
+    const rest = raw.slice(lastAt + 1)
+    const firstColon = userInfo.indexOf(':')
+    if (firstColon !== -1 && !userInfo.includes('=')) {
+      const user = userInfo.slice(0, firstColon)
+      const pass = userInfo.slice(firstColon + 1)
+      if (pass.startsWith('$') || pass.startsWith('op://') || pass.startsWith('pass:')) {
+        return { dsn: raw, scrubbed: false }
+      }
+      return {
+        dsn: `${user}:${placeholder}@${rest}`,
+        scrubbed: true,
+      }
+    }
+  }
+
+  return { dsn: raw, scrubbed: false }
+}
+
+/**
  * Triggers a browser file download of .dblens-vault.enc file.
  */
 export function downloadEncryptedVaultFile(container: VaultContainer, filename = 'team-vault.dblens-vault.enc') {

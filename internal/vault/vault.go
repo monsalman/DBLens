@@ -80,7 +80,6 @@ type ExportRequest struct {
 	Connections    []VaultConnection `json:"connections"`
 	Policies       VaultPolicy       `json:"policies"`
 	ScrubPasswords bool              `json:"scrub_passwords"`
-	FastKDF        bool              `json:"fast_kdf,omitempty"`
 }
 
 // ExportResponse returns the encrypted envelope and raw JSON.
@@ -189,9 +188,10 @@ func (m *Manager) Export(req ExportRequest) (*ExportResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode vault payload: %w", err)
 	}
+	defer zeroBytes(payloadBytes)
 
 	m.mu.RLock()
-	useFast := m.fastKDF || req.FastKDF
+	useFast := m.fastKDF
 	m.mu.RUnlock()
 
 	params := DefaultKDFParams()
@@ -256,6 +256,7 @@ func (m *Manager) Import(req ImportRequest) (*ImportResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(payloadBytes)
 
 	var payload VaultPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
@@ -275,10 +276,7 @@ func (m *Manager) Import(req ImportRequest) (*ImportResponse, error) {
 		conns = newConns
 	}
 
-	var enforcedLogs []string
-	if req.ApplyPolicies {
-		conns, enforcedLogs = EnforcePolicies(conns, payload.Policies)
-	}
+	conns, enforcedLogs := EnforcePolicies(conns, payload.Policies)
 
 	return &ImportResponse{
 		Valid:            true,
@@ -318,6 +316,7 @@ func (m *Manager) Unlock(req UnlockRequest) (*UnlockResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(payloadBytes)
 
 	var payload VaultPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
@@ -326,12 +325,13 @@ func (m *Manager) Unlock(req UnlockRequest) (*UnlockResponse, error) {
 
 	conns, _ := EnforcePolicies(payload.Connections, payload.Policies)
 
+	now := time.Now().UTC()
 	m.mu.Lock()
 	m.container = container
 	m.connections = conns
 	m.activePolicies = payload.Policies
 	m.isUnlocked = true
-	m.unlockedAt = time.Now().UTC()
+	m.unlockedAt = now
 	m.mu.Unlock()
 
 	return &UnlockResponse{
@@ -339,7 +339,7 @@ func (m *Manager) Unlock(req UnlockRequest) (*UnlockResponse, error) {
 		ConnectionsCount: len(conns),
 		Connections:      conns,
 		Policies:         payload.Policies,
-		UnlockedAt:       m.unlockedAt.Format(time.RFC3339),
+		UnlockedAt:       now.Format(time.RFC3339),
 	}, nil
 }
 
