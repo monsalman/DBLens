@@ -101,6 +101,24 @@ test('validateSeederForm: validates table count and bounds', () => {
   assert(resValid.errors.length === 0, 'no errors on valid')
 })
 
+test('null-safety: computeDAGLevels and calculateRowEstimates handle null/undefined tables', () => {
+  // @ts-ignore
+  const levelsNull = computeDAGLevels(null)
+  assert(levelsNull.size === 0, 'levelsNull should be empty map')
+
+  // @ts-ignore
+  const levelsUndefined = computeDAGLevels(undefined)
+  assert(levelsUndefined.size === 0, 'levelsUndefined should be empty map')
+
+  // @ts-ignore
+  const estNull = calculateRowEstimates(null, 20)
+  assert(estNull.totalRows === 0, 'estNull totalRows should be 0')
+
+  // @ts-ignore
+  const estUndefined = calculateRowEstimates(undefined, 20)
+  assert(estUndefined.totalRows === 0, 'estUndefined totalRows should be 0')
+})
+
 test('GENERATOR_PRESETS: contains essential types', () => {
   const types = GENERATOR_PRESETS.map((p) => p.type)
   assert(types.includes('sequence'), 'should include sequence')

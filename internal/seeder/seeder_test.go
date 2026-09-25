@@ -332,3 +332,132 @@ func TestSQLiteSeederEndToEnd(t *testing.T) {
 		t.Errorf("expected totalRows 30 in JSON fixture, got %v", jsonFixture["totalRows"])
 	}
 }
+
+func TestKeyPoolSampleSequentialNegativeIndex(t *testing.T) {
+	pool := NewKeyPool()
+	pool.AddKeys("items", "id", []interface{}{10, 20, 30})
+
+	// Negative indices must not panic and must correctly wrap modulo
+	valNeg1, ok1 := pool.SampleSequential("items", "id", -1)
+	if !ok1 || valNeg1 != 30 {
+		t.Errorf("expected -1 to wrap to 30, got %v (ok=%v)", valNeg1, ok1)
+	}
+
+	valNeg2, ok2 := pool.SampleSequential("items", "id", -2)
+	if !ok2 || valNeg2 != 20 {
+		t.Errorf("expected -2 to wrap to 20, got %v (ok=%v)", valNeg2, ok2)
+	}
+
+	valNeg3, ok3 := pool.SampleSequential("items", "id", -3)
+	if !ok3 || valNeg3 != 10 {
+		t.Errorf("expected -3 to wrap to 10, got %v (ok=%v)", valNeg3, ok3)
+	}
+}
+
+func TestQuoteIdentAndTableEscaping(t *testing.T) {
+	// MySQL escaping
+	if q := quoteIdent("mysql", "users`table"); q != "`users``table`" {
+		t.Errorf("expected MySQL escaped backtick, got %s", q)
+	}
+	if q := quoteTable("mysql", "db`schema", "my`table"); q != "`db``schema`.`my``table`" {
+		t.Errorf("expected MySQL escaped table, got %s", q)
+	}
+
+	// Postgres/SQLite escaping
+	if q := quoteIdent("postgres", `my"col`); q != `"my""col"` {
+		t.Errorf("expected Postgres escaped double quotes, got %s", q)
+	}
+	if q := quoteTable("postgres", `my"schema`, `my"table`); q != `"my""schema"."my""table"` {
+		t.Errorf("expected Postgres escaped table, got %s", q)
+	}
+	if q := quoteTable("sqlite", "", `simple_table`); q != `"simple_table"` {
+		t.Errorf("expected SQLite simple table without schema prefix, got %s", q)
+	}
+}
+
+func TestGenIntegerOverflowAndDecimalClamp(t *testing.T) {
+	gen := NewDataGenerator(999)
+
+	// Int64 range overflow test
+	cfgOverflow := GeneratorConfig{
+		Type: GenInteger,
+		Min:  -5000000000000000000,
+		Max:  9223372036854775807, // maxVal - minVal + 1 overflows int64
+	}
+	// Must not panic on overflow
+	vInt := gen.GenerateValue(cfgOverflow)
+	if _, ok := vInt.(int64); !ok {
+		t.Errorf("expected int64 from GenInteger, got %T", vInt)
+	}
+
+	// Decimal precision clamp test (> 10 clamped to 10)
+	cfgDec := GeneratorConfig{
+		Type:     GenDecimal,
+		Min:      10,
+		Max:      20,
+		Decimals: 50,
+	}
+	vDec := gen.GenerateValue(cfgDec).(string)
+	parts := strings.Split(vDec, ".")
+	if len(parts) == 2 && len(parts[1]) > 10 {
+		t.Errorf("expected decimal places to be clamped to at most 10, got %d in %s", len(parts[1]), vDec)
+	}
+}
+
+func TestSequenceOffsetAndCollisionAvoidance(t *testing.T) {
+	gen := NewDataGenerator(1234)
+
+	// Test sequence with custom Min starting offset
+	cfgSeq := GeneratorConfig{
+		Type: GenSequence,
+		Min:  500,
+	}
+	v1 := gen.GenerateValue(cfgSeq).(int64)
+	v2 := gen.GenerateValue(cfgSeq).(int64)
+	v3 := gen.GenerateValue(cfgSeq).(int64)
+
+	if v1 != 500 || v2 != 501 || v3 != 502 {
+		t.Errorf("expected sequence 500, 501, 502; got %d, %d, %d", v1, v2, v3)
+	}
+}
+
+func TestPostgreSQLExportScriptOrder(t *testing.T) {
+	tables := []TableData{
+		{
+			Table: "items",
+			Rows: []map[string]interface{}{
+				{"id": 1, "name": "Item 1"},
+			},
+		},
+	}
+	sqlStr, err := ExportSQL("postgres", "public", tables)
+	if err != nil {
+		t.Fatalf("ExportSQL failed: %v", err)
+	}
+
+	beginIdx := strings.Index(sqlStr, "BEGIN;")
+	setConstraintsIdx := strings.Index(sqlStr, "SET CONSTRAINTS ALL DEFERRED;")
+
+	if beginIdx == -1 || setConstraintsIdx == -1 {
+		t.Fatalf("expected BEGIN; and SET CONSTRAINTS ALL DEFERRED; in postgres export")
+	}
+	if beginIdx > setConstraintsIdx {
+		t.Errorf("BEGIN; must appear BEFORE SET CONSTRAINTS ALL DEFERRED; in PostgreSQL scripts")
+	}
+}
+
+func TestSeedPlanEmptyTablesNotNull(t *testing.T) {
+	plan := SeedPlan{
+		Seed:     123,
+		Schema:   "public",
+		Tables:   make([]TableSeedPlan, 0),
+		DAGOrder: []string{},
+	}
+	b, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatalf("failed to marshal plan: %v", err)
+	}
+	if !strings.Contains(string(b), `"tables":[]`) {
+		t.Errorf("expected tables to serialize as [] not null, got:\n%s", string(b))
+	}
+}

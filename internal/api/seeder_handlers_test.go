@@ -193,6 +193,82 @@ func TestSeederRunSafeMode(t *testing.T) {
 	if w2.Code != http.StatusForbidden {
 		t.Errorf("expected 403 Forbidden with X-DBLENS-ENVIRONMENT: production, got %d: %s", w2.Code, w2.Body.String())
 	}
+
+	// 3. Rejected via request body ReadOnly: true
+	payloadReadOnly := api.SeederRunRequest{
+		ReadOnly: true,
+		Options: &seeder.SeederOptions{
+			Schema:          "main",
+			Tables:          []string{"categories"},
+			DefaultRowCount: 3,
+		},
+	}
+	bodyRO, _ := json.Marshal(payloadReadOnly)
+	req3 := httptest.NewRequest("POST", "/api/connections/default/seeder/run", bytes.NewReader(bodyRO))
+	req3.Header.Set("X-DBLENS-DSN", dsn)
+	req3.Header.Set("Content-Type", "application/json")
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden with payload ReadOnly: true, got %d: %s", w3.Code, w3.Body.String())
+	}
+
+	// 4. Rejected via query param ?readonly=1
+	req4 := httptest.NewRequest("POST", "/api/connections/default/seeder/run?readonly=1", bytes.NewReader(body))
+	req4.Header.Set("X-DBLENS-DSN", dsn)
+	req4.Header.Set("Content-Type", "application/json")
+	w4 := httptest.NewRecorder()
+	router.ServeHTTP(w4, req4)
+
+	if w4.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden with ?readonly=1, got %d: %s", w4.Code, w4.Body.String())
+	}
+
+	// 5. Rejected via query param ?environment=production
+	req5 := httptest.NewRequest("POST", "/api/connections/default/seeder/run?environment=production", bytes.NewReader(body))
+	req5.Header.Set("X-DBLENS-DSN", dsn)
+	req5.Header.Set("Content-Type", "application/json")
+	w5 := httptest.NewRecorder()
+	router.ServeHTTP(w5, req5)
+
+	if w5.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden with ?environment=production, got %d: %s", w5.Code, w5.Body.String())
+	}
+}
+
+func TestSeederRowCountClamping(t *testing.T) {
+	router, dsn, cleanup := setupSeederTestEnv(t)
+	defer cleanup()
+
+	// Excessive row count must be clamped to MaxRowsPerTable (100,000)
+	payload := seeder.SeederOptions{
+		Schema:          "main",
+		Tables:          []string{"categories"},
+		DefaultRowCount: 9999999,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/api/connections/default/seeder/plan", bytes.NewReader(body))
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from plan, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data seeder.SeedPlan `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode plan response: %v", err)
+	}
+
+	if len(resp.Data.Tables) > 0 && resp.Data.Tables[0].RowCount > seeder.MaxRowsPerTable {
+		t.Errorf("expected row count clamped to %d, got %d", seeder.MaxRowsPerTable, resp.Data.Tables[0].RowCount)
+	}
 }
 
 func TestSeederExportHandler(t *testing.T) {
