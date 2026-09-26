@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/api"
+	"github.com/dblens/dblens/internal/cli"
 	"github.com/dblens/dblens/internal/connection"
 )
 
@@ -23,6 +24,20 @@ var Version = "0.1.0"
 var embeddedFS embed.FS
 
 func main() {
+	if len(os.Args) > 1 {
+		first := os.Args[1]
+		switch first {
+		case "serve":
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+		case "lint", "diff", "seed", "profile", "query", "help":
+			code := cli.Execute(os.Args[1:])
+			os.Exit(code)
+		case "--help", "-h":
+			code := cli.Execute(os.Args[1:])
+			os.Exit(code)
+		}
+	}
+
 	port := flag.Int("port", 8080, "Port for DBLens server to listen on")
 	dataDir := flag.String("data", "", "Directory to store configuration or data")
 	staticDir := flag.String("static", "", "Custom path to static frontend dist files")

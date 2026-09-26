@@ -26,6 +26,7 @@ import {
   generateCLICommand,
   getRowKey,
 } from './dataDiffHelper'
+import { copyCliCommand } from '../cli/cliHelper'
 
 export interface DataDiffModalProps {
   isOpen?: boolean
@@ -333,7 +334,7 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
   }, [diffResult?.rows, selectedRowKeys, pks])
 
   // CLI Command copy
-  const handleCopyCLI = () => {
+  const handleCopyCLI = async () => {
     const cmd = generateCLICommand({
       sourceConnId,
       sourceSchema,
@@ -345,7 +346,7 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
       columns: selectedColumns,
       whereClause,
     })
-    navigator.clipboard.writeText(cmd)
+    await copyCliCommand(cmd)
     setCopiedCLI(true)
     setTimeout(() => setCopiedCLI(false), 2000)
   }

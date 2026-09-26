@@ -13,7 +13,9 @@ import {
   ArrowRightLeft,
   Shield,
   Lightbulb,
+  Terminal,
 } from 'lucide-react'
+import { buildProfileCliCommand, copyCliCommand } from '../cli/cliHelper'
 import type { ConnectionConfig } from '../../lib/api'
 import { useProfile } from './useProfile'
 import { ValueDistributionBars } from './ValueDistributionBars'
@@ -53,9 +55,22 @@ export const ProfileStudioModal: React.FC<ProfileStudioModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('columns')
   const [copiedReport, setCopiedReport] = useState(false)
+  const [copiedCLI, setCopiedCLI] = useState(false)
   const [copiedRemediationIdx, setCopiedRemediationIdx] = useState<number | null>(null)
   const [targetTable, setTargetTable] = useState<string>('')
   const [columnSearch, setColumnSearch] = useState<string>('')
+
+  const handleCopyCLI = async () => {
+    const cmd = buildProfileCliCommand({
+      conn: dsn || connId || 'conn',
+      table,
+      schema,
+      format: 'text',
+    })
+    await copyCliCommand(cmd)
+    setCopiedCLI(true)
+    setTimeout(() => setCopiedCLI(false), 2000)
+  }
 
   const {
     report,
@@ -173,6 +188,24 @@ export const ProfileStudioModal: React.FC<ProfileStudioModalProps> = ({
               className="p-1.5 rounded border border-[var(--border)] text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+
+            <button
+              onClick={handleCopyCLI}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-[var(--border)] text-xs font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors cursor-pointer"
+              title="Copy equivalent DBLens CLI command"
+            >
+              {copiedCLI ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">CLI Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>&gt;_ CLI</span>
+                </>
+              )}
             </button>
 
             <button

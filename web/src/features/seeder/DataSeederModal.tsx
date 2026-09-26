@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   X,
   Database,
@@ -14,7 +14,10 @@ import {
   Loader2,
   FileCode,
   FileJson,
+  Terminal,
+  Check,
 } from 'lucide-react'
+import { buildSeedCliCommand, copyCliCommand } from '../cli/cliHelper'
 import { useAppStore } from '../../stores/appStore'
 import { useSeeder } from './useSeeder'
 import { TableDAGTimeline } from './TableDAGTimeline'
@@ -75,6 +78,21 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
     exportFixture,
     resetState,
   } = useSeeder(targetTable)
+
+  const [copiedCLI, setCopiedCLI] = useState(false)
+
+  const handleCopyCLI = async () => {
+    const cmd = buildSeedCliCommand({
+      conn: activeConn?.dsn || activeConnId || 'conn',
+      tables: selectedTables.length > 0 ? selectedTables : (targetTable ? [targetTable] : undefined),
+      rows: defaultRowCount,
+      seed: seed,
+      format: 'direct',
+    })
+    await copyCliCommand(cmd)
+    setCopiedCLI(true)
+    setTimeout(() => setCopiedCLI(false), 2000)
+  }
 
   const handleModalClose = () => {
     resetState()
@@ -153,6 +171,20 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
                 <Dices className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={handleCopyCLI}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-mono transition cursor-pointer"
+              title="Copy equivalent DBLens CLI command"
+            >
+              {copiedCLI ? (
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+              )}
+              <span>{copiedCLI ? 'CLI Copied!' : '>_ CLI'}</span>
+            </button>
 
             <button
               type="button"

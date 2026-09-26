@@ -9,7 +9,13 @@ import {
   X,
   Wand2,
   ArrowRight,
+  Terminal,
+  Check,
 } from 'lucide-react'
+import {
+  buildLintCliCommand,
+  copyCliCommand,
+} from '../cli/cliHelper'
 import {
   getSeverityStyle,
   type LintDiagnostic,
@@ -40,6 +46,18 @@ export const LintPanel: React.FC<LintPanelProps> = ({
   onClose,
 }) => {
   const [filterSeverity, setFilterSeverity] = useState<LintSeverity | 'all'>('all')
+  const [copiedCLI, setCopiedCLI] = useState(false)
+
+  const handleCopyCLI = async () => {
+    const cmd = buildLintCliCommand({
+      dialect: 'postgres',
+      failOn: 'error',
+      format: 'text',
+    })
+    await copyCliCommand(cmd)
+    setCopiedCLI(true)
+    setTimeout(() => setCopiedCLI(false), 2000)
+  }
 
   const filteredDiagnostics = diagnostics.filter((d) => {
     if (filterSeverity === 'all') return true
@@ -132,6 +150,19 @@ export const LintPanel: React.FC<LintPanelProps> = ({
           >
             <Settings2 className="w-3.5 h-3.5 text-indigo-400" />
             <span>Rules</span>
+          </button>
+
+          <button
+            onClick={handleCopyCLI}
+            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] border border-[var(--border)] transition-colors cursor-pointer"
+            title="Copy equivalent DBLens CLI command"
+          >
+            {copiedCLI ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+            )}
+            <span>{copiedCLI ? 'CLI Copied!' : '>_ CLI'}</span>
           </button>
 
           <div className="h-3.5 w-px bg-[var(--border)] mx-0.5" />
