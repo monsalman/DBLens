@@ -301,3 +301,107 @@ func TestStore_SaveGetListDelete(t *testing.T) {
 		t.Errorf("expected 1 query after delete, got %d", len(store.List("")))
 	}
 }
+
+func TestQueryBuilder_HavingOperatorSanitization(t *testing.T) {
+	state := QueryCanvasState{
+		Tables: []CanvasTable{
+			{
+				ID:   "t1",
+				Name: "orders",
+				Columns: []CanvasColumn{
+					{Name: "id", Selected: true},
+					{Name: "amount", Selected: true, Aggregate: "SUM"},
+				},
+			},
+		},
+		Havings: []CanvasHaving{
+			{
+				TableID:   "t1",
+				Column:    "amount",
+				Aggregate: "SUM",
+				Operator:  "MALICIOUS_OP",
+				Value:     "100",
+			},
+		},
+	}
+
+	res, err := GenerateSQL(state, "postgres")
+	if err != nil {
+		t.Fatalf("GenerateSQL failed: %v", err)
+	}
+
+	// Should sanitize operator to "="
+	if !strings.Contains(res.SQL, `HAVING SUM("orders"."amount") = 100`) {
+		t.Errorf("expected sanitized having operator '=', got SQL:\n%s", res.SQL)
+	}
+	if len(res.Warnings) == 0 {
+		t.Errorf("expected warning for invalid having operator, got none")
+	}
+}
+
+func TestQueryBuilder_BackslashLiterals(t *testing.T) {
+	state := QueryCanvasState{
+		Tables: []CanvasTable{
+			{
+				ID:   "t1",
+				Name: "files",
+				Columns: []CanvasColumn{
+					{Name: "path", Selected: true},
+				},
+			},
+		},
+		Filters: []CanvasFilter{
+			{
+				TableID:  "t1",
+				Column:   "path",
+				Operator: "=",
+				Value:    `C:\Program Files\app\'dir'`,
+			},
+		},
+	}
+
+	// Test MySQL dialect where backslashes can break string literals
+	res, err := GenerateSQL(state, "mysql")
+	if err != nil {
+		t.Fatalf("GenerateSQL failed: %v", err)
+	}
+
+	expectedLiteral := `'C:\\Program Files\\app\\''dir'''`
+	if !strings.Contains(res.SQL, expectedLiteral) {
+		t.Errorf("expected escaped backslashes and single quotes %s, got SQL:\n%s", expectedLiteral, res.SQL)
+	}
+}
+
+func TestQueryBuilder_QuotedGroupBy(t *testing.T) {
+	state := QueryCanvasState{
+		Tables: []CanvasTable{
+			{
+				ID:   "t1",
+				Name: "users",
+				Columns: []CanvasColumn{
+					{Name: "department_id", Selected: true},
+					{Name: "id", Selected: true, Aggregate: "COUNT"},
+				},
+			},
+		},
+		GroupBy: []string{"users.department_id", "status"},
+	}
+
+	// Postgres dialect
+	pgRes, err := GenerateSQL(state, "postgres")
+	if err != nil {
+		t.Fatalf("postgres GenerateSQL failed: %v", err)
+	}
+	if !strings.Contains(pgRes.SQL, `GROUP BY "users"."department_id", "status"`) {
+		t.Errorf("expected quoted group by in postgres, got SQL:\n%s", pgRes.SQL)
+	}
+
+	// MySQL dialect
+	myRes, err := GenerateSQL(state, "mysql")
+	if err != nil {
+		t.Fatalf("mysql GenerateSQL failed: %v", err)
+	}
+	if !strings.Contains(myRes.SQL, "GROUP BY `users`.`department_id`, `status`") {
+		t.Errorf("expected quoted group by in mysql, got SQL:\n%s", myRes.SQL)
+	}
+}

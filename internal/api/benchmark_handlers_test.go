@@ -365,6 +365,86 @@ func TestBenchmarkSafeMode(t *testing.T) {
 	if wRollback.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK for rollback write in read-only mode, got %d: %s", wRollback.Code, wRollback.Body.String())
 	}
+
+	// 3. DDL statements must be unconditionally rejected even if Rollback = true
+	ddlStatements := []string{
+		"DROP TABLE users;",
+		"ALTER TABLE users ADD COLUMN age INT;",
+		"TRUNCATE TABLE users;",
+		"CREATE TABLE temp_table (id INT);",
+		"RENAME TABLE users TO users_backup;",
+	}
+
+	for _, ddl := range ddlStatements {
+		ddlBody, _ := json.Marshal(api.BenchmarkRunRequest{
+			SQL:         ddl,
+			Concurrency: 1,
+			Iterations:  1,
+			Rollback:    true,
+		})
+
+		reqDDL := httptest.NewRequest(http.MethodPost, "/api/connections/test_conn/benchmark/run", bytes.NewReader(ddlBody))
+		reqDDL.Header.Set("Content-Type", "application/json")
+		reqDDL.Header.Set("X-DBLENS-DSN", dsn)
+		reqDDL.Header.Set("X-DBLENS-READONLY", "true")
+		wDDL := httptest.NewRecorder()
+		router.ServeHTTP(wDDL, reqDDL)
+
+		if wDDL.Code != http.StatusForbidden {
+			t.Errorf("expected 403 Forbidden for DDL %q in read-only mode with rollback, got %d", ddl, wDDL.Code)
+		}
+	}
+}
+
+func TestBenchmarkRunHandler_ContextDetached(t *testing.T) {
+	router, _, dsn, cleanup := setupBenchmarkTestEnv(t)
+	defer cleanup()
+
+	reqBody, _ := json.Marshal(api.BenchmarkRunRequest{
+		SQL:         "SELECT id FROM users LIMIT 1;",
+		Concurrency: 1,
+		DurationSec: 1,
+	})
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/api/connections/test_conn/benchmark/run", bytes.NewReader(reqBody)).WithContext(reqCtx)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DBLENS-DSN", dsn)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var runEnvelope struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &runEnvelope)
+	benchID := runEnvelope.Data.ID
+
+	// Cancel the HTTP request context immediately (simulating client disconnection / handler exit)
+	cancelReq()
+
+	// Wait for benchmark duration to complete
+	time.Sleep(1200 * time.Millisecond)
+
+	// Fetch benchmark result: it should be completed, NOT cancelled
+	getReq := httptest.NewRequest(http.MethodGet, "/api/connections/test_conn/benchmark/"+benchID, nil)
+	getReq.Header.Set("X-DBLENS-DSN", dsn)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+
+	var getEnvelope struct {
+		Data benchmark.BenchmarkResult `json:"data"`
+	}
+	_ = json.Unmarshal(getW.Body.Bytes(), &getEnvelope)
+
+	if getEnvelope.Data.Status != "completed" {
+		t.Errorf("expected benchmark to complete despite cancelled HTTP request context, got status: %s", getEnvelope.Data.Status)
+	}
 }
 
 // suppress unused import warnings if any

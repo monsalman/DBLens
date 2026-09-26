@@ -168,4 +168,23 @@ func TestLockManagerEndpoints(t *testing.T) {
 			t.Errorf("expected dialect sqlite in export, got %s", resp.Dialect)
 		}
 	})
+
+	// 6. GET /api/connections/{connId}/locks/export.json sanitizes special characters in filename
+	t.Run("GET /api/connections/{connId}/locks/export.json sanitizes filename", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/connections/test%3A%2F%2Fconn!/locks/export.json", nil)
+		req.Header.Set("X-DBLENS-DSN", dsn)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		disp := rec.Header().Get("Content-Disposition")
+		if strings.Contains(disp, ":") || strings.Contains(disp, "/") || strings.Contains(disp, "!") {
+			t.Errorf("Content-Disposition header contains unsanitized special characters: %s", disp)
+		}
+		if !strings.Contains(disp, "locks-test___conn_-") {
+			t.Errorf("expected sanitized connID in filename, got: %s", disp)
+		}
+	})
 }

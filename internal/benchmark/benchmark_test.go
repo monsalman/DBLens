@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/driver"
+	"github.com/dblens/dblens/internal/driver/types"
 	_ "modernc.org/sqlite"
 )
 
@@ -371,5 +372,65 @@ func TestBenchmarkManager_Lifecycle(t *testing.T) {
 	}
 	if res.TotalQueries <= 0 {
 		t.Errorf("expected total queries > 0, got %d", res.TotalQueries)
+	}
+}
+
+type driverWithoutRawDB struct {
+	types.Driver
+}
+
+func TestBenchmarkWorker_RollbackRequiresRawDB(t *testing.T) {
+	drvPtr, _ := setupTestDB(t)
+	drv := *drvPtr
+	defer drv.Close()
+
+	d := driverWithoutRawDB{Driver: drv}
+
+	cfg := BenchmarkConfig{
+		ID:          "bm_no_rawdb_rollback",
+		SQL:         "INSERT INTO items (name, val) VALUES ('test', 123);",
+		Concurrency: 1,
+		Iterations:  5,
+		Rollback:    true,
+	}
+
+	_, err := runWorkerPool(context.Background(), d, cfg, nil)
+	if err == nil {
+		t.Fatal("expected error when rawDB is nil in rollback mode, got nil")
+	}
+	if !strings.Contains(err.Error(), "transactional rollback requires raw database connection") {
+		t.Errorf("expected descriptive rollback error, got: %v", err)
+	}
+}
+
+func TestBenchmarkManager_HistoryCap50(t *testing.T) {
+	mgr := NewBenchmarkManager()
+
+	for i := 1; i <= 60; i++ {
+		id := fmt.Sprintf("bench_%02d", i)
+		mgr.recordHistory(id, &BenchmarkResult{
+			ID:     id,
+			Status: "completed",
+		})
+	}
+
+	if len(mgr.history) != 50 {
+		t.Fatalf("expected history capped at 50, got %d", len(mgr.history))
+	}
+
+	// First 10 items (bench_01 to bench_10) should have been evicted
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("bench_%02d", i)
+		if _, found := mgr.Get(id); found {
+			t.Errorf("expected %s to be evicted from history", id)
+		}
+	}
+
+	// Last 50 items (bench_11 to bench_60) should exist
+	for i := 11; i <= 60; i++ {
+		id := fmt.Sprintf("bench_%02d", i)
+		if _, found := mgr.Get(id); !found {
+			t.Errorf("expected %s to be present in history", id)
+		}
 	}
 }
