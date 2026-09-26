@@ -52,6 +52,10 @@ func runWorkerPool(ctx context.Context, drv types.Driver, cfg BenchmarkConfig, o
 		rawDB = dbProv.DB()
 	}
 
+	if cfg.Rollback && rawDB == nil {
+		return nil, fmt.Errorf("transactional rollback requires raw database connection")
+	}
+
 	// Progress ticker
 	tickerDone := make(chan struct{})
 	go func() {
@@ -215,38 +219,29 @@ func runWorkerPool(ctx context.Context, drv types.Driver, cfg BenchmarkConfig, o
 }
 
 func executeWithRollback(ctx context.Context, drv types.Driver, rawDB *sql.DB, query string) error {
-	if rawDB != nil {
-		tx, err := rawDB.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			_ = tx.Rollback()
-		}()
-
-		rows, err := tx.QueryContext(ctx, query)
-		if err == nil {
-			for rows.Next() {
-			}
-			_ = rows.Close()
-			return nil
-		}
-
-		// Try ExecContext if QueryContext failed (e.g. non-SELECT queries)
-		_, execErr := tx.ExecContext(ctx, query)
-		return execErr
+	if rawDB == nil {
+		return fmt.Errorf("transactional rollback requires raw database connection")
 	}
 
-	// Fallback when raw *sql.DB is not directly accessible
-	if _, err := drv.ExecuteQuery(ctx, "BEGIN"); err != nil {
+	tx, err := rawDB.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
 	defer func() {
-		_, _ = drv.ExecuteQuery(context.Background(), "ROLLBACK")
+		_ = tx.Rollback()
 	}()
 
-	_, qErr := drv.ExecuteQuery(ctx, query)
-	return qErr
+	rows, err := tx.QueryContext(ctx, query)
+	if err == nil {
+		for rows.Next() {
+		}
+		_ = rows.Close()
+		return nil
+	}
+
+	// Try ExecContext if QueryContext failed (e.g. non-SELECT queries)
+	_, execErr := tx.ExecContext(ctx, query)
+	return execErr
 }
 
 func recordError(mu *sync.Mutex, errMap map[string]int64, msg string) {

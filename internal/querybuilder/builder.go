@@ -224,9 +224,13 @@ func GenerateSQL(state QueryCanvasState, dialectName string) (*BuildSQLResponse,
 
 	for _, g := range state.GroupBy {
 		trimmed := strings.TrimSpace(g)
-		if trimmed != "" && !seenGroupBy[trimmed] {
-			seenGroupBy[trimmed] = true
-			groupByParts = append(groupByParts, trimmed)
+		if trimmed == "" {
+			continue
+		}
+		quoted := quoteGroupByCol(d, trimmed)
+		if quoted != "" && !seenGroupBy[quoted] {
+			seenGroupBy[quoted] = true
+			groupByParts = append(groupByParts, quoted)
 		}
 	}
 
@@ -282,4 +286,17 @@ func GenerateSQL(state QueryCanvasState, dialectName string) (*BuildSQLResponse,
 		Dialect:  normDialect,
 		Warnings: warnings,
 	}, nil
+}
+
+func quoteGroupByCol(d Dialect, col string) string {
+	parts := strings.Split(col, ".")
+	var quoted []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "`\"'")
+		if p != "" {
+			quoted = append(quoted, d.QuoteIdentifier(p))
+		}
+	}
+	return strings.Join(quoted, ".")
 }

@@ -76,7 +76,7 @@ func (d *postgresDialect) FormatFilter(tableAlias, column, op, val, val2 string)
 func (d *postgresDialect) FormatHaving(agg, tableAlias, column, op, val string) string {
 	colRef := d.QuoteIdentifier(tableAlias) + "." + d.QuoteIdentifier(column)
 	expr := formatAggExpr(agg, colRef)
-	return expr + " " + op + " " + formatLiteral(val)
+	return expr + " " + sanitizeHavingOp(op) + " " + formatLiteral(val)
 }
 
 func (d *postgresDialect) FormatOrderBy(tableAlias, column, direction, nulls string) string {
@@ -130,7 +130,7 @@ func (d *mysqlDialect) FormatFilter(tableAlias, column, op, val, val2 string) st
 func (d *mysqlDialect) FormatHaving(agg, tableAlias, column, op, val string) string {
 	colRef := d.QuoteIdentifier(tableAlias) + "." + d.QuoteIdentifier(column)
 	expr := formatAggExpr(agg, colRef)
-	return expr + " " + op + " " + formatLiteral(val)
+	return expr + " " + sanitizeHavingOp(op) + " " + formatLiteral(val)
 }
 
 func (d *mysqlDialect) FormatOrderBy(tableAlias, column, direction, nulls string) string {
@@ -184,7 +184,16 @@ func (d *sqliteDialect) FormatFilter(tableAlias, column, op, val, val2 string) s
 func (d *sqliteDialect) FormatHaving(agg, tableAlias, column, op, val string) string {
 	colRef := d.QuoteIdentifier(tableAlias) + "." + d.QuoteIdentifier(column)
 	expr := formatAggExpr(agg, colRef)
-	return expr + " " + op + " " + formatLiteral(val)
+	return expr + " " + sanitizeHavingOp(op) + " " + formatLiteral(val)
+}
+
+func sanitizeHavingOp(op string) string {
+	switch strings.TrimSpace(op) {
+	case "=", "!=", "<>", ">", ">=", "<", "<=":
+		return strings.TrimSpace(op)
+	default:
+		return "="
+	}
 }
 
 func (d *sqliteDialect) FormatOrderBy(tableAlias, column, direction, nulls string) string {
@@ -259,8 +268,9 @@ func formatLiteral(v string) string {
 	if _, err := strconv.ParseFloat(trimmed, 64); err == nil && !strings.HasPrefix(trimmed, "0") || trimmed == "0" {
 		return trimmed
 	}
-	// Escape single quotes: ' -> ''
-	escaped := strings.ReplaceAll(v, "'", "''")
+	// Escape backslashes first to prevent MySQL backslash escape breakouts, then single-quotes: ' -> ''
+	escaped := strings.ReplaceAll(v, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, "'", "''")
 	return "'" + escaped + "'"
 }
 

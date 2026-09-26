@@ -98,6 +98,8 @@ export function App() {
   const setIsHealthOpen = useAppStore((s) => s.setIsHealthOpen)
   const isTeamVaultOpen = useAppStore((s) => s.isTeamVaultOpen)
   const setIsTeamVaultOpen = useAppStore((s) => s.setIsTeamVaultOpen)
+  const isLockManagerOpen = useAppStore((s) => s.isLockManagerOpen)
+  const closeLockManager = useAppStore((s) => s.closeLockManager)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -433,8 +435,8 @@ export function App() {
         onClose={() => setIsTeamVaultOpen(false)}
       />
       <LockManagerModal
-        isOpen={useAppStore((s) => s.isLockManagerOpen)}
-        onClose={() => useAppStore.getState().closeLockManager()}
+        isOpen={isLockManagerOpen}
+        onClose={closeLockManager}
         connId={activeConnId}
         profiles={connections}
       />

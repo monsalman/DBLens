@@ -194,18 +194,38 @@ func (ab *ActiveBenchmark) GetResult() *BenchmarkResult {
 	return ab.result
 }
 
+const maxBenchmarkHistory = 50
+
 // BenchmarkManager manages active and historical benchmark sessions in thread-safe manner.
 type BenchmarkManager struct {
-	mu      sync.RWMutex
-	active  map[string]*ActiveBenchmark
-	history map[string]*BenchmarkResult
+	mu          sync.RWMutex
+	active      map[string]*ActiveBenchmark
+	history     map[string]*BenchmarkResult
+	historyKeys []string
 }
 
 // NewBenchmarkManager initializes a new BenchmarkManager.
 func NewBenchmarkManager() *BenchmarkManager {
 	return &BenchmarkManager{
-		active:  make(map[string]*ActiveBenchmark),
-		history: make(map[string]*BenchmarkResult),
+		active:      make(map[string]*ActiveBenchmark),
+		history:     make(map[string]*BenchmarkResult),
+		historyKeys: make([]string, 0, maxBenchmarkHistory),
+	}
+}
+
+func (m *BenchmarkManager) recordHistory(id string, res *BenchmarkResult) {
+	if res == nil {
+		return
+	}
+	if _, exists := m.history[id]; !exists {
+		m.historyKeys = append(m.historyKeys, id)
+	}
+	m.history[id] = res
+
+	for len(m.history) > maxBenchmarkHistory && len(m.historyKeys) > 0 {
+		oldest := m.historyKeys[0]
+		m.historyKeys = m.historyKeys[1:]
+		delete(m.history, oldest)
 	}
 }
 
@@ -301,9 +321,7 @@ func (m *BenchmarkManager) Start(ctx context.Context, drv types.Driver, cfg Benc
 		}
 
 		m.mu.Lock()
-		if res != nil {
-			m.history[cfg.ID] = res
-		}
+		m.recordHistory(cfg.ID, res)
 		delete(m.active, cfg.ID)
 		m.mu.Unlock()
 	}()

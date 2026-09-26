@@ -223,6 +223,37 @@ func IsNonSelectSQL(sql string) bool {
 	return false
 }
 
+// IsDDLStatement returns true if SQL statement contains DDL (DROP, ALTER, TRUNCATE, CREATE, RENAME).
+func IsDDLStatement(sql string) bool {
+	cleaned := reBlockComment.ReplaceAllString(sql, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return false
+	}
+
+	stmts := splitStatements(cleaned)
+	for _, stmt := range stmts {
+		stmt = stripOuterParens(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		fields := strings.Fields(stmt)
+		if len(fields) == 0 {
+			continue
+		}
+		firstWord := strings.ToUpper(fields[0])
+
+		switch firstWord {
+		case "DROP", "ALTER", "TRUNCATE", "CREATE", "RENAME":
+			return true
+		}
+	}
+
+	return false
+}
+
 type Response struct {
 	Data  interface{} `json:"data"`
 	Error *string     `json:"error"`

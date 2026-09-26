@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,15 +59,21 @@ func (h *Handler) BenchmarkRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Safe Mode / Read-Only check: if not in rollback mode and query is mutating, guard it
+	// Safe Mode / Read-Only check:
 	isReadOnly := isTruthy(r.Header.Get("X-DBLENS-READONLY")) ||
 		strings.EqualFold(r.Header.Get("X-DBLENS-ENVIRONMENT"), "production") ||
 		isTruthy(r.URL.Query().Get("readonly")) ||
 		strings.EqualFold(r.URL.Query().Get("environment"), "production")
 
-	if isReadOnly && !req.Rollback && isMutatingStatement(trimmedSQL) {
-		sendError(w, http.StatusForbidden, "Mutating queries during benchmark on read-only/production databases require rollback mode enabled.")
-		return
+	if isReadOnly {
+		if IsDDLStatement(trimmedSQL) {
+			sendError(w, http.StatusForbidden, "DDL statements (DROP, ALTER, TRUNCATE, CREATE, RENAME) are prohibited during benchmark on read-only/production databases.")
+			return
+		}
+		if !req.Rollback && IsNonSelectSQL(trimmedSQL) {
+			sendError(w, http.StatusForbidden, "Mutating queries during benchmark on read-only/production databases require rollback mode enabled.")
+			return
+		}
 	}
 
 	cfg := benchmark.BenchmarkConfig{
@@ -79,7 +86,7 @@ func (h *Handler) BenchmarkRunHandler(w http.ResponseWriter, r *http.Request) {
 		Label:       req.Label,
 	}
 
-	ab, err := h.BenchmarkManager().Start(r.Context(), entry.Driver, cfg)
+	ab, err := h.BenchmarkManager().Start(context.WithoutCancel(r.Context()), entry.Driver, cfg)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "failed to start benchmark: "+err.Error())
 		return
@@ -287,14 +294,4 @@ func (h *Handler) BenchmarkExportMDHandler(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Disposition", "attachment; filename=\"benchmark_report.md\"")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(mdReport))
-}
-
-func isMutatingStatement(sql string) bool {
-	upper := strings.ToUpper(cleanSQLComments(sql))
-	return strings.HasPrefix(upper, "INSERT") ||
-		strings.HasPrefix(upper, "UPDATE") ||
-		strings.HasPrefix(upper, "DELETE") ||
-		strings.HasPrefix(upper, "DROP") ||
-		strings.HasPrefix(upper, "ALTER") ||
-		strings.HasPrefix(upper, "TRUNCATE")
 }

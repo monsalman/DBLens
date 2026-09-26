@@ -66,13 +66,19 @@ func Validate(state *QueryCanvasState) (warnings []string, err error) {
 	}
 
 	// Validate Havings
-	for _, h := range state.Havings {
+	for i, h := range state.Havings {
 		t, ok := tableMap[h.TableID]
 		if !ok {
 			return nil, fmt.Errorf("having clause references non-existent table id '%s'", h.TableID)
 		}
 		if len(t.Columns) > 0 && !colMap[h.TableID][h.Column] {
 			warnings = append(warnings, fmt.Sprintf("Having column '%s' not found in table '%s'", h.Column, t.Name))
+		}
+		switch strings.TrimSpace(h.Operator) {
+		case "=", "!=", "<>", ">", ">=", "<", "<=":
+			// valid
+		default:
+			warnings = append(warnings, fmt.Sprintf("Having #%d: invalid operator '%s', defaulting to '='", i+1, h.Operator))
 		}
 	}
 

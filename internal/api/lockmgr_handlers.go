@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -155,10 +156,19 @@ func (h *Handler) ExportLocksJSON(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connID := chi.URLParam(r, "connId")
-	if strings.TrimSpace(connID) == "" {
-		connID = "session"
+	if unescaped, err := url.PathUnescape(connID); err == nil {
+		connID = unescaped
 	}
-	filename := fmt.Sprintf("locks-%s-%d.json", connID, time.Now().Unix())
+	sanitizedConnID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, connID)
+	if strings.Trim(sanitizedConnID, "_") == "" {
+		sanitizedConnID = "session"
+	}
+	filename := fmt.Sprintf("locks-%s-%d.json", sanitizedConnID, time.Now().Unix())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
