@@ -25,6 +25,9 @@ import { AuditLogPanel } from './features/audit/AuditLogPanel'
 import { PlaybookPanel } from './features/playbook/PlaybookPanel'
 import { HealthDashboard } from './features/health/HealthDashboard'
 import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
+import { DataDiffModal } from './features/datadiff/DataDiffModal'
+import { DataSeederModal } from './features/seeder/DataSeederModal'
+import { TeamVaultModal } from './features/vault/TeamVaultModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -92,6 +95,8 @@ export function App() {
   const setIsPlaybookOpen = useAppStore((s) => s.setIsPlaybookOpen)
   const isHealthOpen = useAppStore((s) => s.isHealthOpen)
   const setIsHealthOpen = useAppStore((s) => s.setIsHealthOpen)
+  const isTeamVaultOpen = useAppStore((s) => s.isTeamVaultOpen)
+  const setIsTeamVaultOpen = useAppStore((s) => s.setIsTeamVaultOpen)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -115,6 +120,31 @@ export function App() {
     setActiveConnId(null)
     setSelectedTable(null)
     useAppStore.getState().setActiveConnectionId('' as any)
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.altKey && (e.key === 'd' || e.key === 'D')) || (e.metaKey && e.altKey && (e.key === 'd' || e.key === 'D'))) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isDataDiffOpen) {
+          store.closeDataDiff()
+        } else {
+          store.openDataDiff()
+        }
+      }
+      if ((e.altKey && (e.key === 's' || e.key === 'S')) || (e.metaKey && e.altKey && (e.key === 's' || e.key === 'S'))) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isSeederOpen) {
+          store.closeSeeder()
+        } else {
+          store.openSeeder()
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   useEffect(() => {
@@ -386,6 +416,12 @@ export function App() {
       <PlaybookPanel isOpen={isPlaybookOpen} onClose={() => setIsPlaybookOpen(false)} />
       <HealthDashboard isOpen={isHealthOpen} onClose={() => setIsHealthOpen(false)} />
       <GlobalLiveFeedDrawer />
+      <DataDiffModal />
+      <DataSeederModal />
+      <TeamVaultModal
+        isOpen={isTeamVaultOpen}
+        onClose={() => setIsTeamVaultOpen(false)}
+      />
     </QueryClientProvider>
   )
 }

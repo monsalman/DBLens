@@ -36,6 +36,10 @@ func (p *PostgresDriver) Dialect() string {
 	return "postgres"
 }
 
+func (p *PostgresDriver) DB() *sql.DB {
+	return p.db
+}
+
 func (p *PostgresDriver) Ping(ctx context.Context) error {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

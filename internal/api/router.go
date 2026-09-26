@@ -32,7 +32,7 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN", "X-DBLENS-READONLY", "X-DBLENS-SSH-TUNNEL"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-DBLENS-DSN", "X-DBLENS-READONLY", "X-DBLENS-SSH-TUNNEL", "X-DBLENS-ENVIRONMENT"},
 		ExposedHeaders:   []string{"Link", "X-Total-Count"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -186,6 +186,72 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	// ── Feature-35: Connection Health Dashboard & Latency Monitor ──
 	api.Get("/health/connections", h.HealthConnections)
 	api.Get("/health/stream", h.HealthStream)
+
+	// ── Feature-36: Column Data Profiling & Dataset Quality Studio ──
+	api.Post("/connections/{connId}/profile", h.ProfileTable)
+	api.Post("/connections/{connId}/profile/suggest", h.ProfileSuggest)
+	api.Get("/connections/{connId}/profile/export.md", h.ProfileExportMD)
+	api.Post("/connections/{connId}/profile/export.md", h.ProfileExportMD)
+	api.Post("/connections/{connId}/profile/compare", h.ProfileCompare)
+
+	// ── Feature-37: Query Result Materialization & Scratch Table Workspace ──
+	api.Post("/connections/{connId}/materialize/preview", h.MaterializePreview)
+	api.Post("/connections/{connId}/materialize", h.MaterializeExecute)
+	api.Get("/connections/{connId}/materialize/scratch", h.ScratchList)
+	api.Delete("/connections/{connId}/materialize/scratch/{schema}/{table}", h.ScratchDelete)
+	api.Delete("/connections/{connId}/materialize/scratch/{table}", h.ScratchDelete)
+	api.Post("/connections/{connId}/materialize/scratch/promote", h.ScratchPromote)
+	api.Post("/connections/{connId}/materialize/scratch/expire", h.ScratchExpire)
+
+	// ── Feature-38: In-Editor SQL Static Analyzer & Quality Gate ─────────
+	api.Post("/connections/{connId}/analyze", h.AnalyzeSQLHandler)
+	api.Post("/connections/{connId}/analyze/gate", h.AnalyzeGateHandler)
+	api.Post("/analyze", h.AnalyzeSQLHandler)
+	api.Post("/analyze/gate", h.AnalyzeGateHandler)
+	api.Get("/analyze/rules", h.GetAnalyzerRulesHandler)
+	api.Put("/analyze/rules", h.UpdateAnalyzerRulesHandler)
+
+	// ── Feature-39: Pivot & Cross-Tab Result Studio ─────────────────────
+	api.Post("/connections/{connId}/pivot/pushdown", h.PivotPushdownHandler)
+	api.Post("/connections/{connId}/pivot/run", h.PivotRunHandler)
+	api.Post("/connections/{connId}/pivot/export.csv", h.PivotExportCSVHandler)
+	api.Post("/connections/{connId}/pivot/export.md", h.PivotExportMDHandler)
+	api.Post("/pivot/transform", h.PivotTransformHandler)
+	api.Post("/pivot/export.csv", h.PivotExportCSVHandler)
+	api.Post("/pivot/export.md", h.PivotExportMDHandler)
+
+	// ── Feature-40: Schema Object Impact Analyzer & Safe-Drop Planner ────
+	api.Get("/connections/{connId}/impact", h.GetImpactHandler)
+	api.Post("/connections/{connId}/impact/plan", h.CreateImpactPlanHandler)
+	api.Post("/connections/{connId}/impact/rename", h.CreateImpactRenameHandler)
+	api.Get("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
+	api.Post("/connections/{connId}/impact/export.md", h.ExportImpactMDHandler)
+
+	// ── Feature-41: Execution Plan Diff Studio & Smart Index Advisor ────
+	api.Post("/connections/{connId}/plandiff/compare", h.ComparePlanDiffHandler)
+	api.Post("/connections/{connId}/plandiff/advise", h.AdvisePlanDiffHandler)
+	api.Post("/connections/{connId}/plandiff/apply-index", h.ApplyPlanIndexHandler)
+	api.Get("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
+	api.Post("/connections/{connId}/plandiff/export.md", h.ExportPlanDiffMDHandler)
+
+	// ── Feature-42: Cross-Database Row-Level Data Diff & Bi-Directional Sync Studio ────
+	api.Post("/datadiff/compare", h.CompareDataDiffHandler)
+	api.Post("/datadiff/generate-sync", h.GenerateDataDiffSyncHandler)
+	api.Post("/datadiff/apply-sync", h.ApplyDataDiffSyncHandler)
+	api.Get("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
+	api.Post("/datadiff/export.sql", h.ExportDataDiffSQLHandler)
+
+	// ── Feature-43: Relational Synthetic Test Data Pipeline & DAG Fixture Seeder ────
+	api.Post("/connections/{connId}/seeder/plan", h.SeederPlanHandler)
+	api.Post("/connections/{connId}/seeder/run", h.SeederRunHandler)
+	api.Post("/connections/{connId}/seeder/export", h.SeederExportHandler)
+
+	// ── Feature-44: Zero-Knowledge Encrypted Team Connection Vault & Environment Sync ────
+	api.Post("/vault/export", h.ExportVault)
+	api.Post("/vault/import", h.ImportVault)
+	api.Post("/vault/unlock", h.UnlockVault)
+	api.Post("/vault/lock", h.LockVault)
+	api.Get("/vault/status", h.GetVaultStatus)
 
 	r.Mount("/api", api)
 

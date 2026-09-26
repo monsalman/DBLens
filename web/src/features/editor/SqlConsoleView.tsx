@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import CodeMirror, { keymap, Prec } from '@uiw/react-codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -27,12 +27,20 @@ import {
   Braces,
   Code,
   ChevronDown,
+  Layers,
+  ShieldCheck,
+  ShieldAlert,
+  Sliders,
+  Table,
+  GitCompare,
 } from 'lucide-react'
+import type { EditorView } from '@codemirror/view'
 import { api } from '../../lib/api'
 import type { QueryResult, ExplainResult } from '../../lib/api'
 import { useAppStore } from '../../stores/appStore'
 import { ExplainPlanView } from './ExplainPlanView'
 import { SqlChartStudio } from './SqlChartStudio'
+import { PivotStudio } from '../pivot/PivotStudio'
 import { createSqlExtension } from '../../lib/sqlAutocomplete'
 import { extractQueryVariables, DBA_MAINTENANCE_SNIPPETS, type SqlSnippet } from './sqlVariableParser'
 import { sqlVariableHighlight } from './sqlVariableHighlight'
@@ -41,6 +49,13 @@ import { isDestructiveQuery, isNonSelectQuery } from '../../lib/safeMode'
 import { JsonStudioModal } from '../json/JsonStudioModal'
 import { parseJsonSafely } from '../json/jsonPathHelper'
 import { AiAssistantBar } from './AiAssistantBar'
+import { MaterializeModal } from '../materialize/MaterializeModal'
+import { PlanDiffModal } from '../plandiff/PlanDiffModal'
+import { useSqlLint } from '../lint/useSqlLint'
+import { createLintExtension } from '../lint/lintDecorations'
+import { LintPanel } from '../lint/LintPanel'
+import { RulesSettingsModal } from '../lint/RulesSettingsModal'
+import { applyQuickFix, type LintDiagnostic, type QuickFix } from '../lint/lintRules'
 
 interface Props {
   connId: string
@@ -120,7 +135,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [tabExecuting, setTabExecuting] = useState<Record<string, boolean>>({})
   const [tabExplainResults, setTabExplainResults] = useState<Record<string, ExplainResult>>({})
   const [tabExplaining, setTabExplaining] = useState<Record<string, boolean>>({})
-  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain' | 'chart'>>({})
+  const [tabActivePane, setTabActivePane] = useState<Record<string, 'results' | 'explain' | 'chart' | 'pivot'>>({})
 
   const currentResult = currentTab ? tabResults[currentTab.id] ?? null : null
   const isExecuting = Boolean(currentTab && tabExecuting[currentTab.id])
@@ -132,6 +147,34 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [isAiBarOpen, setIsAiBarOpen] = useState(false)
   const [fixContext, setFixContext] = useState<{ query: string; error: string } | null>(null)
   const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
+  const [isMaterializeOpen, setIsMaterializeOpen] = useState(false)
+  const [isPlanDiffOpen, setIsPlanDiffOpen] = useState(false)
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        setIsMaterializeOpen(true)
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
+        e.preventDefault()
+        setIsPlanDiffOpen(true)
+      }
+      if (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault()
+        setTabActivePane((prev) => {
+          const tabId = currentTab?.id || ''
+          const cur = prev[tabId] ?? 'results'
+          return {
+            ...prev,
+            [tabId]: cur === 'pivot' ? 'results' : 'pivot',
+          }
+        })
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [currentTab?.id])
 
   // Tab rename state
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
@@ -439,11 +482,141 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
     explainRef.current = handleExplain
   })
 
+  // Feature-38: SQL Static Analyzer & Quality Gate
+  const [isLintPanelOpen, setIsLintPanelOpen] = useState(false)
+  const [isLintSettingsOpen, setIsLintSettingsOpen] = useState(false)
+  const editorViewRef = useRef<EditorView | null>(null)
+  const diagIndexRef = useRef<number>(0)
+
+  const knownTables = useMemo(() => {
+    return (erdTables || []).map((t) => t.name)
+  }, [erdTables])
+
+  const knownCols = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    if (erdTables) {
+      for (const t of erdTables) {
+        map[t.name] = (t.columns || []).map((c) => c.name)
+      }
+    }
+    return map
+  }, [erdTables])
+
+  const {
+    diagnostics: lintDiagnostics,
+    summary: lintSummary,
+    isAnalyzing: isLintAnalyzing,
+    revalidate: revalidateLint,
+  } = useSqlLint({
+    sql: currentTab?.query || '',
+    connId,
+    dialect: currentDialect,
+    schema: selectedSchema,
+    knownTables,
+    knownCols,
+    profiles: effectiveConnections,
+  })
+
+  const handleApplyLintFix = useCallback(
+    (fix: QuickFix) => {
+      if (!currentTab) return
+      const newSql = applyQuickFix(currentTab.query, fix)
+      updateSqlTabQuery(connId, currentTab.id, newSql)
+      revalidateLint()
+    },
+    [currentTab, connId, updateSqlTabQuery, revalidateLint]
+  )
+
+  const handleJumpToDiagnostic = useCallback((d: LintDiagnostic) => {
+    const view = editorViewRef.current
+    if (!view) return
+    const docLen = view.state.doc.length
+    const from = Math.max(0, Math.min(d.start_offset, docLen))
+    const to = Math.max(from, Math.min(d.end_offset, docLen))
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: true,
+    })
+    view.focus()
+  }, [])
+
+  const handleNextDiagnostic = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      diagIndexRef.current = (diagIndexRef.current + 1) % lintDiagnostics.length
+      const d = lintDiagnostics[diagIndexRef.current]
+      const docLen = v.state.doc.length
+      const from = Math.max(0, Math.min(d.start_offset, docLen))
+      const to = Math.max(from, Math.min(d.end_offset, docLen))
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      })
+      v.focus()
+    },
+    [lintDiagnostics]
+  )
+
+  const handlePrevDiagnostic = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      diagIndexRef.current =
+        (diagIndexRef.current - 1 + lintDiagnostics.length) % lintDiagnostics.length
+      const d = lintDiagnostics[diagIndexRef.current]
+      const docLen = v.state.doc.length
+      const from = Math.max(0, Math.min(d.start_offset, docLen))
+      const to = Math.max(from, Math.min(d.end_offset, docLen))
+      v.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      })
+      v.focus()
+    },
+    [lintDiagnostics]
+  )
+
+  const handleApplyCurrentFix = useCallback(
+    (view?: EditorView) => {
+      const v = view || editorViewRef.current
+      if (!v || lintDiagnostics.length === 0) return
+      const sel = v.state.selection.main
+      const match =
+        lintDiagnostics.find(
+          (d) =>
+            d.quick_fix &&
+            sel.head >= d.start_offset &&
+            sel.head <= Math.max(d.end_offset, d.start_offset + 1)
+        ) || lintDiagnostics.find((d) => d.quick_fix)
+
+      if (match?.quick_fix) {
+        handleApplyLintFix(match.quick_fix)
+      }
+    },
+    [lintDiagnostics, handleApplyLintFix]
+  )
+
+  const nextDiagRef = useRef(handleNextDiagnostic)
+  const prevDiagRef = useRef(handlePrevDiagnostic)
+  const applyFixRef = useRef(handleApplyCurrentFix)
+
+  useEffect(() => {
+    nextDiagRef.current = handleNextDiagnostic
+    prevDiagRef.current = handlePrevDiagnostic
+    applyFixRef.current = handleApplyCurrentFix
+  })
+
+  const lintExtension = useMemo(() => {
+    return createLintExtension(lintDiagnostics, handleApplyLintFix)
+  }, [lintDiagnostics, handleApplyLintFix])
+
   const extensions = useMemo(() => {
     const baseExtensions = createSqlExtension(currentDialect, erdTables, selectedSchema)
     return [
       ...baseExtensions,
       sqlVariableHighlight,
+      lintExtension,
       Prec.highest(
         keymap.of([
           {
@@ -467,10 +640,31 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               return true
             },
           },
+          {
+            key: 'F8',
+            run: (view) => {
+              nextDiagRef.current(view)
+              return true
+            },
+          },
+          {
+            key: 'Shift-F8',
+            run: (view) => {
+              prevDiagRef.current(view)
+              return true
+            },
+          },
+          {
+            key: 'Mod-.',
+            run: (view) => {
+              applyFixRef.current(view)
+              return true
+            },
+          },
         ])
       ),
     ]
-  }, [currentDialect, erdTables, selectedSchema])
+  }, [currentDialect, erdTables, selectedSchema, lintExtension])
 
   // Export handlers
   const handleExportCsv = () => {
@@ -632,6 +826,9 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                 height="100%"
                 theme={isDark ? oneDark : 'light'}
                 extensions={extensions}
+                onCreateEditor={(view) => {
+                  editorViewRef.current = view
+                }}
                 onChange={(val) => updateSqlTabQuery(connId, currentTab.id, val)}
                 basicSetup={{
                   lineNumbers: true,
@@ -645,6 +842,20 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               />
             )}
           </div>
+
+          {/* Feature-38: Collapsible Lint Panel */}
+          {isLintPanelOpen && (
+            <LintPanel
+              diagnostics={lintDiagnostics}
+              summary={lintSummary}
+              isAnalyzing={isLintAnalyzing}
+              onSelectDiagnostic={handleJumpToDiagnostic}
+              onApplyFix={handleApplyLintFix}
+              onOpenSettings={() => setIsLintSettingsOpen(true)}
+              onRevalidate={revalidateLint}
+              onClose={() => setIsLintPanelOpen(false)}
+            />
+          )}
 
           <div className="h-10 border-t border-[var(--border)] px-3 flex items-center justify-between shrink-0 bg-[var(--bg)]">
             <div className="flex items-center gap-2">
@@ -835,6 +1046,57 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                     : `IntelliSense: ${erdTables?.length || 0} tables`}
                 </span>
               </div>
+
+              {/* Feature-38: SQL Quality / Lint Badge */}
+              <button
+                id="dblens-lint-status-btn"
+                onClick={() => setIsLintPanelOpen((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border transition-colors ${
+                  isLintPanelOpen
+                    ? 'bg-[var(--surface)] border-[var(--border)] text-[var(--fg)]'
+                    : lintSummary.errors > 0
+                      ? 'border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20'
+                      : lintSummary.warnings > 0
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20'
+                        : 'border-transparent text-emerald-400 hover:bg-[var(--hover)] hover:text-emerald-300'
+                }`}
+                title={
+                  lintSummary.total === 0
+                    ? 'SQL Quality: Clean (No issues)'
+                    : `SQL Quality: ${lintSummary.errors} error(s), ${lintSummary.warnings} warning(s) (F8 to jump)`
+                }
+              >
+                {lintSummary.errors > 0 ? (
+                  <ShieldAlert className="w-3 h-3 text-red-400" />
+                ) : lintSummary.warnings > 0 ? (
+                  <ShieldAlert className="w-3 h-3 text-amber-400" />
+                ) : (
+                  <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                )}
+
+                {lintSummary.total === 0 ? (
+                  <span>SQL Clean</span>
+                ) : (
+                  <span className="flex items-center gap-1 font-mono">
+                    {lintSummary.errors > 0 && <span className="text-red-400">✖ {lintSummary.errors}</span>}
+                    {lintSummary.warnings > 0 && <span className="text-amber-400">⚠ {lintSummary.warnings}</span>}
+                    {lintSummary.errors === 0 && lintSummary.warnings === 0 && (
+                      <span className="text-sky-400">ℹ {lintSummary.info}</span>
+                    )}
+                  </span>
+                )}
+              </button>
+
+              {/* Lint Rules Config Button */}
+              <button
+                id="dblens-lint-rules-btn"
+                onClick={() => setIsLintSettingsOpen(true)}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] border border-transparent text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] transition-colors"
+                title="Configure SQL Lint & Quality Gate Rules"
+              >
+                <Sliders className="w-3 h-3 text-indigo-400" />
+                <span>Rules</span>
+              </button>
             </div>
 
             {/* AI Assistant Toggle Button */}
@@ -886,6 +1148,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                 <ListTree className="w-3.5 h-3.5 text-indigo-400" />
               )}
               <span>{isExplaining ? 'Explaining...' : 'Explain Plan'}</span>
+            </button>
+
+            <button
+              id="dblens-plan-diff-btn"
+              onClick={() => setIsPlanDiffOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-indigo-400 border border-indigo-500/25 transition-colors cursor-pointer"
+              title="Execution Plan Diff Studio & Smart Index Advisor (Cmd+Shift+E)"
+              aria-label="Compare Plan Diff"
+            >
+              <GitCompare className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Compare Plan</span>
             </button>
 
             <button
@@ -979,10 +1252,35 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                   </span>
                 )}
               </button>
+
+              <button
+                role="tab"
+                aria-selected={activePane === 'pivot'}
+                onClick={() =>
+                  setTabActivePane((prev) => ({
+                    ...prev,
+                    [currentTab?.id || '']: 'pivot',
+                  }))
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-xs transition-colors ${
+                  activePane === 'pivot'
+                    ? 'bg-[var(--bg)] text-[var(--fg)] font-semibold shadow-xs border border-[var(--border)]'
+                    : 'text-[var(--muted)] hover:text-[var(--fg)]'
+                }`}
+                title="Pivot & Cross-Tab Studio (Alt+Shift+P)"
+              >
+                <Table className="w-3 h-3 text-purple-400" />
+                <span>Pivot</span>
+                {currentResult && !currentResult.error && (currentResult.rows?.length ?? 0) > 0 && (
+                  <span className="text-[10px] text-[var(--muted)] font-mono">
+                    ({currentResult.rows?.length})
+                  </span>
+                )}
+              </button>
             </div>
 
             <div className="flex items-center gap-2 text-[11px] text-[var(--muted)] font-mono">
-              {(activePane === 'results' || activePane === 'chart') && currentResult && (
+              {(activePane === 'results' || activePane === 'chart' || activePane === 'pivot') && currentResult && (
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   {currentResult.durationMs}ms
@@ -1009,6 +1307,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                 [currentTab?.id || '']: 'results',
               }))
             }
+            onComparePlan={() => setIsPlanDiffOpen(true)}
           />
         )}
 
@@ -1073,6 +1372,14 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
                       >
                         <Download className="w-3 h-3" />
                         <span>JSON</span>
+                      </button>
+                      <button
+                        onClick={() => setIsMaterializeOpen(true)}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 border border-amber-500/30 transition-colors"
+                        title="Materialize query results into table, view, or temp scratchpad (Cmd+Shift+M)"
+                      >
+                        <Layers className="w-3 h-3 text-amber-500" />
+                        <span>Materialize</span>
                       </button>
                     </div>
                   )}
@@ -1162,6 +1469,16 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
         {/* Chart Studio Pane */}
         {activePane === 'chart' && (
           <SqlChartStudio result={currentResult} />
+        )}
+
+        {/* Pivot Studio Pane */}
+        {activePane === 'pivot' && (
+          <PivotStudio
+            result={currentResult}
+            connId={connId}
+            query={currentTab?.query}
+            dialect={currentDialect}
+          />
         )}
       </div>
 
@@ -1565,6 +1882,45 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           dialect={currentDialect || 'postgres'}
           readOnly={true}
           onClose={() => setJsonStudioTarget(null)}
+        />
+      )}
+
+      {/* Materialize Result Modal */}
+      {isMaterializeOpen && (
+        <MaterializeModal
+          isOpen={isMaterializeOpen}
+          onClose={() => setIsMaterializeOpen(false)}
+          connId={connId}
+          dialect={currentDialect || 'postgres'}
+          initialQuery={currentTab?.query || ''}
+          initialRowsCount={currentResult?.rows?.length ?? 0}
+          initialColumns={currentResult?.columns ?? []}
+          isProduction={currentConn?.environment === 'production'}
+          onSuccess={() => {
+            qc.invalidateQueries({ queryKey: ['tables', connId] })
+          }}
+        />
+      )}
+
+      {/* Feature-38: Rules Settings Modal */}
+      {isLintSettingsOpen && (
+        <RulesSettingsModal
+          isOpen={isLintSettingsOpen}
+          onClose={() => setIsLintSettingsOpen(false)}
+          onRulesUpdated={() => revalidateLint()}
+        />
+      )}
+
+      {/* Feature-41: Execution Plan Diff Studio Modal */}
+      {isPlanDiffOpen && (
+        <PlanDiffModal
+          isOpen={isPlanDiffOpen}
+          onClose={() => setIsPlanDiffOpen(false)}
+          connId={connId}
+          initialBaselineSql={currentTab?.query || ''}
+          initialBaselinePlan={currentExplain}
+          schema={selectedSchema}
+          profiles={effectiveConnections}
         />
       )}
     </div>

@@ -16,6 +16,7 @@ import {
   Server,
   CornerDownLeft,
   GitCompare,
+  ArrowLeftRight,
   Activity,
   ShieldCheck,
   Shield,
@@ -25,6 +26,7 @@ import {
   Network,
   GitBranch,
   Zap,
+  KeyRound,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -243,6 +245,34 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     items.push({
+      id: 'action:datadiff',
+      title: 'Row-Level Data Diff & Bi-Directional Sync Studio',
+      subtitle: 'Compare rows across databases, detect modified cell values, and sync DML',
+      category: 'Actions',
+      icon: ArrowLeftRight,
+      badge: 'DATA DIFF',
+      keywords: ['data diff', 'row diff', 'sync', 'bi-directional', 'dml', 'compare data'],
+      onSelect: () => {
+        useAppStore.getState().openDataDiff()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:seeder',
+      title: 'Relational Synthetic Test Data Pipeline & DAG Fixture Seeder',
+      subtitle: 'Topologically resolve foreign keys, generate test data, and export fixtures (Alt+S)',
+      category: 'Actions',
+      icon: Database,
+      badge: 'SEEDER',
+      keywords: ['seeder', 'seed', 'synthetic', 'fixture', 'test data', 'dag', 'generate data', 'populate'],
+      onSelect: () => {
+        useAppStore.getState().openSeeder()
+        closePalette()
+      },
+    })
+
+    items.push({
       id: 'action:processes',
       title: 'Go to Process Activity & Query Killer',
       subtitle: 'Monitor active queries, connections, and terminate processes',
@@ -322,6 +352,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['new', 'connection', 'add', 'connect', 'database', 'profile'],
       onSelect: () => {
         onNewConnection()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:open_team_vault',
+      title: 'Open Team Vault',
+      subtitle: 'Zero-knowledge encrypted team connections & environment sync',
+      category: 'Actions',
+      icon: KeyRound,
+      badge: 'VAULT',
+      keywords: ['vault', 'secrets', 'team', 'encrypt', 'decrypt', 'argon2', 'credentials', 'sync'],
+      onSelect: () => {
+        useAppStore.getState().setIsTeamVaultOpen(true)
         closePalette()
       },
     })

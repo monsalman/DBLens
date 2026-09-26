@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network, KeyRound } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
@@ -174,6 +174,17 @@ export const Header: React.FC<Props> = ({
         >
           <Network className="w-3.5 h-3.5" />
           <span className="hidden md:inline">Federation</span>
+        </button>
+
+        {/* Team Vault & Secrets */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().setIsTeamVaultOpen(true)}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] cursor-pointer"
+          title="Zero-Knowledge Encrypted Team Connection Vault"
+        >
+          <KeyRound className="w-3.5 h-3.5 text-indigo-500" />
+          <span className="hidden md:inline">Team Vault</span>
         </button>
 
         {/* Dark/Light Toggle */}

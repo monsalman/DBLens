@@ -107,6 +107,15 @@ interface AppState {
   closeRoutineStudio: () => void
   isCronStudioOpen: boolean
   setIsCronStudioOpen: (open: boolean) => void
+  isDataDiffOpen: boolean
+  setIsDataDiffOpen: (open: boolean) => void
+  openDataDiff: () => void
+  closeDataDiff: () => void
+  isSeederOpen: boolean
+  setIsSeederOpen: (open: boolean) => void
+  seederTargetTable?: string
+  openSeeder: (targetTable?: string) => void
+  closeSeeder: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -153,6 +162,12 @@ interface AppState {
   liveFeedConfig: { connId: string; schema: string; table: string } | null
   openLiveFeed: (connId: string, schema: string, table: string) => void
   closeLiveFeed: () => void
+
+  // Feature-44: Team Connection Vault
+  isTeamVaultOpen: boolean
+  setIsTeamVaultOpen: (open: boolean) => void
+  isVaultUnlocked: boolean
+  setVaultUnlocked: (unlocked: boolean) => void
 }
 
 export const useAppStore = create<AppState>()(
@@ -375,6 +390,15 @@ export const useAppStore = create<AppState>()(
       closeRoutineStudio: () => set({ isRoutineStudioOpen: false }),
       isCronStudioOpen: false,
       setIsCronStudioOpen: (isCronStudioOpen) => set({ isCronStudioOpen }),
+      isDataDiffOpen: false,
+      setIsDataDiffOpen: (isDataDiffOpen) => set({ isDataDiffOpen }),
+      openDataDiff: () => set({ isDataDiffOpen: true }),
+      closeDataDiff: () => set({ isDataDiffOpen: false }),
+      isSeederOpen: false,
+      seederTargetTable: undefined,
+      setIsSeederOpen: (isSeederOpen) => set({ isSeederOpen }),
+      openSeeder: (targetTable) => set({ isSeederOpen: true, seederTargetTable: targetTable }),
+      closeSeeder: () => set({ isSeederOpen: false, seederTargetTable: undefined }),
 
       peekDrawer: {
         isOpen: false,
@@ -456,6 +480,11 @@ export const useAppStore = create<AppState>()(
       openLiveFeed: (connId, schema, table) =>
         set({ isLiveFeedOpen: true, liveFeedConfig: { connId, schema, table } }),
       closeLiveFeed: () => set({ isLiveFeedOpen: false, liveFeedConfig: null }),
+
+      isTeamVaultOpen: false,
+      setIsTeamVaultOpen: (isTeamVaultOpen) => set({ isTeamVaultOpen }),
+      isVaultUnlocked: false,
+      setVaultUnlocked: (isVaultUnlocked) => set({ isVaultUnlocked }),
     }),
     {
       name: 'dblens-storage',

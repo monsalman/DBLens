@@ -12,6 +12,53 @@ import type {
   ToggleTriggerRequest,
   RefreshViewRequest,
 } from '../features/routine/routineHelper'
+import type {
+  ProfileReport,
+  ProfileRequest,
+  Suggestion as ProfileSuggestion,
+  CompareResult as ProfileCompareResult,
+} from '../features/profile/profileHelper'
+import type {
+  MaterializeRequest,
+  MaterializePreview,
+  MaterializeResult,
+  ScratchTable,
+} from '../features/materialize/materializeHelper'
+import type {
+  RuleSetting,
+  RuleMeta,
+  AnalyzeResult,
+  GateRequest,
+  GateResult,
+} from '../features/lint/lintRules'
+import type {
+  ImpactGraph,
+  RemediationPlan,
+  RenamePlan,
+  RenameRequest,
+} from '../features/impact/impactHelper'
+import type {
+  PushdownRequest,
+  PushdownResult,
+} from '../features/pivot/pivotHelper'
+import type {
+  PlanDiffRequest,
+  PlanDiffResult,
+  IndexRecommendation,
+} from '../features/plandiff/planDiffHelper'
+import type {
+  DataDiffRequest,
+  DataDiffResult,
+  SyncScriptRequest,
+  SyncScriptResponse,
+  ApplySyncRequest,
+  ApplySyncResponse,
+} from '../features/datadiff/dataDiffHelper'
+import type {
+  SeedPlan,
+  SeederOptions,
+  SeedResult,
+} from '../features/seeder/seederHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -573,6 +620,9 @@ export const api = {
       : allProfiles.find(p => p.dsn === dsn)
     if (match?.readOnly) {
       headers['X-DBLENS-READONLY'] = 'true'
+    }
+    if (match?.environment) {
+      headers['X-DBLENS-ENVIRONMENT'] = match.environment
     }
     if (match?.ssh_tunnel?.enabled) {
       headers['X-DBLENS-SSH-TUNNEL'] = JSON.stringify(match.ssh_tunnel)
@@ -2361,6 +2411,700 @@ export const api = {
   healthStreamUrl(): string {
     return '/api/health/stream'
   },
+
+  // ── Feature-36: Column Data Profiling & Quality Studio ──
+  async profileTable(
+    connId: string,
+    dsn: string,
+    req: ProfileRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileReport> {
+    const res = await fetch(`/api/connections/${connId}/profile`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to profile table (${res.status})`)
+    return json.data ?? json
+  },
+
+  async profileSuggest(
+    connId: string,
+    dsn: string,
+    target: ProfileRequest | ProfileReport,
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileSuggestion[]> {
+    const res = await fetch(`/api/connections/${connId}/profile/suggest`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(target),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to generate suggestions (${res.status})`)
+    return json.data ?? json
+  },
+
+  async profileCompare(
+    connId: string,
+    dsn: string,
+    req: {
+      baseTable: string
+      targetTable: string
+      baseSchema?: string
+      targetSchema?: string
+      baseReport?: ProfileReport
+      targetReport?: ProfileReport
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<ProfileCompareResult> {
+    const res = await fetch(`/api/connections/${connId}/profile/compare`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to compare profiles (${res.status})`)
+    return json.data ?? json
+  },
+
+  async exportProfileMarkdown(
+    connId: string,
+    dsn: string,
+    table: string,
+    schema?: string,
+    report?: ProfileReport,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    let url = `/api/connections/${connId}/profile/export.md?table=${encodeURIComponent(table)}`
+    if (schema) url += `&schema=${encodeURIComponent(schema)}`
+    const opts: RequestInit = {
+      method: report ? 'POST' : 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    }
+    if (report) {
+      opts.body = JSON.stringify(report)
+    }
+    const res = await fetch(url, opts)
+    if (!res.ok) throw new Error(`Failed to export markdown (${res.status})`)
+    return await res.text()
+  },
+
+  async materializePreview(
+    connId: string,
+    req: MaterializeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaterializePreview> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/preview`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to preview materialization (${res.status})`)
+    return json.data ?? json
+  },
+
+  async materializeExecute(
+    connId: string,
+    req: MaterializeRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaterializeResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to execute materialization (${res.status})`)
+    return json.data ?? json
+  },
+
+  async getScratchTables(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<ScratchTable[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch`, {
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to fetch scratch tables (${res.status})`)
+    return json.data ?? json ?? []
+  },
+
+  async deleteScratchTable(
+    connId: string,
+    schema: string,
+    table: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const path = schema
+      ? `/api/connections/${connId}/materialize/scratch/${encodeURIComponent(schema)}/${encodeURIComponent(table)}`
+      : `/api/connections/${connId}/materialize/scratch/${encodeURIComponent(table)}`
+    const res = await fetch(path, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to delete scratch table (${res.status})`)
+    return json
+  },
+
+  async promoteScratchTable(
+    connId: string,
+    schema: string,
+    table: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ migrationSql: string; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch/promote`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ schema, table }),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to promote scratch table (${res.status})`)
+    return json.data ?? json
+  },
+
+  async expireScratchTables(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ dropped: number; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/materialize/scratch/expire`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to expire scratch tables (${res.status})`)
+    return json.data ?? json
+  },
+
+  // ── Feature-38: In-Editor SQL Static Analyzer & Quality Gate ─────────
+  async analyzeSql(
+    connId: string,
+    payload: {
+      sql: string
+      dialect?: string
+      schema?: string
+      known_tables?: string[]
+      known_cols?: Record<string, string[]>
+      rule_config?: Record<string, RuleSetting>
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<AnalyzeResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const endpoint = connId && connId !== 'none'
+      ? `/api/connections/${connId}/analyze`
+      : '/api/analyze'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to analyze SQL (${res.status})`)
+    return json.data ?? json
+  },
+
+  async getLintRules(): Promise<RuleMeta[]> {
+    const res = await fetch('/api/analyze/rules')
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to fetch analyzer rules (${res.status})`)
+    return json.data ?? json
+  },
+
+  async updateLintRules(rules: Record<string, RuleSetting>): Promise<RuleMeta[]> {
+    const res = await fetch('/api/analyze/rules', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rules),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to update analyzer rules (${res.status})`)
+    return json.data ?? json
+  },
+
+  async evaluateQualityGate(
+    connId: string,
+    payload: GateRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<GateResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const endpoint = connId && connId !== 'none'
+      ? `/api/connections/${connId}/analyze/gate`
+      : '/api/analyze/gate'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Quality gate request failed (${res.status})`)
+    return json.data ?? json
+  },
+
+  // ── Feature-40: Schema Object Impact Analyzer & Safe-Drop Planner ────
+  async getImpact(
+    connId: string,
+    params: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      depth?: number
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<ImpactGraph> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (params.schema) sp.set('schema', params.schema)
+    if (params.object) sp.set('object', params.object)
+    if (params.object_type) sp.set('object_type', params.object_type)
+    if (params.column) sp.set('column', params.column)
+    if (params.depth) sp.set('depth', String(params.depth))
+
+    const res = await fetch(`/api/connections/${connId}/impact?${sp.toString()}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to analyze impact (${res.status})`)
+    return json.data ?? json
+  },
+
+  async createImpactPlan(
+    connId: string,
+    payload: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      depth?: number
+      cascade?: boolean
+      graph?: ImpactGraph
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<RemediationPlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to create remediation plan (${res.status})`)
+    return json.data ?? json
+  },
+
+  async createImpactRename(
+    connId: string,
+    payload: RenameRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<RenamePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/rename`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || `Failed to generate rename plan (${res.status})`)
+    return json.data ?? json
+  },
+
+  async exportImpactMD(
+    connId: string,
+    params: {
+      schema?: string
+      object: string
+      object_type?: string
+      column?: string
+      cascade?: boolean
+      depth?: number
+      graph?: ImpactGraph
+    },
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/impact/export.md`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `Failed to export impact report (${res.status})`)
+    }
+    return await res.text()
+  },
+
+  async pivotPushdown(
+    connId: string | undefined,
+    req: PushdownRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<PushdownResult> {
+    const dsn = connId ? this._getDSN(connId, profiles) : ''
+    const endpoint = connId
+      ? `/api/connections/${connId}/pivot/pushdown`
+      : '/api/pivot/pushdown'
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Pushdown request failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async pivotRun(
+    connId: string,
+    req: PushdownRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<any> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/pivot/run`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Server query failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async comparePlanDiff(
+    connId: string,
+    req: PlanDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<PlanDiffResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/compare`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Plan diff comparison failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async advisePlanDiff(
+    connId: string,
+    req: Partial<PlanDiffRequest>,
+    profiles?: ConnectionConfig[]
+  ): Promise<IndexRecommendation[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/advise`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to fetch index advice (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyPlanIndex(
+    connId: string,
+    ddl: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string; ddl: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/apply-index`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ddl }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to apply index (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportPlanDiffMd(
+    connId: string,
+    diff: PlanDiffResult,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/plandiff/export.md`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(diff),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(err || `Failed to export plan diff report (${res.status})`)
+    }
+    return await res.text()
+  },
+
+  async compareDataDiff(
+    req: DataDiffRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<DataDiffResult> {
+    const srcDSN = this._getDSN(req.sourceConnId, profiles)
+    const res = await fetch('/api/datadiff/compare', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(srcDSN, req.sourceConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Data diff comparison failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async generateDataDiffSync(
+    req: SyncScriptRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SyncScriptResponse> {
+    const tgtDSN = this._getDSN(req.targetConnId || req.sourceConnId || '', profiles)
+    const res = await fetch('/api/datadiff/generate-sync', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Sync script generation failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async applyDataDiffSync(
+    req: ApplySyncRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<ApplySyncResponse> {
+    const tgtDSN = this._getDSN(req.targetConnId, profiles)
+    const res = await fetch('/api/datadiff/apply-sync', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Applying sync failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportDataDiffSQL(
+    req: SyncScriptRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const tgtDSN = this._getDSN(req.targetConnId || req.sourceConnId || '', profiles)
+    const res = await fetch('/api/datadiff/export.sql', {
+      method: 'POST',
+      headers: {
+        ...(this._headers(tgtDSN, req.targetConnId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error(err || `Exporting SQL failed (${res.status})`)
+    }
+    return await res.text()
+  },
+
+  async getSeederPlan(
+    connId: string,
+    opts: SeederOptions,
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SeedPlan> {
+    const res = await fetch(`/api/connections/${connId}/seeder/plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(opts),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to generate seeder plan (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async runSeeder(
+    connId: string,
+    req: { plan?: SeedPlan; options?: SeederOptions },
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SeedResult> {
+    const res = await fetch(`/api/connections/${connId}/seeder/run`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || `Seeding execution failed (${res.status})`)
+    }
+    const json = await res.json()
+    return json.data ?? json
+  },
+
+  async exportSeederFixture(
+    connId: string,
+    req: { format: 'sql' | 'json'; plan?: SeedPlan; options?: SeederOptions },
+    dsn?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const res = await fetch(`/api/connections/${connId}/seeder/export?format=${req.format}`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn || '', connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error(err || `Exporting fixture failed (${res.status})`)
+    }
+    return await res.text()
+  },
+
+  // ── Feature-44: Zero-Knowledge Encrypted Team Connection Vault ──
+
+  async exportVault(req: ExportVaultRequest): Promise<ExportVaultResponse> {
+    const res = await fetch('/api/vault/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to export vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async importVault(req: ImportVaultRequest): Promise<ImportVaultResponse> {
+    const res = await fetch('/api/vault/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to import vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async unlockVault(req: UnlockVaultRequest): Promise<UnlockVaultResponse> {
+    const res = await fetch('/api/vault/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to unlock vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async lockVault(): Promise<LockVaultResponse> {
+    const res = await fetch('/api/vault/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to lock vault (${res.status})`)
+    }
+    return json.data
+  },
+
+  async getVaultStatus(): Promise<VaultStatusResponse> {
+    const res = await fetch('/api/vault/status')
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || `Failed to fetch vault status (${res.status})`)
+    }
+    return json.data
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -2830,6 +3574,171 @@ export interface HealthPayload {
   connections: ConnectionHealth[]
   summary: HealthSummary
 }
+
+export type {
+  MaterializeMode,
+  MaterializeRequest,
+  MaterializePreview,
+  MaterializeResult,
+  ScratchTable,
+} from '../features/materialize/materializeHelper'
+
+export type {
+  LintSeverity,
+  QuickFix,
+  LintDiagnostic,
+  RuleSetting,
+  RuleMeta,
+  AnalyzeResult,
+  GateRequest,
+  GateResult,
+} from '../features/lint/lintRules'
+
+export type {
+  PlanDiffRequest,
+  PlanDiffResult,
+  IndexRecommendation,
+  AlignedNode,
+  PlanDiffSummary,
+} from '../features/plandiff/planDiffHelper'
+
+export type {
+  DataDiffRequest,
+  RowDiffItem,
+  DataDiffSummary,
+  DataDiffResult,
+  SyncConflictStrategy,
+  SyncScriptRequest,
+  SyncScriptResponse,
+  ApplySyncRequest,
+  ApplySyncResponse,
+  RowStatus,
+} from '../features/datadiff/dataDiffHelper'
+
+export type {
+  GeneratorType,
+  GeneratorConfig,
+  ColumnPlan,
+  TableSeedPlan,
+  SeedPlan,
+  SeedProgress,
+  SeedResult,
+  SeederOptions,
+} from '../features/seeder/seederHelper'
+
+// ── Feature-44: Vault Types ──
+
+export interface VaultKDFParams {
+  salt: string
+  memory_kb: number
+  iterations: number
+  parallelism: number
+  key_len: number
+}
+
+export interface VaultContainer {
+  version: number
+  kdf: string
+  params: VaultKDFParams
+  nonce: string
+  ciphertext: string
+  hmac: string
+  created_at?: string
+}
+
+export interface ConnectionPolicy {
+  enforce_read_only: boolean
+  require_audit_log: boolean
+  allowed_roles?: string[]
+}
+
+export interface VaultConnection {
+  id: string
+  name: string
+  driver: string
+  dsn: string
+  environment?: string
+  read_only: boolean
+  policy: ConnectionPolicy
+}
+
+export interface VaultPolicy {
+  global_read_only_prod: boolean
+  require_audit_all_prod: boolean
+  allowed_environments?: string[]
+}
+
+export interface VaultPayload {
+  version: number
+  name?: string
+  description?: string
+  exported_at: string
+  exported_by?: string
+  connections: VaultConnection[]
+  policies: VaultPolicy
+}
+
+export interface ExportVaultRequest {
+  passphrase: string
+  name?: string
+  description?: string
+  exported_by?: string
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  scrub_passwords: boolean
+  fast_kdf?: boolean
+}
+
+export interface ExportVaultResponse {
+  container: VaultContainer
+  raw_json: string
+  filename: string
+}
+
+export interface ImportVaultRequest {
+  container?: VaultContainer
+  raw_container?: string
+  passphrase: string
+  apply_policies: boolean
+  interpolate_env: boolean
+}
+
+export interface ImportVaultResponse {
+  valid: boolean
+  payload?: VaultPayload
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  substituted_vars: string[]
+  enforced_policies: string[]
+}
+
+export interface UnlockVaultRequest {
+  passphrase: string
+  container?: VaultContainer
+  raw_container?: string
+}
+
+export interface UnlockVaultResponse {
+  unlocked: boolean
+  connections_count: number
+  connections: VaultConnection[]
+  policies: VaultPolicy
+  unlocked_at: string
+}
+
+export interface LockVaultResponse {
+  locked: boolean
+}
+
+export interface VaultStatusResponse {
+  is_unlocked: boolean
+  has_container: boolean
+  connections_count: number
+  active_policies: VaultPolicy
+  unlocked_at?: string
+}
+
+
 
 
 

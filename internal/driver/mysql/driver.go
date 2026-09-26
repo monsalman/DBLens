@@ -56,6 +56,10 @@ func (m *MySQLDriver) Dialect() string {
 	return "mysql"
 }
 
+func (m *MySQLDriver) DB() *sql.DB {
+	return m.db
+}
+
 func (m *MySQLDriver) Ping(ctx context.Context) error {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
