@@ -30,6 +30,7 @@ import (
 	"github.com/dblens/dblens/internal/materialize"
 	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
+	"github.com/dblens/dblens/internal/querybuilder"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/dblens/dblens/internal/tunnel"
 	"github.com/dblens/dblens/internal/vault"
@@ -257,8 +258,9 @@ type Handler struct {
 	playbookStore    *playbook.Store
 	annotationsStore *annotations.Store
 	scratchStore     *materialize.ScratchStore
-	analyzerStore    *analyzer.Store
-	vaultMgr         *vault.Manager
+	analyzerStore     *analyzer.Store
+	queryBuilderStore *querybuilder.Store
+	vaultMgr          *vault.Manager
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -359,6 +361,13 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 				return nil
 			}
 			return as
+		}(),
+		queryBuilderStore: func() *querybuilder.Store {
+			qs, err := querybuilder.NewStore(auditDir + "/visual_queries.json")
+			if err != nil {
+				return querybuilder.NewInMemoryStore()
+			}
+			return qs
 		}(),
 		vaultMgr: vault.NewManager(),
 	}

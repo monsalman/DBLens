@@ -253,6 +253,17 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/vault/lock", h.LockVault)
 	api.Get("/vault/status", h.GetVaultStatus)
 
+	// ── Feature-46: Visual Drag-and-Drop Query Builder & Canvas Join Designer ────
+	api.Post("/connections/{connId}/querybuilder/generate", h.GenerateVisualQueryHandler)
+	api.Post("/connections/{connId}/querybuilder/run", h.RunVisualQueryHandler)
+	api.Get("/connections/{connId}/querybuilder/saved", h.ListSavedVisualQueriesHandler)
+	api.Post("/connections/{connId}/querybuilder/save", h.SaveVisualQueryHandler)
+	api.Delete("/connections/{connId}/querybuilder/saved/{id}", h.DeleteSavedVisualQueryHandler)
+	api.Post("/querybuilder/generate", h.GenerateVisualQueryHandler)
+	api.Get("/querybuilder/saved", h.ListSavedVisualQueriesHandler)
+	api.Post("/querybuilder/save", h.SaveVisualQueryHandler)
+	api.Delete("/querybuilder/saved/{id}", h.DeleteSavedVisualQueryHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

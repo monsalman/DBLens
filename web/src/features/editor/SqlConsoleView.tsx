@@ -51,6 +51,7 @@ import { parseJsonSafely } from '../json/jsonPathHelper'
 import { AiAssistantBar } from './AiAssistantBar'
 import { MaterializeModal } from '../materialize/MaterializeModal'
 import { PlanDiffModal } from '../plandiff/PlanDiffModal'
+import { VisualQueryModal } from '../querybuilder/VisualQueryModal'
 import { useSqlLint } from '../lint/useSqlLint'
 import { createLintExtension } from '../lint/lintDecorations'
 import { LintPanel } from '../lint/LintPanel'
@@ -149,6 +150,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [explainWithAiRequested, setExplainWithAiRequested] = useState(false)
   const [isMaterializeOpen, setIsMaterializeOpen] = useState(false)
   const [isPlanDiffOpen, setIsPlanDiffOpen] = useState(false)
+  const [isVisualQueryOpen, setIsVisualQueryOpen] = useState(false)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -159,6 +161,10 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault()
         setIsPlanDiffOpen(true)
+      }
+      if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
+        e.preventDefault()
+        setIsVisualQueryOpen(true)
       }
       if (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault()
@@ -1162,6 +1168,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
             </button>
 
             <button
+              id="dblens-visual-query-btn"
+              onClick={() => setIsVisualQueryOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-indigo-400 border border-indigo-500/25 transition-colors cursor-pointer"
+              title="Visual Drag-and-Drop Query Builder & Canvas Join Designer (Alt+Q)"
+              aria-label="Visual Query Builder"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Visual Query</span>
+            </button>
+
+            <button
               id="dblens-run-query-btn"
               onClick={() => handleRun()}
               disabled={isExecuting || !currentTab?.query.trim()}
@@ -1921,6 +1938,22 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
           initialBaselinePlan={currentExplain}
           schema={selectedSchema}
           profiles={effectiveConnections}
+        />
+      )}
+
+      {/* Feature-46: Visual Query Builder Modal */}
+      {isVisualQueryOpen && (
+        <VisualQueryModal
+          isOpen={isVisualQueryOpen}
+          onClose={() => setIsVisualQueryOpen(false)}
+          connId={connId}
+          currentDialect={currentDialect}
+          tables={erdTables || []}
+          onSendToEditor={(sql) => {
+            if (currentTab) {
+              updateSqlTabQuery(connId, currentTab.id, sql)
+            }
+          }}
         />
       )}
     </div>

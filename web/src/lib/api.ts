@@ -3105,6 +3105,101 @@ export const api = {
     }
     return json.data
   },
+
+  async generateVisualQuery(
+    connId: string,
+    state: QueryCanvasState,
+    dialect?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<BuildSQLResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/querybuilder/generate`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify({ state, dialect }),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to generate visual query')
+    }
+    return json.data
+  },
+
+  async runVisualQuery(
+    connId: string,
+    payload: { state?: QueryCanvasState; sql?: string; dialect?: string },
+    profiles?: ConnectionConfig[]
+  ): Promise<{ sql: string; dialect: string; result: QueryResult }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/querybuilder/run`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to execute visual query')
+    }
+    return json.data
+  },
+
+  async listSavedVisualQueries(
+    connId?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SavedVisualQuery[]> {
+    const url = connId
+      ? `/api/connections/${connId}/querybuilder/saved`
+      : `/api/querybuilder/saved`
+    const dsn = connId ? this._getDSN(connId, profiles) : undefined
+    const res = await fetch(url, {
+      headers: dsn ? this._headers(dsn, connId, profiles) : undefined,
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to list saved visual queries')
+    }
+    return json.data ?? []
+  },
+
+  async saveVisualQuery(
+    query: SavedVisualQuery,
+    connId?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SavedVisualQuery> {
+    const url = connId
+      ? `/api/connections/${connId}/querybuilder/save`
+      : `/api/querybuilder/save`
+    const dsn = connId ? this._getDSN(connId, profiles) : undefined
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: dsn ? this._headers(dsn, connId, profiles) : { 'Content-Type': 'application/json' },
+      body: JSON.stringify(query),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to save visual query')
+    }
+    return json.data
+  },
+
+  async deleteSavedVisualQuery(
+    id: string,
+    connId?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<void> {
+    const url = connId
+      ? `/api/connections/${connId}/querybuilder/saved/${id}`
+      : `/api/querybuilder/saved/${id}`
+    const dsn = connId ? this._getDSN(connId, profiles) : undefined
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: dsn ? this._headers(dsn, connId, profiles) : undefined,
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to delete saved visual query')
+    }
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3737,6 +3832,97 @@ export interface VaultStatusResponse {
   active_policies: VaultPolicy
   unlocked_at?: string
 }
+
+// ── Feature-46: Visual Query Builder Interfaces ──
+export interface CanvasColumn {
+  name: string
+  type?: string
+  selected: boolean
+  alias?: string
+  aggregate?: string
+}
+
+export interface CanvasTable {
+  id: string
+  name: string
+  schema?: string
+  alias?: string
+  position?: { x: number; y: number }
+  columns: CanvasColumn[]
+}
+
+export interface CanvasJoin {
+  id: string
+  sourceTableId: string
+  sourceColumn: string
+  targetTableId: string
+  targetColumn: string
+  joinType: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL' | 'CROSS' | string
+}
+
+export interface CanvasFilter {
+  id: string
+  tableId: string
+  column: string
+  operator: string
+  value: string
+  value2?: string
+  logic?: 'AND' | 'OR' | string
+}
+
+export interface CanvasHaving {
+  id: string
+  aggregate: string
+  tableId: string
+  column: string
+  operator: string
+  value: string
+  logic?: 'AND' | 'OR' | string
+}
+
+export interface CanvasOrderBy {
+  id: string
+  tableId: string
+  column: string
+  direction: 'ASC' | 'DESC' | string
+  nulls?: 'FIRST' | 'LAST' | '' | string
+}
+
+export interface QueryCanvasState {
+  id?: string
+  name?: string
+  description?: string
+  tables: CanvasTable[]
+  joins: CanvasJoin[]
+  filters?: CanvasFilter[]
+  havings?: CanvasHaving[]
+  orderBy?: CanvasOrderBy[]
+  groupBy?: string[]
+  distinct?: boolean
+  limit?: number
+  offset?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface BuildSQLResponse {
+  sql: string
+  dialect: string
+  warnings?: string[]
+  error?: string
+}
+
+export interface SavedVisualQuery {
+  id?: string
+  name: string
+  description?: string
+  connectionId?: string
+  state: QueryCanvasState
+  sql?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
 
 
 
