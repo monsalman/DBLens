@@ -136,8 +136,22 @@ test('buildQueryCliCommand: generates correct query command and escapes SQL', ()
   })
   assert(cmd.startsWith('dblens query'), 'starts with query')
   assert(cmd.includes('--conn sqlite:///tmp/test.db'), 'conn flag')
-  assert(cmd.includes('--query "SELECT id, name FROM users WHERE role = \\"admin\\""'), 'query escaped')
+  assert(cmd.includes(`--query 'SELECT id, name FROM users WHERE role = "admin"'`), 'query escaped')
   assert(cmd.includes('--format csv'), 'format flag')
+})
+
+test('escapeArg: handles single quotes, shell metacharacters, and empty strings safely', () => {
+  const cmd = buildQueryCliCommand({
+    conn: 'sqlite:///tmp/test.db',
+    query: "SELECT * FROM users WHERE name = 'Alice' AND note = '$(whoami)';",
+  })
+  assert(
+    cmd.includes("--query 'SELECT * FROM users WHERE name = '\\''Alice'\\'' AND note = '\\''$(whoami)'\\'';'"),
+    'POSIX single quotes escape single quote and prevent command injection'
+  )
+
+  const emptyCmd = buildLintCliCommand({ schema: '' })
+  assert(emptyCmd === 'dblens lint', 'empty strings ignored or safely handled')
 })
 
 console.log(`\nCLI Helper Tests: ${passed} passed, ${failed} failed`)
