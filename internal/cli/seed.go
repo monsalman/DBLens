@@ -10,7 +10,7 @@ import (
 	"github.com/dblens/dblens/internal/seeder"
 )
 
-func runSeed(args []string) int {
+func runSeed(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("seed", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -62,8 +62,6 @@ func runSeed(args []string) int {
 		return 1
 	}
 	defer cleanup()
-
-	ctx := context.Background()
 
 	opts := seeder.SeederOptions{
 		Schema:          schema,

@@ -13,7 +13,7 @@ import (
 	"github.com/dblens/dblens/internal/analyzer"
 )
 
-func runLint(args []string) int {
+func runLint(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("lint", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -69,10 +69,15 @@ func runLint(args []string) int {
 	if len(posArgs) == 0 {
 		stat, err := os.Stdin.Stat()
 		if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-			// Read from stdin
-			bytes, err := io.ReadAll(os.Stdin)
+			// Read from stdin bounded to 10MB
+			const maxStdin = 10 << 20
+			bytes, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdin+1))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
+				return 1
+			}
+			if len(bytes) > maxStdin {
+				fmt.Fprintln(os.Stderr, "Error: stdin input exceeds maximum allowed size (10MB)")
 				return 1
 			}
 			fileInputs = append(fileInputs, struct {
@@ -132,7 +137,6 @@ func runLint(args []string) int {
 		return 0
 	}
 
-	ctx := context.Background()
 	var report LintReport
 	report.Dialect = dialect
 	report.TotalFiles = len(fileInputs)

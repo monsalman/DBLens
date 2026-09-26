@@ -4,11 +4,9 @@
  */
 
 function escapeArg(arg: string): string {
-  if (!arg) return '""'
-  if (/^[a-zA-Z0-9_\-.,:/@]+$/.test(arg)) {
-    return arg
-  }
-  return `"${arg.replace(/"/g, '\\"')}"`
+  if (!arg) return "''"
+  if (/^[a-zA-Z0-9_\-.,:/@=]+$/.test(arg)) return arg
+  return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
 export interface LintCliOptions {

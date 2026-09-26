@@ -11,7 +11,7 @@ import (
 	"github.com/dblens/dblens/internal/profile"
 )
 
-func runProfile(args []string) int {
+func runProfile(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("profile", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -55,8 +55,6 @@ func runProfile(args []string) int {
 		return 1
 	}
 	defer cleanup()
-
-	ctx := context.Background()
 
 	req := profile.ProfileRequest{
 		Schema:     schema,

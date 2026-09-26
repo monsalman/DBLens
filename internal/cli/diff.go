@@ -10,6 +10,7 @@ import (
 
 	"github.com/dblens/dblens/internal/datadiff"
 	"github.com/dblens/dblens/internal/diff"
+	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
 )
 
@@ -24,7 +25,7 @@ Commands:
 Use "dblens diff [command] --help" for more information about a command.
 `
 
-func runDiff(args []string) int {
+func runDiff(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		fmt.Print(DiffUsage)
 		return 0
@@ -35,9 +36,9 @@ func runDiff(args []string) int {
 
 	switch sub {
 	case "schema":
-		return runDiffSchema(subArgs)
+		return runDiffSchema(ctx, subArgs)
 	case "data":
-		return runDiffData(subArgs)
+		return runDiffData(ctx, subArgs)
 	case "--help", "-h", "help":
 		fmt.Print(DiffUsage)
 		return 0
@@ -47,7 +48,7 @@ func runDiff(args []string) int {
 	}
 }
 
-func runDiffSchema(args []string) int {
+func runDiffSchema(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("diff schema", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -83,19 +84,17 @@ func runDiffSchema(args []string) int {
 
 	srcDrv, srcClean, err := resolveDriver(source, dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to source: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error connecting to source (%s): %v\n", driver.MaskDSN(source), err)
 		return 1
 	}
 	defer srcClean()
 
 	tgtDrv, tgtClean, err := resolveDriver(target, dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to target: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error connecting to target (%s): %v\n", driver.MaskDSN(target), err)
 		return 1
 	}
 	defer tgtClean()
-
-	ctx := context.Background()
 
 	// Inspect source tables
 	srcMetaList, err := srcDrv.InspectTables(ctx, sourceSchema)
@@ -154,7 +153,7 @@ func runDiffSchema(args []string) int {
 			fmt.Println("-- No migration required (schemas are identical)")
 		}
 	default: // FormatText
-		fmt.Printf("Schema Diff Summary: %s -> %s\n", source, target)
+		fmt.Printf("Schema Diff Summary: %s -> %s\n", driver.MaskDSN(source), driver.MaskDSN(target))
 		fmt.Printf("Total Tables: %d | Added: %d | Removed: %d | Modified: %d | Identical: %d\n",
 			result.TotalTables, result.AddedCount, result.RemovedCount, result.ModifiedCount, result.IdenticalCount)
 
@@ -182,7 +181,7 @@ func runDiffSchema(args []string) int {
 	return 0
 }
 
-func runDiffData(args []string) int {
+func runDiffData(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("diff data", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -232,19 +231,17 @@ func runDiffData(args []string) int {
 
 	srcDrv, srcClean, err := resolveDriver(source, dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to source: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error connecting to source (%s): %v\n", driver.MaskDSN(source), err)
 		return 1
 	}
 	defer srcClean()
 
 	tgtDrv, tgtClean, err := resolveDriver(target, dataDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to target: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error connecting to target (%s): %v\n", driver.MaskDSN(target), err)
 		return 1
 	}
 	defer tgtClean()
-
-	ctx := context.Background()
 
 	// If no PK specified, attempt to detect from source table details
 	if len(pks) == 0 {
@@ -275,6 +272,10 @@ func runDiffData(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error comparing data: %v\n", err)
 		return 1
+	}
+
+	if result.Summary.TotalSourceRows >= 5000 || result.Summary.TotalTargetRows >= 5000 {
+		fmt.Fprintln(os.Stderr, "Warning: dataset reached maximum sample window (5,000 rows); drift beyond offset 5,000 may not be reflected.")
 	}
 
 	hasDrift := result.Summary.AddedCount > 0 || result.Summary.DeletedCount > 0 || result.Summary.ModifiedCount > 0

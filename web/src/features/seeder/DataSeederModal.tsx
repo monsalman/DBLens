@@ -83,7 +83,7 @@ export const DataSeederModal: React.FC<DataSeederModalProps> = ({
 
   const handleCopyCLI = async () => {
     const cmd = buildSeedCliCommand({
-      conn: activeConn?.dsn || activeConnId || 'conn',
+      conn: activeConnId || activeConn?.id || 'conn',
       tables: selectedTables.length > 0 ? selectedTables : (targetTable ? [targetTable] : undefined),
       rows: defaultRowCount,
       seed: seed,

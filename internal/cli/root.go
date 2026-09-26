@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/driver"
@@ -36,26 +39,36 @@ Use "dblens [command] --help" for detailed information about a command.
 
 // Execute runs the CLI router with positional args (excluding binary name).
 // Returns standard POSIX exit code: 0 for success, 1 for error/failure.
-func Execute(args []string) int {
+func Execute(args []string) (exitCode int) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "Error: panic recovered: %v\n", r)
+			exitCode = 1
+		}
+	}()
+
 	if len(args) == 0 {
 		fmt.Print(RootUsage)
 		return 0
 	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	cmd := args[0]
 	subArgs := args[1:]
 
 	switch cmd {
 	case "lint":
-		return runLint(subArgs)
+		return runLint(ctx, subArgs)
 	case "diff":
-		return runDiff(subArgs)
+		return runDiff(ctx, subArgs)
 	case "seed":
-		return runSeed(subArgs)
+		return runSeed(ctx, subArgs)
 	case "profile":
-		return runProfile(subArgs)
+		return runProfile(ctx, subArgs)
 	case "query":
-		return runQuery(subArgs)
+		return runQuery(ctx, subArgs)
 	case "help", "--help", "-h":
 		if len(subArgs) > 0 {
 			return Execute(append(subArgs, "--help"))
@@ -103,7 +116,7 @@ func resolveDriver(connStr, dataDir string) (types.Driver, func(), error) {
 	// 2. Open driver via driver factory
 	drv, err := driver.NewDriver(connStr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to database %q: %w", connStr, err)
+		return nil, nil, fmt.Errorf("failed to connect to database %q: %w", driver.MaskDSN(connStr), err)
 	}
 
 	cleanup := func() {

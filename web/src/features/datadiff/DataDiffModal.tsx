@@ -23,10 +23,9 @@ import { DataDiffGrid } from './DataDiffGrid'
 import { SyncScriptPreviewModal } from './SyncScriptPreviewModal'
 import {
   filterDiffRows,
-  generateCLICommand,
   getRowKey,
 } from './dataDiffHelper'
-import { copyCliCommand } from '../cli/cliHelper'
+import { buildDataDiffCliCommand, copyCliCommand } from '../cli/cliHelper'
 
 export interface DataDiffModalProps {
   isOpen?: boolean
@@ -335,16 +334,12 @@ export const DataDiffModal: React.FC<DataDiffModalProps> = ({
 
   // CLI Command copy
   const handleCopyCLI = async () => {
-    const cmd = generateCLICommand({
-      sourceConnId,
-      sourceSchema,
-      sourceTable,
-      targetConnId,
-      targetSchema,
-      targetTable,
-      primaryKeys: selectedPKs,
-      columns: selectedColumns,
-      whereClause,
+    const cmd = buildDataDiffCliCommand({
+      source: sourceConnId || 'source',
+      target: targetConnId || 'target',
+      table: sourceTable || targetTable || 'table',
+      schema: sourceSchema || undefined,
+      primaryKeys: selectedPKs.length > 0 ? selectedPKs : undefined,
     })
     await copyCliCommand(cmd)
     setCopiedCLI(true)

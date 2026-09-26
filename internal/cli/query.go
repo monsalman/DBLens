@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-func runQuery(args []string) int {
+func runQuery(ctx context.Context, args []string) int {
 	fsCmd := flag.NewFlagSet("query", flag.ContinueOnError)
 	fsCmd.SetOutput(os.Stderr)
 
@@ -47,10 +47,17 @@ func runQuery(args []string) int {
 		// Try reading from stdin if piped
 		stat, err := os.Stdin.Stat()
 		if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-			b, err := io.ReadAll(os.Stdin)
-			if err == nil {
-				querySQL = strings.TrimSpace(string(b))
+			const maxStdin = 10 << 20
+			b, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdin+1))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
+				return 1
 			}
+			if len(b) > maxStdin {
+				fmt.Fprintln(os.Stderr, "Error: stdin input exceeds maximum allowed size (10MB)")
+				return 1
+			}
+			querySQL = strings.TrimSpace(string(b))
 		}
 	}
 
@@ -66,7 +73,6 @@ func runQuery(args []string) int {
 	}
 	defer cleanup()
 
-	ctx := context.Background()
 	res, err := drv.ExecuteRaw(ctx, querySQL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Query execution error: %v\n", err)

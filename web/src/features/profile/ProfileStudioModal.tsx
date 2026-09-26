@@ -62,7 +62,7 @@ export const ProfileStudioModal: React.FC<ProfileStudioModalProps> = ({
 
   const handleCopyCLI = async () => {
     const cmd = buildProfileCliCommand({
-      conn: dsn || connId || 'conn',
+      conn: connId || 'conn',
       table,
       schema,
       format: 'text',

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,15 +27,10 @@ var embeddedFS embed.FS
 func main() {
 	if len(os.Args) > 1 {
 		first := os.Args[1]
-		switch first {
-		case "serve":
+		if first == "serve" {
 			os.Args = append(os.Args[:1], os.Args[2:]...)
-		case "lint", "diff", "seed", "profile", "query", "help":
-			code := cli.Execute(os.Args[1:])
-			os.Exit(code)
-		case "--help", "-h":
-			code := cli.Execute(os.Args[1:])
-			os.Exit(code)
+		} else if !strings.HasPrefix(first, "-") {
+			os.Exit(cli.Execute(os.Args[1:]))
 		}
 	}
 
