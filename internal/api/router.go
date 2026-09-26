@@ -270,6 +270,14 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/locks/terminate", h.TerminateLock)
 	api.Get("/connections/{connId}/locks/export.json", h.ExportLocksJSON)
 
+	// ── Feature-48: Query Concurrency Stress Tester & Latency Benchmark Studio ────
+	api.Post("/connections/{connId}/benchmark/run", h.BenchmarkRunHandler)
+	api.Get("/connections/{connId}/benchmark/{id}", h.BenchmarkGetHandler)
+	api.Get("/connections/{connId}/benchmark/{id}/stream", h.BenchmarkStreamHandler)
+	api.Post("/connections/{connId}/benchmark/{id}/cancel", h.BenchmarkCancelHandler)
+	api.Post("/connections/{connId}/benchmark/compare", h.BenchmarkCompareHandler)
+	api.Post("/connections/{connId}/benchmark/export.md", h.BenchmarkExportMDHandler)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

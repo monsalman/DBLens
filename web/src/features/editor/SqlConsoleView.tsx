@@ -33,6 +33,7 @@ import {
   Sliders,
   Table,
   GitCompare,
+  Gauge,
 } from 'lucide-react'
 import type { EditorView } from '@codemirror/view'
 import { api } from '../../lib/api'
@@ -52,6 +53,7 @@ import { AiAssistantBar } from './AiAssistantBar'
 import { MaterializeModal } from '../materialize/MaterializeModal'
 import { PlanDiffModal } from '../plandiff/PlanDiffModal'
 import { VisualQueryModal } from '../querybuilder/VisualQueryModal'
+import { BenchmarkStudioModal } from '../benchmark/BenchmarkStudioModal'
 import { useSqlLint } from '../lint/useSqlLint'
 import { createLintExtension } from '../lint/lintDecorations'
 import { LintPanel } from '../lint/LintPanel'
@@ -151,6 +153,7 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
   const [isMaterializeOpen, setIsMaterializeOpen] = useState(false)
   const [isPlanDiffOpen, setIsPlanDiffOpen] = useState(false)
   const [isVisualQueryOpen, setIsVisualQueryOpen] = useState(false)
+  const [isBenchmarkOpen, setIsBenchmarkOpen] = useState(false)
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -165,6 +168,10 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
       if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
         e.preventDefault()
         setIsVisualQueryOpen(true)
+      }
+      if (e.altKey && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault()
+        setIsBenchmarkOpen(true)
       }
       if (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
         e.preventDefault()
@@ -1179,6 +1186,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
             </button>
 
             <button
+              id="dblens-benchmark-btn"
+              onClick={() => setIsBenchmarkOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-[var(--surface)] hover:bg-[var(--hover)] text-sky-400 border border-sky-500/25 transition-colors cursor-pointer"
+              title="Query Concurrency Stress Tester & Latency Benchmark Studio (Alt+B)"
+              aria-label="Benchmark Query"
+            >
+              <Gauge className="w-3.5 h-3.5 text-sky-400" />
+              <span>Benchmark</span>
+            </button>
+
+            <button
               id="dblens-run-query-btn"
               onClick={() => handleRun()}
               disabled={isExecuting || !currentTab?.query.trim()}
@@ -1954,6 +1972,17 @@ export const SqlConsoleView: React.FC<Props> = ({ connId }) => {
               updateSqlTabQuery(connId, currentTab.id, sql)
             }
           }}
+        />
+      )}
+
+      {/* Feature-48: Query Concurrency Stress Tester & Latency Benchmark Studio Modal */}
+      {isBenchmarkOpen && (
+        <BenchmarkStudioModal
+          isOpen={isBenchmarkOpen}
+          onClose={() => setIsBenchmarkOpen(false)}
+          connId={connId}
+          initialSql={currentTab?.query || ''}
+          profiles={effectiveConnections}
         />
       )}
     </div>

@@ -63,6 +63,11 @@ import type {
   LockTreeResponse,
   TerminateLockRequest,
 } from '../features/lockmgr/lockHelper'
+import type {
+  BenchmarkProgress,
+  BenchmarkResult,
+  BenchmarkComparison,
+} from '../features/benchmark/benchmarkHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -3247,6 +3252,111 @@ export const api = {
     const query = sp.toString()
     return `/api/connections/${connId}/locks/export.json${query ? `?${query}` : ''}`
   },
+
+  // Feature-48: Query Concurrency Stress Tester & Latency Benchmark Studio
+  async runBenchmark(
+    connId: string,
+    req: BenchmarkRunRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ id: string; status: string; progress: BenchmarkProgress }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/benchmark/run`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to start benchmark')
+    }
+    return json.data ?? json
+  },
+
+  async getBenchmark(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<BenchmarkResult> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/benchmark/${id}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to fetch benchmark result')
+    }
+    return json.data ?? json
+  },
+
+  async cancelBenchmark(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ id: string; cancelled: boolean }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/benchmark/${id}/cancel`, {
+      method: 'POST',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to cancel benchmark')
+    }
+    return json.data ?? json
+  },
+
+  async compareBenchmarks(
+    connId: string,
+    req: BenchmarkCompareRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<BenchmarkComparison> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/benchmark/compare`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to compare benchmarks')
+    }
+    return json.data ?? json
+  },
+
+  async exportBenchmarkMarkdown(
+    connId: string,
+    req: BenchmarkExportRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/benchmark/export.md`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    if (!res.ok) {
+      throw new Error('Failed to export benchmark markdown')
+    }
+    return await res.text()
+  },
+
+  getBenchmarkStreamUrl(connId: string, id: string, profiles?: ConnectionConfig[]): string {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (dsn) sp.set('dsn', dsn)
+    const query = sp.toString()
+    return `/api/connections/${connId}/benchmark/${id}/stream${query ? `?${query}` : ''}`
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3976,6 +4086,38 @@ export type {
   LockTreeResponse,
   TerminateLockRequest,
 } from '../features/lockmgr/lockHelper'
+
+export type {
+  BenchmarkConfig,
+  HistogramBucket,
+  BenchmarkError,
+  BenchmarkResult,
+  BenchmarkComparison,
+  BenchmarkProgress,
+} from '../features/benchmark/benchmarkHelper'
+
+export interface BenchmarkRunRequest {
+  sql: string
+  concurrency: number
+  durationSec?: number
+  iterations?: number
+  rollback: boolean
+  assertP99Lt?: number
+  label?: string
+}
+
+export interface BenchmarkCompareRequest {
+  baselineId?: string
+  candidateId?: string
+  baseline?: import('../features/benchmark/benchmarkHelper').BenchmarkResult
+  candidate?: import('../features/benchmark/benchmarkHelper').BenchmarkResult
+}
+
+export interface BenchmarkExportRequest {
+  id?: string
+  result?: import('../features/benchmark/benchmarkHelper').BenchmarkResult
+  comparison?: import('../features/benchmark/benchmarkHelper').BenchmarkComparison
+}
 
 
 

@@ -25,6 +25,7 @@ Available Commands:
   seed       Generate deterministic mock data and populate or export fixtures
   profile    Audit column distributions, null ratios, uniqueness, and PII
   query      Execute ad-hoc SQL query headlessly and print tabular/json/csv output
+  benchmark  Stress test query concurrency and analyze latency distributions
   serve      Run DBLens embedded web application and HTTP API server
   help       Show help for any command
 
@@ -69,6 +70,8 @@ func Execute(args []string) (exitCode int) {
 		return runProfile(ctx, subArgs)
 	case "query":
 		return runQuery(ctx, subArgs)
+	case "benchmark":
+		return runBenchmark(ctx, subArgs)
 	case "help", "--help", "-h":
 		if len(subArgs) > 0 {
 			return Execute(append(subArgs, "--help"))

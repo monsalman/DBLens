@@ -19,6 +19,7 @@ import (
 	"github.com/dblens/dblens/internal/annotations"
 	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/audit"
+	"github.com/dblens/dblens/internal/benchmark"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/cron"
 	"github.com/dblens/dblens/internal/diff"
@@ -261,6 +262,7 @@ type Handler struct {
 	analyzerStore     *analyzer.Store
 	queryBuilderStore *querybuilder.Store
 	vaultMgr          *vault.Manager
+	benchmarkMgr      *benchmark.BenchmarkManager
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -370,6 +372,7 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 			return qs
 		}(),
 		vaultMgr: vault.NewManager(),
+		benchmarkMgr: benchmark.NewBenchmarkManager(),
 	}
 	if h.scratchStore == nil {
 		h.scratchStore = materialize.NewInMemoryScratchStore()
@@ -418,6 +421,13 @@ func (h *Handler) WebhookManager() *webhook.Manager {
 		h.webhookMgr = webhook.NewManager()
 	}
 	return h.webhookMgr
+}
+
+func (h *Handler) BenchmarkManager() *benchmark.BenchmarkManager {
+	if h.benchmarkMgr == nil {
+		h.benchmarkMgr = benchmark.NewBenchmarkManager()
+	}
+	return h.benchmarkMgr
 }
 
 type TestConnectionRequest struct {
