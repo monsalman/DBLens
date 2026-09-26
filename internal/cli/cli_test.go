@@ -532,3 +532,66 @@ func TestDiffDataSampleWindowWarning(t *testing.T) {
 		t.Fatalf("expected 5000 rows warning on stderr, got: %s", buf.String())
 	}
 }
+
+func TestBenchmarkCommand(t *testing.T) {
+	// 1. Help flag
+	if code := Execute([]string{"benchmark", "--help"}); code != 0 {
+		t.Fatalf("expected 0 for benchmark --help, got %d", code)
+	}
+
+	// 2. Missing conn
+	if code := Execute([]string{"benchmark", "--query", "SELECT 1"}); code != 1 {
+		t.Fatalf("expected 1 for missing conn, got %d", code)
+	}
+
+	// 3. Create test SQLite DB
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "cli_bench.db")
+	dsn := "sqlite://" + dbPath
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	ctx := context.Background()
+	_, _ = drv.ExecuteQuery(ctx, "CREATE TABLE logs (id INTEGER PRIMARY KEY, msg TEXT);")
+	_, _ = drv.ExecuteQuery(ctx, "INSERT INTO logs (msg) VALUES ('test');")
+	cleanup()
+
+	// 4. Run benchmark with iterations and json format
+	outJSON := filepath.Join(tmpDir, "bench_res.json")
+	code := Execute([]string{
+		"benchmark",
+		"--conn", dsn,
+		"--query", "SELECT id, msg FROM logs;",
+		"--concurrency", "2",
+		"--iterations", "20",
+		"--format", "json",
+		"--out", outJSON,
+		"--assert-p99-lt", "1000",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for benchmark, got %d", code)
+	}
+
+	data, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("failed to read json output: %v", err)
+	}
+	if !strings.Contains(string(data), `"totalQueries": 20`) {
+		t.Fatalf("expected 20 queries in output, got: %s", string(data))
+	}
+
+	// 5. Test assertion failure
+	failCode := Execute([]string{
+		"benchmark",
+		"--conn", dsn,
+		"--query", "SELECT id, msg FROM logs;",
+		"--concurrency", "1",
+		"--iterations", "5",
+		"--assert-p99-lt", "0.000001", // impossibly small threshold
+	})
+	if failCode != 1 {
+		t.Fatalf("expected assertion failure exit code 1, got %d", failCode)
+	}
+}
