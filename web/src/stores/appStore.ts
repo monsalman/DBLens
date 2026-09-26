@@ -116,6 +116,10 @@ interface AppState {
   seederTargetTable?: string
   openSeeder: (targetTable?: string) => void
   closeSeeder: () => void
+  isLockManagerOpen: boolean
+  setIsLockManagerOpen: (open: boolean) => void
+  openLockManager: () => void
+  closeLockManager: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -399,6 +403,10 @@ export const useAppStore = create<AppState>()(
       setIsSeederOpen: (isSeederOpen) => set({ isSeederOpen }),
       openSeeder: (targetTable) => set({ isSeederOpen: true, seederTargetTable: targetTable }),
       closeSeeder: () => set({ isSeederOpen: false, seederTargetTable: undefined }),
+      isLockManagerOpen: false,
+      setIsLockManagerOpen: (isLockManagerOpen) => set({ isLockManagerOpen }),
+      openLockManager: () => set({ isLockManagerOpen: true }),
+      closeLockManager: () => set({ isLockManagerOpen: false }),
 
       peekDrawer: {
         isOpen: false,

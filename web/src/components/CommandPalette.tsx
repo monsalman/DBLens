@@ -27,6 +27,7 @@ import {
   GitBranch,
   Zap,
   KeyRound,
+  Lock,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -268,6 +269,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['seeder', 'seed', 'synthetic', 'fixture', 'test data', 'dag', 'generate data', 'populate'],
       onSelect: () => {
         useAppStore.getState().openSeeder()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:lockmgr',
+      title: 'Database Lock Tree & Deadlock Investigator',
+      subtitle: 'Inspect lock wait hierarchies, identify root blockers, and terminate deadlocked sessions (Alt+L)',
+      category: 'Actions',
+      icon: Lock,
+      badge: 'LOCK TREE',
+      keywords: ['lock', 'locks', 'deadlock', 'blocking', 'tree', 'blocker', 'kill', 'terminate', 'wait'],
+      onSelect: () => {
+        useAppStore.getState().openLockManager()
         closePalette()
       },
     })

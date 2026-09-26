@@ -28,6 +28,7 @@ import { LiveFeedDrawer } from './features/livefeed/LiveFeedDrawer'
 import { DataDiffModal } from './features/datadiff/DataDiffModal'
 import { DataSeederModal } from './features/seeder/DataSeederModal'
 import { TeamVaultModal } from './features/vault/TeamVaultModal'
+import { LockManagerModal } from './features/lockmgr/LockManagerModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -140,6 +141,15 @@ export function App() {
           store.closeSeeder()
         } else {
           store.openSeeder()
+        }
+      }
+      if ((e.altKey && (e.key === 'l' || e.key === 'L')) || (e.metaKey && e.altKey && (e.key === 'l' || e.key === 'L'))) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isLockManagerOpen) {
+          store.closeLockManager()
+        } else {
+          store.openLockManager()
         }
       }
     }
@@ -421,6 +431,12 @@ export function App() {
       <TeamVaultModal
         isOpen={isTeamVaultOpen}
         onClose={() => setIsTeamVaultOpen(false)}
+      />
+      <LockManagerModal
+        isOpen={useAppStore((s) => s.isLockManagerOpen)}
+        onClose={() => useAppStore.getState().closeLockManager()}
+        connId={activeConnId}
+        profiles={connections}
       />
     </QueryClientProvider>
   )

@@ -59,6 +59,10 @@ import type {
   SeederOptions,
   SeedResult,
 } from '../features/seeder/seederHelper'
+import type {
+  LockTreeResponse,
+  TerminateLockRequest,
+} from '../features/lockmgr/lockHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -3200,6 +3204,49 @@ export const api = {
       throw new Error(json.error || 'Failed to delete saved visual query')
     }
   },
+
+  // ── Feature-47: Database Lock Tree & Deadlock Investigator ────
+  async getLocks(connId: string, profiles?: ConnectionConfig[]): Promise<LockTreeResponse> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/locks`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to inspect database locks')
+    }
+    return json.data ?? json
+  },
+
+  async terminateLock(
+    connId: string,
+    payload: TerminateLockRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string; pid: number }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/locks/terminate`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to terminate lock session')
+    }
+    return json.data ?? json
+  },
+
+  getLocksExportUrl(connId: string, profiles?: ConnectionConfig[]): string {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (dsn) sp.set('dsn', dsn)
+    const query = sp.toString()
+    return `/api/connections/${connId}/locks/export.json${query ? `?${query}` : ''}`
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -3922,6 +3969,13 @@ export interface SavedVisualQuery {
   createdAt?: string
   updatedAt?: string
 }
+
+export type {
+  LockNode,
+  DeadlockCycle,
+  LockTreeResponse,
+  TerminateLockRequest,
+} from '../features/lockmgr/lockHelper'
 
 
 

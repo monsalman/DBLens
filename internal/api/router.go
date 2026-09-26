@@ -264,6 +264,12 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/querybuilder/save", h.SaveVisualQueryHandler)
 	api.Delete("/querybuilder/saved/{id}", h.DeleteSavedVisualQueryHandler)
 
+	// ── Feature-47: Database Lock Tree & Deadlock Investigator ────
+	api.Get("/connections/{connId}/locks", h.GetLocks)
+	api.Get("/connections/{connId}/locks/stream", h.StreamLocks)
+	api.Post("/connections/{connId}/locks/terminate", h.TerminateLock)
+	api.Get("/connections/{connId}/locks/export.json", h.ExportLocksJSON)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──
