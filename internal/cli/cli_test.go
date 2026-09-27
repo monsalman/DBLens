@@ -814,3 +814,76 @@ func TestSnapshotCliCommands(t *testing.T) {
 		t.Fatalf("expected 0 for snapshot rollback, got %d", code)
 	}
 }
+
+func TestPartitionCLI(t *testing.T) {
+	// Help output
+	if code := Execute([]string{"partition"}); code != 0 {
+		t.Errorf("expected 0 for partition help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition --help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "inspect", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect --help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "health", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition health --help, got %d", code)
+	}
+
+	// Unknown subcommand
+	if code := Execute([]string{"partition", "unknown"}); code != 1 {
+		t.Errorf("expected 1 for unknown partition subcommand, got %d", code)
+	}
+
+	// Missing conn-id
+	if code := Execute([]string{"partition", "inspect", "--table", "logs"}); code != 1 {
+		t.Errorf("expected 1 for missing conn-id, got %d", code)
+	}
+
+	// Create test SQLite database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_part_cli.db")
+	dsn := "sqlite://" + dbPath
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to init test db: %v", err)
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs_2026_01 (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs_2026_02 (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `INSERT INTO logs_2026_01 (msg) VALUES ('alpha'), ('beta');`)
+
+	// Inspect table format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect table format, got %d", code)
+	}
+
+	// Inspect JSON format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs", "--format", "json"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect json format, got %d", code)
+	}
+
+	// Inspect Markdown format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs", "--format", "md"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect md format, got %d", code)
+	}
+
+	// Health check single table
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn, "--table", "logs"}); code != 0 {
+		t.Errorf("expected 0 for partition health single table, got %d", code)
+	}
+
+	// Health check all tables
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn}); code != 0 {
+		t.Errorf("expected 0 for partition health all tables, got %d", code)
+	}
+
+	// Health check JSON format
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn, "--format", "json"}); code != 0 {
+		t.Errorf("expected 0 for partition health json format, got %d", code)
+	}
+}
