@@ -29,6 +29,7 @@ import {
   KeyRound,
   Lock,
   BookOpen,
+  Camera,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -298,6 +299,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['dictionary', 'data dictionary', 'documentation', 'docs', 'catalog', 'pii', 'soc2', 'hipaa', 'openapi', 'schema'],
       onSelect: () => {
         useAppStore.getState().openDataDictionary()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:snapshot-vault',
+      title: 'Time-Travel Schema Snapshot Vault & Drift Timeline',
+      subtitle: 'Capture point-in-time schema baselines, inspect historical drift, and generate rollback DDL (Alt+Shift+S)',
+      category: 'Actions',
+      icon: Camera,
+      badge: 'SNAPSHOT',
+      keywords: ['snapshot', 'vault', 'timeline', 'drift', 'time-travel', 'rollback', 'migration', 'history', 'schema diff'],
+      onSelect: () => {
+        useAppStore.getState().openSnapshotVault()
         closePalette()
       },
     })

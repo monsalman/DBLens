@@ -30,6 +30,7 @@ import { DataSeederModal } from './features/seeder/DataSeederModal'
 import { TeamVaultModal } from './features/vault/TeamVaultModal'
 import { LockManagerModal } from './features/lockmgr/LockManagerModal'
 import { DataDictionaryPortal } from './features/dictionary/DataDictionaryPortal'
+import { SnapshotVaultModal } from './features/snapshot/SnapshotVaultModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -103,6 +104,8 @@ export function App() {
   const closeLockManager = useAppStore((s) => s.closeLockManager)
   const isDataDictionaryOpen = useAppStore((s) => s.isDataDictionaryOpen)
   const closeDataDictionary = useAppStore((s) => s.closeDataDictionary)
+  const isSnapshotVaultOpen = useAppStore((s) => s.isSnapshotVaultOpen)
+  const closeSnapshotVault = useAppStore((s) => s.closeSnapshotVault)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -167,6 +170,18 @@ export function App() {
           store.closeDataDictionary()
         } else {
           store.openDataDictionary()
+        }
+      }
+      if (
+        (e.altKey && e.shiftKey && (e.key === 's' || e.key === 'S')) ||
+        (e.metaKey && e.altKey && e.shiftKey && (e.key === 's' || e.key === 'S'))
+      ) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isSnapshotVaultOpen) {
+          store.closeSnapshotVault()
+        } else {
+          store.openSnapshotVault()
         }
       }
     }
@@ -460,6 +475,11 @@ export function App() {
         onClose={closeDataDictionary}
         connId={activeConnId}
         profiles={connections}
+      />
+      <SnapshotVaultModal
+        isOpen={isSnapshotVaultOpen}
+        onClose={closeSnapshotVault}
+        connId={activeConnId}
       />
     </QueryClientProvider>
   )

@@ -72,6 +72,14 @@ import type {
   DataDictionary,
   CommentUpdateRequest,
 } from '../features/dictionary/dictionaryHelper'
+import type {
+  SchemaSnapshot,
+  SnapshotDiff,
+  RollbackPlan,
+  CaptureSnapshotRequest,
+  DiffSnapshotsRequest,
+  RollbackPlanRequest,
+} from '../features/snapshot/snapshotHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -3436,6 +3444,103 @@ export const api = {
     }
     return await res.text()
   },
+
+  // ── Feature-50: Time-Travel Schema Snapshot Vault & Drift Timeline ────
+  async listSnapshots(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaSnapshot[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to list snapshots')
+    }
+    return json.data ?? json
+  },
+
+  async captureSnapshot(
+    connId: string,
+    req: CaptureSnapshotRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaSnapshot> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/capture`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to capture schema snapshot')
+    }
+    return json.data ?? json
+  },
+
+  async diffSnapshots(
+    connId: string,
+    req: DiffSnapshotsRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SnapshotDiff> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/diff`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to compare schema snapshots')
+    }
+    return json.data ?? json
+  },
+
+  async generateRollbackPlan(
+    connId: string,
+    req: RollbackPlanRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<RollbackPlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/rollback-plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to generate rollback plan')
+    }
+    return json.data ?? json
+  },
+
+  async deleteSnapshot(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/${id}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to delete snapshot')
+    }
+    return json.data ?? json
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -4208,6 +4313,27 @@ export type {
   DictionarySummary,
   CommentUpdateRequest,
 } from '../features/dictionary/dictionaryHelper'
+
+export type {
+  SchemaSnapshot,
+  SnapshotMetadata,
+  SchemaNode,
+  TableNode,
+  ColumnNode,
+  IndexNode,
+  ForeignKeyNode,
+  TriggerNode,
+  RoutineNode,
+  DiffSummary,
+  SnapshotDiff,
+  TableDrift,
+  ColumnDrift,
+  RollbackPlan,
+  CaptureSnapshotRequest,
+  DiffSnapshotsRequest,
+  RollbackPlanRequest,
+} from '../features/snapshot/snapshotHelper'
+
 
 
 

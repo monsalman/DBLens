@@ -12,15 +12,18 @@ import (
 	"github.com/dblens/dblens/internal/diff"
 	"github.com/dblens/dblens/internal/driver"
 	"github.com/dblens/dblens/internal/driver/types"
+	"github.com/dblens/dblens/internal/snapshot"
 )
 
 const DiffUsage = `Usage:
   dblens diff schema [flags]
   dblens diff data [flags]
+  dblens diff snapshot [flags]
 
 Commands:
   schema     Compare DDL structure between source and target databases
   data       Compare row-level data and generate synchronization DML scripts
+  snapshot   Compare two saved schema snapshots or snapshot vs live database
 
 Use "dblens diff [command] --help" for more information about a command.
 `
@@ -39,6 +42,8 @@ func runDiff(ctx context.Context, args []string) int {
 		return runDiffSchema(ctx, subArgs)
 	case "data":
 		return runDiffData(ctx, subArgs)
+	case "snapshot":
+		return runDiffSnapshot(ctx, subArgs)
 	case "--help", "-h", "help":
 		fmt.Print(DiffUsage)
 		return 0
@@ -331,5 +336,116 @@ func runDiffData(ctx context.Context, args []string) int {
 	if assertSynced && hasDrift {
 		return 1
 	}
+	return 0
+}
+
+func runDiffSnapshot(ctx context.Context, args []string) int {
+	fsCmd := flag.NewFlagSet("diff snapshot", flag.ContinueOnError)
+	fsCmd.SetOutput(os.Stderr)
+
+	var (
+		connID       string
+		baseID       string
+		targetID     string
+		live         bool
+		format       string
+		failOnDrift  bool
+		targetSchema string
+		dataDir      string
+	)
+
+	fsCmd.StringVar(&connID, "conn-id", "", "Connection ID or database DSN")
+	fsCmd.StringVar(&connID, "conn", "", "Alias for --conn-id")
+	fsCmd.StringVar(&baseID, "base", "", "Base snapshot ID")
+	fsCmd.StringVar(&targetID, "target", "", "Target snapshot ID (or 'live')")
+	fsCmd.BoolVar(&live, "live", false, "Compare base snapshot against live database")
+	fsCmd.StringVar(&format, "format", "text", "Output format (text|json|sql)")
+	fsCmd.BoolVar(&failOnDrift, "fail-on-drift", true, "Exit with code 1 if schema drift is detected")
+	fsCmd.StringVar(&targetSchema, "schema", "", "Filter to specific schema namespace")
+	fsCmd.StringVar(&dataDir, "data", "", "DBLens data directory")
+
+	if err := fsCmd.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 1
+	}
+
+	if connID == "" || baseID == "" {
+		fmt.Fprintln(os.Stderr, "Error: --conn-id and --base are required")
+		return 1
+	}
+
+	store := getSnapshotStore(dataDir)
+	baseSnap, err := store.Get(connID, baseID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: base snapshot not found: %v\n", err)
+		return 1
+	}
+
+	var targetSnap *snapshot.SchemaSnapshot
+	if live || targetID == "" || strings.EqualFold(targetID, "live") {
+		drv, cleanup, err := resolveDriver(connID, dataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error connecting to database for live diff: %v\n", err)
+			return 1
+		}
+		defer cleanup()
+
+		liveSnap, err := snapshot.CaptureSnapshot(ctx, drv, connID, "Live Database", "live", "", targetSchema)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error capturing live schema: %v\n", err)
+			return 1
+		}
+		targetSnap = liveSnap
+	} else {
+		targetSnap, err = store.Get(connID, targetID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: target snapshot not found: %v\n", err)
+			return 1
+		}
+	}
+
+	diffResult := snapshot.Diff(baseSnap, targetSnap)
+
+	switch strings.ToLower(format) {
+	case "json":
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(diffResult)
+	case "sql":
+		plan := snapshot.GenerateRollbackPlan(diffResult)
+		if plan.UpSQL == "" {
+			fmt.Println("-- No schema changes detected.")
+		} else {
+			fmt.Println(plan.UpSQL)
+		}
+	default: // text
+		fmt.Printf("Schema Snapshot Diff Report\n")
+		fmt.Printf("Base Snapshot:   %s (%s)\n", diffResult.BaseSnapshotID, diffResult.BaseLabel)
+		fmt.Printf("Target Snapshot: %s (%s)\n", diffResult.TargetSnapshotID, diffResult.TargetLabel)
+		fmt.Printf("Dialect:         %s\n", diffResult.Dialect)
+		fmt.Println(strings.Repeat("-", 60))
+		fmt.Printf("Total Drifts:    %d\n", diffResult.TotalDrifts)
+		fmt.Printf("  Added Tables:   %d\n", diffResult.Summary.AddedTables)
+		fmt.Printf("  Dropped Tables: %d\n", diffResult.Summary.DroppedTables)
+		fmt.Printf("  Altered Tables: %d\n", diffResult.Summary.AlteredTables)
+		fmt.Printf("    Added Columns:   %d\n", diffResult.Summary.AddedColumns)
+		fmt.Printf("    Dropped Columns: %d\n", diffResult.Summary.DroppedColumns)
+		fmt.Printf("    Altered Columns: %d\n", diffResult.Summary.AlteredColumns)
+		fmt.Printf("    Added Indexes:   %d\n", diffResult.Summary.AddedIndexes)
+		fmt.Printf("    Dropped Indexes: %d\n", diffResult.Summary.DroppedIndexes)
+
+		if diffResult.TotalDrifts > 0 {
+			fmt.Println("\nStatus: DRIFT DETECTED")
+		} else {
+			fmt.Println("\nStatus: IN SYNC")
+		}
+	}
+
+	if failOnDrift && diffResult.TotalDrifts > 0 {
+		return 1
+	}
+
 	return 0
 }

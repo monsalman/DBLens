@@ -285,6 +285,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Get("/connections/{connId}/dictionary/export/md", h.ExportDictionaryMD)
 	api.Get("/connections/{connId}/dictionary/export/openapi", h.ExportDictionaryOpenAPI)
 
+	// ── Feature-50: Time-Travel Schema Snapshot Vault & Drift Timeline ────
+	api.Get("/connections/{connId}/snapshots", h.ListSnapshots)
+	api.Post("/connections/{connId}/snapshots/capture", h.CaptureSnapshot)
+	api.Post("/connections/{connId}/snapshots/diff", h.DiffSnapshots)
+	api.Post("/connections/{connId}/snapshots/rollback-plan", h.GenerateRollbackPlan)
+	api.Delete("/connections/{connId}/snapshots/{id}", h.DeleteSnapshot)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

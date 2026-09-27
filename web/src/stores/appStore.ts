@@ -124,6 +124,10 @@ interface AppState {
   setIsDataDictionaryOpen: (open: boolean) => void
   openDataDictionary: () => void
   closeDataDictionary: () => void
+  isSnapshotVaultOpen: boolean
+  setIsSnapshotVaultOpen: (open: boolean) => void
+  openSnapshotVault: () => void
+  closeSnapshotVault: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -415,6 +419,10 @@ export const useAppStore = create<AppState>()(
       setIsDataDictionaryOpen: (isDataDictionaryOpen) => set({ isDataDictionaryOpen }),
       openDataDictionary: () => set({ isDataDictionaryOpen: true }),
       closeDataDictionary: () => set({ isDataDictionaryOpen: false }),
+      isSnapshotVaultOpen: false,
+      setIsSnapshotVaultOpen: (isSnapshotVaultOpen) => set({ isSnapshotVaultOpen }),
+      openSnapshotVault: () => set({ isSnapshotVaultOpen: true }),
+      closeSnapshotVault: () => set({ isSnapshotVaultOpen: false }),
 
       peekDrawer: {
         isOpen: false,

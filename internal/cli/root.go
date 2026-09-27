@@ -27,6 +27,7 @@ Available Commands:
   query      Execute ad-hoc SQL query headlessly and print tabular/json/csv output
   benchmark  Stress test query concurrency and analyze latency distributions
   doc        Export living data dictionary & schema documentation (html/md/openapi)
+  snapshot   Manage time-travel schema snapshot vault (capture, list, rollback)
   serve      Run DBLens embedded web application and HTTP API server
   help       Show help for any command
 
@@ -75,6 +76,8 @@ func Execute(args []string) (exitCode int) {
 		return runBenchmark(ctx, subArgs)
 	case "doc":
 		return runDoc(ctx, subArgs)
+	case "snapshot":
+		return runSnapshot(ctx, subArgs)
 	case "help", "--help", "-h":
 		if len(subArgs) > 0 {
 			return Execute(append(subArgs, "--help"))
