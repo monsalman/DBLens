@@ -35,6 +35,10 @@ func (s *SQLiteDriver) Dialect() string {
 	return "sqlite"
 }
 
+func (s *SQLiteDriver) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteDriver) Ping(ctx context.Context) error {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

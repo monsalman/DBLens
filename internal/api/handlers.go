@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"github.com/dblens/dblens/internal/alter"
+	"github.com/dblens/dblens/internal/analyzer"
 	"github.com/dblens/dblens/internal/annotations"
 	"github.com/dblens/dblens/internal/assistant"
 	"github.com/dblens/dblens/internal/audit"
+	"github.com/dblens/dblens/internal/benchmark"
 	"github.com/dblens/dblens/internal/connection"
 	"github.com/dblens/dblens/internal/cron"
 	"github.com/dblens/dblens/internal/diff"
@@ -26,10 +28,13 @@ import (
 	"github.com/dblens/dblens/internal/dump"
 	"github.com/dblens/dblens/internal/healthmon"
 	"github.com/dblens/dblens/internal/masker"
+	"github.com/dblens/dblens/internal/materialize"
 	"github.com/dblens/dblens/internal/playbook"
 	"github.com/dblens/dblens/internal/privilege"
+	"github.com/dblens/dblens/internal/querybuilder"
 	"github.com/dblens/dblens/internal/rest"
 	"github.com/dblens/dblens/internal/tunnel"
+	"github.com/dblens/dblens/internal/vault"
 	"github.com/dblens/dblens/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
@@ -218,6 +223,37 @@ func IsNonSelectSQL(sql string) bool {
 	return false
 }
 
+// IsDDLStatement returns true if SQL statement contains DDL (DROP, ALTER, TRUNCATE, CREATE, RENAME).
+func IsDDLStatement(sql string) bool {
+	cleaned := reBlockComment.ReplaceAllString(sql, " ")
+	cleaned = reLineComment.ReplaceAllString(cleaned, " ")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return false
+	}
+
+	stmts := splitStatements(cleaned)
+	for _, stmt := range stmts {
+		stmt = stripOuterParens(stmt)
+		if stmt == "" {
+			continue
+		}
+
+		fields := strings.Fields(stmt)
+		if len(fields) == 0 {
+			continue
+		}
+		firstWord := strings.ToUpper(fields[0])
+
+		switch firstWord {
+		case "DROP", "ALTER", "TRUNCATE", "CREATE", "RENAME":
+			return true
+		}
+	}
+
+	return false
+}
+
 type Response struct {
 	Data  interface{} `json:"data"`
 	Error *string     `json:"error"`
@@ -253,6 +289,11 @@ type Handler struct {
 	auditLogPath     string
 	playbookStore    *playbook.Store
 	annotationsStore *annotations.Store
+	scratchStore     *materialize.ScratchStore
+	analyzerStore     *analyzer.Store
+	queryBuilderStore *querybuilder.Store
+	vaultMgr          *vault.Manager
+	benchmarkMgr      *benchmark.BenchmarkManager
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -340,6 +381,32 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 			}
 			return as
 		}(),
+		scratchStore: func() *materialize.ScratchStore {
+			ss, err := materialize.NewScratchStore(auditDir + "/scratch.json")
+			if err != nil || ss == nil {
+				return materialize.NewInMemoryScratchStore()
+			}
+			return ss
+		}(),
+		analyzerStore: func() *analyzer.Store {
+			as, err := analyzer.NewStore(auditDir + "/analyzer.json")
+			if err != nil {
+				return nil
+			}
+			return as
+		}(),
+		queryBuilderStore: func() *querybuilder.Store {
+			qs, err := querybuilder.NewStore(auditDir + "/visual_queries.json")
+			if err != nil {
+				return querybuilder.NewInMemoryStore()
+			}
+			return qs
+		}(),
+		vaultMgr: vault.NewManager(),
+		benchmarkMgr: benchmark.NewBenchmarkManager(),
+	}
+	if h.scratchStore == nil {
+		h.scratchStore = materialize.NewInMemoryScratchStore()
 	}
 	return h, nil
 }
@@ -385,6 +452,13 @@ func (h *Handler) WebhookManager() *webhook.Manager {
 		h.webhookMgr = webhook.NewManager()
 	}
 	return h.webhookMgr
+}
+
+func (h *Handler) BenchmarkManager() *benchmark.BenchmarkManager {
+	if h.benchmarkMgr == nil {
+		h.benchmarkMgr = benchmark.NewBenchmarkManager()
+	}
+	return h.benchmarkMgr
 }
 
 type TestConnectionRequest struct {
@@ -2733,4 +2807,11 @@ func (h *Handler) ExplainSQL(w http.ResponseWriter, r *http.Request) {
 		"explanation": resp.Result,
 		"raw":         resp.Raw,
 	})
+}
+
+func (h *Handler) getScratchStore() *materialize.ScratchStore {
+	if h.scratchStore == nil {
+		h.scratchStore = materialize.NewInMemoryScratchStore()
+	}
+	return h.scratchStore
 }

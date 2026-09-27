@@ -46,6 +46,7 @@ export const SchemaDiffView: React.FC<SchemaDiffViewProps> = ({
 }) => {
   const diffPreload = useAppStore((s) => s.diffPreload)
   const setDiffPreload = useAppStore((s) => s.setDiffPreload)
+  const openDataDiff = useAppStore((s) => s.openDataDiff)
 
   // Source selection
   const [sourceConnId, setSourceConnId] = useState<string>(() => {
@@ -458,8 +459,18 @@ export const SchemaDiffView: React.FC<SchemaDiffViewProps> = ({
           </div>
         </div>
 
-        {/* Compare Action Button */}
+        {/* Compare Action Button & Data Diff Launch */}
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={openDataDiff}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-mono font-medium transition-colors cursor-pointer"
+            title="Launch Row-Level Data Diff & Bi-Directional Sync Studio (Alt+D)"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            <span>Data Diff Studio</span>
+          </button>
+
           <button
             onClick={handleCompare}
             disabled={isLoading || !sourceConnId}
