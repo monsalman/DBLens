@@ -684,3 +684,133 @@ func TestCliDoc(t *testing.T) {
 		t.Errorf("expected openapi 3.0.3 in exported JSON")
 	}
 }
+
+func TestSnapshotCliCommands(t *testing.T) {
+	// 1. Help flags
+	if code := Execute([]string{"snapshot", "--help"}); code != 0 {
+		t.Fatalf("expected 0 for snapshot --help, got %d", code)
+	}
+	if code := Execute([]string{"diff", "snapshot", "--help"}); code != 0 {
+		t.Fatalf("expected 0 for diff snapshot --help, got %d", code)
+	}
+
+	// 2. Setup SQLite DB
+	tmpDir := t.TempDir()
+	dbFile := filepath.Join(tmpDir, "cli_snap_test.db")
+	dsn := "sqlite://" + dbFile
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	ctx := context.Background()
+	_, err = drv.ExecuteQuery(ctx, `CREATE TABLE members (
+		id INTEGER PRIMARY KEY,
+		email TEXT NOT NULL
+	);`)
+	if err != nil {
+		t.Fatalf("failed to seed table: %v", err)
+	}
+	cleanup()
+
+	// 3. Capture Snapshot 1
+	code := Execute([]string{
+		"snapshot", "capture",
+		"--conn-id", dsn,
+		"--label", "Members Baseline",
+		"--tag", "manual",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot capture, got %d", code)
+	}
+
+	// 4. List Snapshots
+	store := getSnapshotStore(tmpDir)
+	list, err := store.List(dsn)
+	if err != nil {
+		t.Fatalf("failed to list snapshots: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 snapshot in store, got %d", len(list))
+	}
+	snap1ID := list[0].ID
+
+	code = Execute([]string{
+		"snapshot", "list",
+		"--conn-id", dsn,
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot list, got %d", code)
+	}
+
+	// 5. Mutate DB (add table)
+	drv2, cleanup2, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	_, err = drv2.ExecuteQuery(ctx, `CREATE TABLE projects (id INTEGER PRIMARY KEY, title TEXT);`)
+	if err != nil {
+		t.Fatalf("failed to create projects table: %v", err)
+	}
+	cleanup2()
+
+	// 6. Diff Snapshot against Live DB (fail-on-drift=false to return 0)
+	code = Execute([]string{
+		"diff", "snapshot",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--live",
+		"--fail-on-drift=false",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for diff snapshot --fail-on-drift=false, got %d", code)
+	}
+
+	// Diff Snapshot with fail-on-drift=true should return 1 (drift detected)
+	code = Execute([]string{
+		"diff", "snapshot",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--live",
+		"--fail-on-drift=true",
+		"--data", tmpDir,
+	})
+	if code != 1 {
+		t.Fatalf("expected 1 for diff snapshot drift, got %d", code)
+	}
+
+	// 7. Capture Snapshot 2
+	code = Execute([]string{
+		"snapshot", "capture",
+		"--conn-id", dsn,
+		"--label", "Projects Added",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for second snapshot capture, got %d", code)
+	}
+
+	list2, err := store.List(dsn)
+	if err != nil || len(list2) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(list2))
+	}
+	snap2ID := list2[0].ID
+	if snap2ID == snap1ID {
+		snap2ID = list2[1].ID
+	}
+
+	// 8. Rollback plan CLI
+	code = Execute([]string{
+		"snapshot", "rollback",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--target", snap2ID,
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot rollback, got %d", code)
+	}
+}
