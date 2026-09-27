@@ -120,6 +120,10 @@ interface AppState {
   setIsLockManagerOpen: (open: boolean) => void
   openLockManager: () => void
   closeLockManager: () => void
+  isDataDictionaryOpen: boolean
+  setIsDataDictionaryOpen: (open: boolean) => void
+  openDataDictionary: () => void
+  closeDataDictionary: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -407,6 +411,10 @@ export const useAppStore = create<AppState>()(
       setIsLockManagerOpen: (isLockManagerOpen) => set({ isLockManagerOpen }),
       openLockManager: () => set({ isLockManagerOpen: true }),
       closeLockManager: () => set({ isLockManagerOpen: false }),
+      isDataDictionaryOpen: false,
+      setIsDataDictionaryOpen: (isDataDictionaryOpen) => set({ isDataDictionaryOpen }),
+      openDataDictionary: () => set({ isDataDictionaryOpen: true }),
+      closeDataDictionary: () => set({ isDataDictionaryOpen: false }),
 
       peekDrawer: {
         isOpen: false,

@@ -28,6 +28,7 @@ import {
   Zap,
   KeyRound,
   Lock,
+  BookOpen,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -283,6 +284,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['lock', 'locks', 'deadlock', 'blocking', 'tree', 'blocker', 'kill', 'terminate', 'wait'],
       onSelect: () => {
         useAppStore.getState().openLockManager()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:dictionary',
+      title: 'Living Data Dictionary & Schema Documentation',
+      subtitle: 'Browse schema catalog, document table/column comments, and export SOC 2/HIPAA docs (Alt+Shift+D)',
+      category: 'Actions',
+      icon: BookOpen,
+      badge: 'DICTIONARY',
+      keywords: ['dictionary', 'data dictionary', 'documentation', 'docs', 'catalog', 'pii', 'soc2', 'hipaa', 'openapi', 'schema'],
+      onSelect: () => {
+        useAppStore.getState().openDataDictionary()
         closePalette()
       },
     })

@@ -278,6 +278,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/benchmark/compare", h.BenchmarkCompareHandler)
 	api.Post("/connections/{connId}/benchmark/export.md", h.BenchmarkExportMDHandler)
 
+	// ── Feature-49: Living Data Dictionary & Self-Contained Schema Documentation Portal ────
+	api.Get("/connections/{connId}/dictionary", h.GetDictionary)
+	api.Put("/connections/{connId}/dictionary/comments", h.UpdateDictionaryComments)
+	api.Get("/connections/{connId}/dictionary/export/html", h.ExportDictionaryHTML)
+	api.Get("/connections/{connId}/dictionary/export/md", h.ExportDictionaryMD)
+	api.Get("/connections/{connId}/dictionary/export/openapi", h.ExportDictionaryOpenAPI)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

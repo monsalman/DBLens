@@ -29,6 +29,7 @@ import { DataDiffModal } from './features/datadiff/DataDiffModal'
 import { DataSeederModal } from './features/seeder/DataSeederModal'
 import { TeamVaultModal } from './features/vault/TeamVaultModal'
 import { LockManagerModal } from './features/lockmgr/LockManagerModal'
+import { DataDictionaryPortal } from './features/dictionary/DataDictionaryPortal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -100,6 +101,8 @@ export function App() {
   const setIsTeamVaultOpen = useAppStore((s) => s.setIsTeamVaultOpen)
   const isLockManagerOpen = useAppStore((s) => s.isLockManagerOpen)
   const closeLockManager = useAppStore((s) => s.closeLockManager)
+  const isDataDictionaryOpen = useAppStore((s) => s.isDataDictionaryOpen)
+  const closeDataDictionary = useAppStore((s) => s.closeDataDictionary)
   const [selectedSchema, setSelectedSchema] = useState('public')
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -152,6 +155,18 @@ export function App() {
           store.closeLockManager()
         } else {
           store.openLockManager()
+        }
+      }
+      if (
+        (e.altKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) ||
+        (e.metaKey && e.altKey && e.shiftKey && (e.key === 'd' || e.key === 'D'))
+      ) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isDataDictionaryOpen) {
+          store.closeDataDictionary()
+        } else {
+          store.openDataDictionary()
         }
       }
     }
@@ -437,6 +452,12 @@ export function App() {
       <LockManagerModal
         isOpen={isLockManagerOpen}
         onClose={closeLockManager}
+        connId={activeConnId}
+        profiles={connections}
+      />
+      <DataDictionaryPortal
+        isOpen={isDataDictionaryOpen}
+        onClose={closeDataDictionary}
         connId={activeConnId}
         profiles={connections}
       />

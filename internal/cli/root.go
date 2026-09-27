@@ -26,6 +26,7 @@ Available Commands:
   profile    Audit column distributions, null ratios, uniqueness, and PII
   query      Execute ad-hoc SQL query headlessly and print tabular/json/csv output
   benchmark  Stress test query concurrency and analyze latency distributions
+  doc        Export living data dictionary & schema documentation (html/md/openapi)
   serve      Run DBLens embedded web application and HTTP API server
   help       Show help for any command
 
@@ -72,6 +73,8 @@ func Execute(args []string) (exitCode int) {
 		return runQuery(ctx, subArgs)
 	case "benchmark":
 		return runBenchmark(ctx, subArgs)
+	case "doc":
+		return runDoc(ctx, subArgs)
 	case "help", "--help", "-h":
 		if len(subArgs) > 0 {
 			return Execute(append(subArgs, "--help"))
