@@ -595,3 +595,92 @@ func TestBenchmarkCommand(t *testing.T) {
 		t.Fatalf("expected assertion failure exit code 1, got %d", failCode)
 	}
 }
+
+func TestCliDoc(t *testing.T) {
+	// 1. Help flag
+	if code := Execute([]string{"doc", "--help"}); code != 0 {
+		t.Fatalf("expected exit code 0 for doc --help, got %d", code)
+	}
+
+	// 2. Missing conn
+	if code := Execute([]string{"doc"}); code != 1 {
+		t.Fatalf("expected exit code 1 for missing conn, got %d", code)
+	}
+
+	// 3. Create test SQLite DB
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "cli_doc_test.db")
+	dsn := "sqlite://" + dbPath
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	ctx := context.Background()
+	_, _ = drv.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sku TEXT NOT NULL,
+			price REAL NOT NULL,
+			vendor_email TEXT
+		);
+	`)
+	cleanup()
+
+	// 4. Test HTML export
+	outHTML := filepath.Join(tmpDir, "doc.html")
+	code := Execute([]string{
+		"doc",
+		"--conn-id", dsn,
+		"--format", "html",
+		"--output", outHTML,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc html, got %d", code)
+	}
+	htmlData, err := os.ReadFile(outHTML)
+	if err != nil {
+		t.Fatalf("failed to read exported HTML file: %v", err)
+	}
+	if !strings.Contains(string(htmlData), "products") {
+		t.Errorf("expected table products in exported HTML")
+	}
+
+	// 5. Test Markdown export
+	outMD := filepath.Join(tmpDir, "doc.md")
+	code = Execute([]string{
+		"doc",
+		"--conn", dsn,
+		"--format", "md",
+		"--output", outMD,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc md, got %d", code)
+	}
+	mdData, err := os.ReadFile(outMD)
+	if err != nil {
+		t.Fatalf("failed to read exported MD file: %v", err)
+	}
+	if !strings.Contains(string(mdData), "# Data Dictionary") {
+		t.Errorf("expected header in exported MD")
+	}
+
+	// 6. Test OpenAPI export
+	outOA := filepath.Join(tmpDir, "doc_openapi.json")
+	code = Execute([]string{
+		"doc",
+		"--conn-id", dsn,
+		"--format", "openapi",
+		"--out", outOA,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc openapi, got %d", code)
+	}
+	oaData, err := os.ReadFile(outOA)
+	if err != nil {
+		t.Fatalf("failed to read exported OpenAPI file: %v", err)
+	}
+	if !strings.Contains(string(oaData), `"openapi": "3.0.3"`) {
+		t.Errorf("expected openapi 3.0.3 in exported JSON")
+	}
+}
