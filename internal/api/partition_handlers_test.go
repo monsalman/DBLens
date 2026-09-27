@@ -163,6 +163,27 @@ func TestDetachPartitionHandler(t *testing.T) {
 	if resp.Data["success"] != true {
 		t.Errorf("expected success true")
 	}
+
+	// Read-Only mode blocks detach via header
+	roReq := httptest.NewRequest("POST", "/api/connections/test/partitions/detach", bytes.NewReader(payload))
+	roReq.Header.Set("X-DBLENS-DSN", dsn)
+	roReq.Header.Set("Content-Type", "application/json")
+	roReq.Header.Set("X-DBLENS-READONLY", "true")
+	roW := httptest.NewRecorder()
+	router.ServeHTTP(roW, roReq)
+	if roW.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden with X-DBLENS-READONLY, got %d", roW.Code)
+	}
+
+	// Read-Only mode blocks detach via query param
+	roQReq := httptest.NewRequest("POST", "/api/connections/test/partitions/detach?readonly=1", bytes.NewReader(payload))
+	roQReq.Header.Set("X-DBLENS-DSN", dsn)
+	roQReq.Header.Set("Content-Type", "application/json")
+	roQW := httptest.NewRecorder()
+	router.ServeHTTP(roQW, roQReq)
+	if roQW.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden with ?readonly=1, got %d", roQW.Code)
+	}
 }
 
 func TestGetPartitionHealthHandler(t *testing.T) {

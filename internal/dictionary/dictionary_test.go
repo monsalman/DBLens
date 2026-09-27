@@ -300,6 +300,22 @@ func TestSyncComment_MySQL(t *testing.T) {
 	if len(mockDrv.executedDDLs) == 0 || mockDrv.executedDDLs[0] != expectedColDDL {
 		t.Errorf("expected DDL %q, got %v", expectedColDDL, mockDrv.executedDDLs)
 	}
+
+	// 3. MySQL Injection prevention (backslashes + single quotes + backticks in identifiers)
+	mockDrv.executedDDLs = nil
+	err = dictionary.SyncComment(ctx, mockDrv, "mysql-conn", dictionary.CommentUpdateRequest{
+		Schema:   "app`db",
+		Table:    "user`table",
+		Comment:  `Malicious \'; DROP TABLE users; -- \`,
+		SyncToDB: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("SyncComment failed: %v", err)
+	}
+	expectedEscapedDDL := "ALTER TABLE `app``db`.`user``table` COMMENT = 'Malicious \\\\''; DROP TABLE users; -- \\\\';"
+	if len(mockDrv.executedDDLs) == 0 || mockDrv.executedDDLs[0] != expectedEscapedDDL {
+		t.Errorf("expected safely escaped DDL %q, got %v", expectedEscapedDDL, mockDrv.executedDDLs)
+	}
 }
 
 func TestSyncComment_SQLite_Annotations(t *testing.T) {
@@ -485,6 +501,23 @@ func TestRenderMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(md, "🛡️ `email`") {
 		t.Errorf("expected PII tag in markdown column row")
+	}
+
+	// Test Markdown injection prevention: anchor sanitization and pipe character escaping
+	dict.Schemas[0].Name = `sec" onclick="alert(1)`
+	dict.Schemas[0].Tables[0].Name = `tbl<script>alert(2)</script>`
+	dict.Schemas[0].Tables[0].Columns[0].Comment = `Description with | pipe character | and break`
+
+	safeMD, err := dictionary.RenderMarkdown(dict)
+	if err != nil {
+		t.Fatalf("RenderMarkdown returned error with special chars: %v", err)
+	}
+	expectedAnchorTag := `<a name="sec-onclickalert1-tblscriptalert2script"></a>`
+	if !strings.Contains(safeMD, expectedAnchorTag) {
+		t.Errorf("expected clean sanitized anchor tag %q, got: %s", expectedAnchorTag, safeMD)
+	}
+	if !strings.Contains(safeMD, `\| pipe character \|`) {
+		t.Errorf("pipe characters were not properly escaped in table cells: %s", safeMD)
 	}
 }
 

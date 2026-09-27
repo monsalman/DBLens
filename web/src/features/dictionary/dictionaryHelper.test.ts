@@ -249,6 +249,32 @@ test('generateClientMarkdown: renders complete markdown catalog', () => {
   assert(md.includes('🛡️ `email`'), 'PII tag badge in md')
   assert(md.includes('users_pkey'), 'index in md')
   assert(md.includes('`users(id)`'), 'foreign key in md')
+
+  // Pipe character escaping
+  const dictWithPipes: DataDictionary = {
+    ...mockDict,
+    schemas: [
+      {
+        ...mockDict.schemas[0],
+        tables: [
+          {
+            ...mockDict.schemas[0].tables[0],
+            columns: [
+              {
+                ...mockDict.schemas[0].tables[0].columns[0],
+                comment: 'Pipe | in | comment should be escaped',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }
+  const safeMd = generateClientMarkdown(dictWithPipes)
+  assert(
+    safeMd.includes('Pipe \\| in \\| comment should be escaped'),
+    'pipe characters in column comments must be escaped with backslash'
+  )
 })
 
 test('generateClientOpenAPI: generates valid OpenAPI 3.0 schema JSON', () => {

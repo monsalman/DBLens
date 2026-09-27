@@ -154,7 +154,7 @@ func TestGenerateUpcomingDDL(t *testing.T) {
 	if len(plan.GeneratedDDL) != 2 {
 		t.Fatalf("expected 2 DDL statements, got %d", len(plan.GeneratedDDL))
 	}
-	expectedFirst := `CREATE TABLE IF NOT EXISTS "public".events_2026_10 PARTITION OF "public".events FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');`
+	expectedFirst := `CREATE TABLE IF NOT EXISTS "public"."events_2026_10" PARTITION OF "public"."events" FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');`
 	if plan.GeneratedDDL[0] != expectedFirst {
 		t.Errorf("expected %q, got %q", expectedFirst, plan.GeneratedDDL[0])
 	}
@@ -191,7 +191,7 @@ func TestGenerateUpcomingDDL(t *testing.T) {
 	if len(sqlitePlan.GeneratedDDL) != 1 {
 		t.Fatalf("expected 1 statement for sqlite, got %d", len(sqlitePlan.GeneratedDDL))
 	}
-	if !strings.Contains(sqlitePlan.GeneratedDDL[0], "CREATE TABLE IF NOT EXISTS archive_2027") {
+	if !strings.Contains(sqlitePlan.GeneratedDDL[0], `CREATE TABLE IF NOT EXISTS "archive_2027" AS SELECT * FROM "archive" WHERE 0;`) {
 		t.Errorf("unexpected SQLite DDL: %s", sqlitePlan.GeneratedDDL[0])
 	}
 }
@@ -224,10 +224,35 @@ func TestGenerateDetachDDL(t *testing.T) {
 		t.Errorf("unexpected MySQL detach DDL: %s", myDDL)
 	}
 
-	// Validation
+	// Validation: Empty request
 	_, err = GenerateDetachDDL(DetachPartitionRequest{}, "postgres")
 	if err == nil {
 		t.Errorf("expected error for empty request")
+	}
+
+	// Validation: S1 Injection rejection (semicolons, control chars)
+	maliciousCases := []DetachPartitionRequest{
+		{ParentTable: "orders; DROP TABLE users;--", PartitionName: "p0"},
+		{ParentTable: "orders", PartitionName: "p0\x00malicious"},
+		{ParentTable: "orders\nDROP TABLE", PartitionName: "p0"},
+		{ParentTable: "orders", PartitionName: "p0", Schema: "public;--"},
+	}
+	for _, tc := range maliciousCases {
+		if _, err := GenerateDetachDDL(tc, "postgres"); err == nil {
+			t.Errorf("expected validation error for malicious payload %+v", tc)
+		}
+	}
+
+	// Identifiers with quotes are safely escaped
+	escapedDDL, err := GenerateDetachDDL(DetachPartitionRequest{
+		ParentTable:   `my"table`,
+		PartitionName: `part"1`,
+	}, "postgres")
+	if err != nil {
+		t.Fatalf("unexpected error with quoted ident: %v", err)
+	}
+	if !strings.Contains(escapedDDL, `"my""table"`) || !strings.Contains(escapedDDL, `"part""1"`) {
+		t.Errorf("expected double-quote escaping in postgres DDL, got: %s", escapedDDL)
 	}
 }
 
@@ -381,6 +406,10 @@ func TestInspectTopologySQLiteReal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create audit_logs_2026_02: %v", err)
 	}
+	_, err = drv.ExecuteRaw(ctx, `CREATE TABLE "audit_logs_""quoted""_03" (id INTEGER PRIMARY KEY, msg TEXT);`)
+	if err != nil {
+		t.Fatalf("failed to create quoted shard table: %v", err)
+	}
 	_, err = drv.ExecuteRaw(ctx, `INSERT INTO audit_logs_2026_01 (msg) VALUES ('test1'), ('test2');`)
 	if err != nil {
 		t.Fatalf("failed to insert: %v", err)
@@ -393,7 +422,7 @@ func TestInspectTopologySQLiteReal(t *testing.T) {
 	if topo.Strategy != "CHUNK" {
 		t.Errorf("expected CHUNK strategy for sqlite shards, got %s", topo.Strategy)
 	}
-	if len(topo.Partitions) != 2 {
-		t.Fatalf("expected 2 chunk partitions, got %d", len(topo.Partitions))
+	if len(topo.Partitions) != 3 {
+		t.Fatalf("expected 3 chunk partitions, got %d", len(topo.Partitions))
 	}
 }

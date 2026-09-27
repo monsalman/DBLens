@@ -213,7 +213,23 @@ func TestSnapshotEndpointsLifecycle(t *testing.T) {
 		t.Fatalf("expected non-empty rollback downSql, got %+v", plan)
 	}
 
-	// 8. Delete snap1
+	// 8. Delete snap1 blocked by ReadOnly
+	roDelReq := httptest.NewRequest(http.MethodDelete, "/api/connections/"+connID+"/snapshots/"+snap1.ID, nil)
+	roDelReq.Header.Set("X-DBLENS-READONLY", "true")
+	roDelRec := httptest.NewRecorder()
+	router.ServeHTTP(roDelRec, roDelReq)
+	if roDelRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for delete in read-only mode, got %d", roDelRec.Code)
+	}
+
+	roDelQueryReq := httptest.NewRequest(http.MethodDelete, "/api/connections/"+connID+"/snapshots/"+snap1.ID+"?readonly=1", nil)
+	roDelQueryRec := httptest.NewRecorder()
+	router.ServeHTTP(roDelQueryRec, roDelQueryReq)
+	if roDelQueryRec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for delete with ?readonly=1, got %d", roDelQueryRec.Code)
+	}
+
+	// 8b. Delete snap1 allowed normally
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/connections/"+connID+"/snapshots/"+snap1.ID, nil)
 	delRec := httptest.NewRecorder()
 	router.ServeHTTP(delRec, delReq)

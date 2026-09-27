@@ -116,6 +116,38 @@ func TestStoreOperations(t *testing.T) {
 	if len(remaining) != 1 || remaining[0].ID != "snap_1002" {
 		t.Fatalf("unexpected list after delete: %+v", remaining)
 	}
+
+	// 5. Path traversal attempts: dangerous chars/traversal sanitized safely inside baseDir
+	traversalSnap := &SchemaSnapshot{
+		ID:        "../../evil_snap",
+		ConnID:    "../../evil_conn",
+		Label:     "Traversal",
+		Dialect:   "postgres",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.Save(traversalSnap); err != nil {
+		t.Fatalf("failed to save sanitized traversal snap: %v", err)
+	}
+	// Verify it was stored safely under baseDir and not escaped
+	evilPath := filepath.Join(tmpDir, "evil_conn", "evil_snap.json.gz")
+	if _, err := os.Stat(evilPath); err != nil {
+		t.Errorf("expected sanitized snapshot to exist inside baseDir at %s: %v", evilPath, err)
+	}
+	// Fallback to unknown when all chars stripped
+	dotSnap := &SchemaSnapshot{
+		ID:        "..",
+		ConnID:    ".",
+		Label:     "Dot Snap",
+		Dialect:   "postgres",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.Save(dotSnap); err != nil {
+		t.Fatalf("failed to save dot snap with unknown fallback: %v", err)
+	}
+	dotPath := filepath.Join(tmpDir, "unknown", "unknown.json.gz")
+	if _, err := os.Stat(dotPath); err != nil {
+		t.Errorf("expected unknown fallback snapshot to exist inside baseDir at %s: %v", dotPath, err)
+	}
 }
 
 func TestDiffer(t *testing.T) {
@@ -307,6 +339,42 @@ func TestRollbackPlanGeneration(t *testing.T) {
 	sqlitePlan := GenerateRollbackPlan(diff)
 	if !strings.Contains(sqlitePlan.UpSQL, "\"audit_events\"") {
 		t.Errorf("SQLite UpSQL missing quotes: %s", sqlitePlan.UpSQL)
+	}
+
+	// Test FK Action Whitelist & Injection Validation
+	diffFK := &SnapshotDiff{
+		Dialect: "postgres",
+		AlteredTables: []TableDrift{
+			{
+				TableName: "orders",
+				Schema:    "public",
+				AddedForeignKeys: []ForeignKeyNode{
+					{
+						Name:      "fk_user_valid",
+						Column:    "user_id",
+						RefTable:  "users",
+						RefColumn: "id",
+						OnDelete:  "CASCADE",
+						OnUpdate:  "SET NULL",
+					},
+					{
+						Name:      "fk_user_malicious",
+						Column:    "tenant_id",
+						RefTable:  "tenants",
+						RefColumn: "id",
+						OnDelete:  "CASCADE; DROP TABLE orders;--",
+						OnUpdate:  "INVALID_ACTION",
+					},
+				},
+			},
+		},
+	}
+	planFK := GenerateRollbackPlan(diffFK)
+	if !strings.Contains(planFK.UpSQL, "ON DELETE CASCADE ON UPDATE SET NULL") {
+		t.Errorf("expected valid FK actions to be included: %s", planFK.UpSQL)
+	}
+	if strings.Contains(planFK.UpSQL, "DROP TABLE orders") || strings.Contains(planFK.UpSQL, "INVALID_ACTION") {
+		t.Errorf("expected invalid/malicious FK action to be stripped: %s", planFK.UpSQL)
 	}
 }
 

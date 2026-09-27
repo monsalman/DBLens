@@ -256,6 +256,32 @@ test('buildDetachDDL: generates dialect-specific safe detach SQL', () => {
     'sqlite'
   )
   assert(sqDrop === 'DROP TABLE IF EXISTS `tbl_2024`;', `unexpected sqDrop: ${sqDrop}`)
+
+  // Injection prevention in identifiers
+  const injPg = buildDetachDDL(
+    {
+      schema: 'pub"lic',
+      parentTable: 'ord"ers',
+      partitionName: 'p"; DROP TABLE users;--',
+    },
+    'postgres'
+  )
+  assert(
+    injPg === 'ALTER TABLE "pub""lic"."ord""ers" DETACH PARTITION "pub""lic"."p""; DROP TABLE users;--";',
+    `unexpected injPg: ${injPg}`
+  )
+
+  const injMy = buildDetachDDL(
+    {
+      parentTable: 'ord`ers',
+      partitionName: 'p`; DROP TABLE users;--',
+    },
+    'mysql'
+  )
+  assert(
+    injMy === 'ALTER TABLE `ord``ers` DROP PARTITION `p``; DROP TABLE users;--`;',
+    `unexpected injMy: ${injMy}`
+  )
 })
 
 console.log(`\nPartition Helper Tests Summary: ${passed} passed, ${failed} failed`)

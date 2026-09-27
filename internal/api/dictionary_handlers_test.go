@@ -131,6 +131,44 @@ func TestUpdateDictionaryCommentsEndpoint(t *testing.T) {
 		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
 	}
 
+	// Verify SyncToDB=true is blocked in ReadOnly mode
+	syncPayload, _ := json.Marshal(dictionary.CommentUpdateRequest{
+		Schema:   "main",
+		Table:    "users",
+		Column:   "bio",
+		Comment:  "Updated bio with DB sync",
+		SyncToDB: true,
+	})
+	roReq := httptest.NewRequest(http.MethodPut, "/api/connections/test-conn/dictionary/comments", bytes.NewReader(syncPayload))
+	roReq.Header.Set("Content-Type", "application/json")
+	roReq.Header.Set("X-DBLENS-DSN", dsn)
+	roReq.Header.Set("X-DBLENS-READONLY", "1")
+	roRec := httptest.NewRecorder()
+	router.ServeHTTP(roRec, roReq)
+	if roRec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for SyncToDB in read-only mode, got %d", roRec.Code)
+	}
+
+	roQReq := httptest.NewRequest(http.MethodPut, "/api/connections/test-conn/dictionary/comments?readonly=true", bytes.NewReader(syncPayload))
+	roQReq.Header.Set("Content-Type", "application/json")
+	roQReq.Header.Set("X-DBLENS-DSN", dsn)
+	roQRec := httptest.NewRecorder()
+	router.ServeHTTP(roQRec, roQReq)
+	if roQRec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for SyncToDB with ?readonly=true, got %d", roQRec.Code)
+	}
+
+	// Verify SyncToDB=false is permitted in ReadOnly mode (saves to local annotations)
+	localReq := httptest.NewRequest(http.MethodPut, "/api/connections/test-conn/dictionary/comments", bytes.NewReader(payload))
+	localReq.Header.Set("Content-Type", "application/json")
+	localReq.Header.Set("X-DBLENS-DSN", dsn)
+	localReq.Header.Set("X-DBLENS-READONLY", "1")
+	localRec := httptest.NewRecorder()
+	router.ServeHTTP(localRec, localReq)
+	if localRec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for local note update in read-only mode, got %d", localRec.Code)
+	}
+
 	// Verify missing table yields 400
 	badPayload, _ := json.Marshal(dictionary.CommentUpdateRequest{
 		Table: "",
