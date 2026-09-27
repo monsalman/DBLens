@@ -128,6 +128,11 @@ interface AppState {
   setIsSnapshotVaultOpen: (open: boolean) => void
   openSnapshotVault: () => void
   closeSnapshotVault: () => void
+  isPartitionTopologyOpen: boolean
+  selectedPartitionTable?: { schema: string; table: string } | null
+  setIsPartitionTopologyOpen: (open: boolean) => void
+  openPartitionTopology: (table?: { schema: string; table: string }) => void
+  closePartitionTopology: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -423,6 +428,19 @@ export const useAppStore = create<AppState>()(
       setIsSnapshotVaultOpen: (isSnapshotVaultOpen) => set({ isSnapshotVaultOpen }),
       openSnapshotVault: () => set({ isSnapshotVaultOpen: true }),
       closeSnapshotVault: () => set({ isSnapshotVaultOpen: false }),
+      isPartitionTopologyOpen: false,
+      selectedPartitionTable: null,
+      setIsPartitionTopologyOpen: (isPartitionTopologyOpen) => set({ isPartitionTopologyOpen }),
+      openPartitionTopology: (table) =>
+        set({
+          isPartitionTopologyOpen: true,
+          selectedPartitionTable: table || null,
+        }),
+      closePartitionTopology: () =>
+        set({
+          isPartitionTopologyOpen: false,
+          selectedPartitionTable: null,
+        }),
 
       peekDrawer: {
         isOpen: false,

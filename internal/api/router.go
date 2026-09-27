@@ -292,6 +292,13 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/snapshots/rollback-plan", h.GenerateRollbackPlan)
 	api.Delete("/connections/{connId}/snapshots/{id}", h.DeleteSnapshot)
 
+	// ── Feature-51: Partition & Shard Topology Inspector ────
+	api.Get("/connections/{connId}/partitions", h.GetPartitions)
+	api.Post("/connections/{connId}/partitions/generate-ddl", h.GeneratePartitionDDL)
+	api.Post("/connections/{connId}/partitions/detach", h.DetachPartition)
+	api.Get("/connections/{connId}/partitions/health", h.GetPartitionHealth)
+	api.Get("/connections/{connId}/partitions/export.md", h.ExportPartitionMD)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

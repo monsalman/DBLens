@@ -31,6 +31,7 @@ import { TeamVaultModal } from './features/vault/TeamVaultModal'
 import { LockManagerModal } from './features/lockmgr/LockManagerModal'
 import { DataDictionaryPortal } from './features/dictionary/DataDictionaryPortal'
 import { SnapshotVaultModal } from './features/snapshot/SnapshotVaultModal'
+import { PartitionTopologyModal } from './features/partition/PartitionTopologyModal'
 import { CommandPalette } from './components/CommandPalette'
 import { EnvironmentBanner } from './components/EnvironmentBanner'
 import { useAppStore } from './stores/appStore'
@@ -182,6 +183,18 @@ export function App() {
           store.closeSnapshotVault()
         } else {
           store.openSnapshotVault()
+        }
+      }
+      if (
+        (e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) ||
+        (e.metaKey && e.altKey && e.shiftKey && (e.key === 'p' || e.key === 'P'))
+      ) {
+        e.preventDefault()
+        const store = useAppStore.getState()
+        if (store.isPartitionTopologyOpen) {
+          store.closePartitionTopology()
+        } else {
+          store.openPartitionTopology()
         }
       }
     }
@@ -481,6 +494,7 @@ export function App() {
         onClose={closeSnapshotVault}
         connId={activeConnId}
       />
+      <PartitionTopologyModal />
     </QueryClientProvider>
   )
 }

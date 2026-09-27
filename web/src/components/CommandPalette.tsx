@@ -318,6 +318,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     })
 
     items.push({
+      id: 'action:partition-topology',
+      title: 'Partition & Shard Topology Inspector',
+      subtitle: 'Inspect physical partition storage treemap, skew index, and plan upcoming partition DDL (Alt+Shift+P)',
+      category: 'Actions',
+      icon: Layers,
+      badge: 'PARTITIONS',
+      keywords: ['partition', 'partitions', 'shard', 'sharding', 'topology', 'skew', 'storage', 'treemap', 'physical'],
+      onSelect: () => {
+        useAppStore.getState().openPartitionTopology()
+        closePalette()
+      },
+    })
+
+    items.push({
       id: 'action:processes',
       title: 'Go to Process Activity & Query Killer',
       subtitle: 'Monitor active queries, connections, and terminate processes',

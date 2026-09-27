@@ -80,6 +80,13 @@ import type {
   DiffSnapshotsRequest,
   RollbackPlanRequest,
 } from '../features/snapshot/snapshotHelper'
+import type {
+  PartitionTopology,
+  PartitionHealthReport,
+  GeneratePartitionDDLRequest,
+  MaintenancePlan,
+  DetachPartitionRequest,
+} from '../features/partition/partitionHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -3541,6 +3548,129 @@ export const api = {
     }
     return json.data ?? json
   },
+
+  // ── Feature-51: Partition & Shard Topology Inspector ────
+  async getPartitions(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PartitionTopology> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to inspect partitions')
+    }
+    return json.data ?? json
+  },
+
+  async generatePartitionDDL(
+    connId: string,
+    req: GeneratePartitionDDLRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaintenancePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/partitions/generate-ddl`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to generate partition DDL')
+    }
+    return json.data ?? json
+  },
+
+  async detachPartition(
+    connId: string,
+    req: DetachPartitionRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; ddl: string; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/partitions/detach`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to detach partition')
+    }
+    return json.data ?? json
+  },
+
+  async getPartitionHealth(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PartitionHealthReport | PartitionHealthReport[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions/health${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to get partition health')
+    }
+    return json.data ?? json
+  },
+
+  getPartitionExportMDUrl(
+    connId: string,
+    schema?: string,
+    table?: string,
+    download = true
+  ): string {
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    if (!download) sp.set('download', 'false')
+    const query = sp.toString()
+    return `/api/connections/${connId}/partitions/export.md${query ? `?${query}` : ''}`
+  },
+
+  async exportPartitionMD(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    sp.set('download', 'false')
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions/export.md${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      throw new Error('Failed to export partition markdown report')
+    }
+    return await res.text()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -4333,6 +4463,15 @@ export type {
   DiffSnapshotsRequest,
   RollbackPlanRequest,
 } from '../features/snapshot/snapshotHelper'
+
+export type {
+  PartitionTopology,
+  PartitionNode,
+  PartitionHealthReport,
+  GeneratePartitionDDLRequest,
+  MaintenancePlan,
+  DetachPartitionRequest,
+} from '../features/partition/partitionHelper'
 
 
 

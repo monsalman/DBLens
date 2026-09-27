@@ -28,6 +28,7 @@ Available Commands:
   benchmark  Stress test query concurrency and analyze latency distributions
   doc        Export living data dictionary & schema documentation (html/md/openapi)
   snapshot   Manage time-travel schema snapshot vault (capture, list, rollback)
+  partition  Inspect partition & shard topology, skew index, and health alerts
   serve      Run DBLens embedded web application and HTTP API server
   help       Show help for any command
 
@@ -78,6 +79,8 @@ func Execute(args []string) (exitCode int) {
 		return runDoc(ctx, subArgs)
 	case "snapshot":
 		return runSnapshot(ctx, subArgs)
+	case "partition":
+		return runPartition(ctx, subArgs)
 	case "help", "--help", "-h":
 		if len(subArgs) > 0 {
 			return Execute(append(subArgs, "--help"))
