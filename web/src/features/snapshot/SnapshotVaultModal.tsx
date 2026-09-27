@@ -20,6 +20,7 @@ import {
   filterSnapshots,
   calculateSnapshotStats,
 } from './snapshotHelper'
+import { useAppStore } from '../../stores/appStore'
 
 interface Props {
   isOpen: boolean
@@ -28,6 +29,10 @@ interface Props {
 }
 
 export const SnapshotVaultModal: React.FC<Props> = ({ isOpen, onClose, connId }) => {
+  const activeConn = useAppStore((s) => s.connections.find((c) => c.id === connId))
+  const isSafeMode = useAppStore((s) => (connId ? s.isSafeModeActive(connId) : false))
+  const isReadOnly = Boolean(activeConn?.readOnly || isSafeMode)
+
   const {
     snapshots,
     isLoading,
@@ -370,6 +375,7 @@ export const SnapshotVaultModal: React.FC<Props> = ({ isOpen, onClose, connId })
               onDelete={(id) => deleteSnapshot(id)}
               onCompareWithLive={handleCompareWithLive}
               isDiffing={isDiffing}
+              readOnly={isReadOnly}
             />
           ) : diff ? (
             <HistoricalSchemaDiffView

@@ -48,6 +48,11 @@ func (h *Handler) UpdateDictionaryComments(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if req.SyncToDB && (isTruthy(r.Header.Get("X-DBLENS-READONLY")) || isTruthy(r.URL.Query().Get("readonly"))) {
+		sendError(w, http.StatusForbidden, "connection is read-only; database comment synchronization blocked by Safe Mode")
+		return
+	}
+
 	connID := chi.URLParam(r, "connId")
 
 	var drv types.Driver

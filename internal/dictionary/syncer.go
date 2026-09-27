@@ -87,16 +87,25 @@ func syncPostgresComment(ctx context.Context, drv types.Driver, req CommentUpdat
 	return nil
 }
 
+func escapeMySQLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+func quoteMySQLIdent(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+
 func syncMySQLComment(ctx context.Context, drv types.Driver, req CommentUpdateRequest) error {
-	escaped := strings.ReplaceAll(req.Comment, "'", "''")
+	escaped := escapeMySQLString(req.Comment)
+
+	tableRef := quoteMySQLIdent(req.Table)
+	if req.Schema != "" {
+		tableRef = fmt.Sprintf("%s.%s", quoteMySQLIdent(req.Schema), quoteMySQLIdent(req.Table))
+	}
 
 	if req.Column == "" {
-		var ddl string
-		if req.Schema != "" {
-			ddl = fmt.Sprintf("ALTER TABLE `%s`.`%s` COMMENT = '%s';", req.Schema, req.Table, escaped)
-		} else {
-			ddl = fmt.Sprintf("ALTER TABLE `%s` COMMENT = '%s';", req.Table, escaped)
-		}
+		ddl := fmt.Sprintf("ALTER TABLE %s COMMENT = '%s';", tableRef, escaped)
 		_, err := drv.ExecuteRaw(ctx, ddl)
 		if err != nil {
 			return fmt.Errorf("failed to sync table comment to MySQL: %w", err)
@@ -139,13 +148,8 @@ func syncMySQLComment(ctx context.Context, drv types.Driver, req CommentUpdateRe
 		defClause = " DEFAULT " + *targetCol.Default
 	}
 
-	tableRef := fmt.Sprintf("`%s`", req.Table)
-	if req.Schema != "" {
-		tableRef = fmt.Sprintf("`%s`.`%s`", req.Schema, req.Table)
-	}
-
-	ddl := fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN `%s` %s %s%s COMMENT '%s';",
-		tableRef, targetCol.Name, colType, nullability, defClause, escaped)
+	ddl := fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s %s%s COMMENT '%s';",
+		tableRef, quoteMySQLIdent(targetCol.Name), colType, nullability, defClause, escaped)
 
 	_, err = drv.ExecuteRaw(ctx, ddl)
 	if err != nil {

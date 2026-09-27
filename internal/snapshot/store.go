@@ -35,25 +35,44 @@ func NewStore(baseDir string) *Store {
 
 func sanitizePathComponent(s string) string {
 	s = strings.TrimSpace(s)
-	// Strip directory traversal components
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "\\", "_")
-	s = strings.ReplaceAll(s, "..", "_")
-	s = strings.ReplaceAll(s, ":", "_")
-	if s == "" {
+	if s == "" || s == "." || s == ".." {
 		return "unknown"
 	}
-	return s
+	var sb strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			sb.WriteRune(r)
+		}
+	}
+	res := sb.String()
+	if res == "" || res == "." || res == ".." {
+		return "unknown"
+	}
+	return res
 }
 
-func (s *Store) connDir(connID string) string {
+func (s *Store) connDir(connID string) (string, error) {
 	cleanConnID := sanitizePathComponent(connID)
-	return filepath.Join(s.baseDir, cleanConnID)
+	dir := filepath.Join(s.baseDir, cleanConnID)
+	rel, err := filepath.Rel(s.baseDir, dir)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return "", fmt.Errorf("connection directory escapes base directory")
+	}
+	return dir, nil
 }
 
-func (s *Store) snapshotPath(connID, id string) string {
+func (s *Store) snapshotPath(connID, id string) (string, error) {
+	dir, err := s.connDir(connID)
+	if err != nil {
+		return "", err
+	}
 	cleanID := sanitizePathComponent(id)
-	return filepath.Join(s.connDir(connID), cleanID+".json.gz")
+	targetPath := filepath.Join(dir, cleanID+".json.gz")
+	rel, err := filepath.Rel(s.baseDir, targetPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("snapshot file path escapes base directory")
+	}
+	return targetPath, nil
 }
 
 // Save persists a SchemaSnapshot compressed as gzip + json.
@@ -71,12 +90,18 @@ func (s *Store) Save(snap *SchemaSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	dir := s.connDir(snap.ConnID)
+	dir, err := s.connDir(snap.ConnID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create snapshot directory: %w", err)
 	}
 
-	targetPath := s.snapshotPath(snap.ConnID, snap.ID)
+	targetPath, err := s.snapshotPath(snap.ConnID, snap.ID)
+	if err != nil {
+		return err
+	}
 	tmpPath := targetPath + ".tmp"
 
 	f, err := os.Create(tmpPath)
@@ -123,7 +148,10 @@ func (s *Store) Get(connID, id string) (*SchemaSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	filePath := s.snapshotPath(connID, id)
+	filePath, err := s.snapshotPath(connID, id)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -156,7 +184,10 @@ func (s *Store) List(connID string) ([]*SchemaSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	dir := s.connDir(connID)
+	dir, err := s.connDir(connID)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -197,7 +228,10 @@ func (s *Store) Delete(connID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	filePath := s.snapshotPath(connID, id)
+	filePath, err := s.snapshotPath(connID, id)
+	if err != nil {
+		return err
+	}
 	if err := os.Remove(filePath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("snapshot not found: %s", id)

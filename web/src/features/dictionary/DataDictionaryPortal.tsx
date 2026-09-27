@@ -17,6 +17,7 @@ import { TableDictionaryCard } from './TableDictionaryCard'
 import { ExportDocModal } from './ExportDocModal'
 import { formatCoverage } from './dictionaryHelper'
 import type { ConnectionConfig } from '../../lib/api'
+import { useAppStore } from '../../stores/appStore'
 
 interface DataDictionaryPortalProps {
   isOpen: boolean
@@ -31,6 +32,10 @@ export const DataDictionaryPortal: React.FC<DataDictionaryPortalProps> = ({
   connId,
   profiles,
 }) => {
+  const activeConn = useAppStore((s) => s.connections.find((c) => c.id === connId))
+  const isSafeMode = useAppStore((s) => (connId ? s.isSafeModeActive(connId) : false))
+  const isReadOnly = Boolean(activeConn?.readOnly || isSafeMode)
+
   const {
     dictionary,
     loading,
@@ -315,6 +320,7 @@ export const DataDictionaryPortal: React.FC<DataDictionaryPortalProps> = ({
                   onUpdateComment={updateComment}
                   searchQuery={searchQuery}
                   defaultExpanded={expandAll}
+                  readOnly={isReadOnly}
                 />
               ))}
             </div>

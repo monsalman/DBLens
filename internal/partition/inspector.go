@@ -291,7 +291,8 @@ func inspectSQLiteTopology(ctx context.Context, drv types.Driver, topo *Partitio
 				continue
 			}
 			var rowCount int64
-			cRes, cErr := drv.ExecuteRaw(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, t))
+			escapedTable := strings.ReplaceAll(t, `"`, `""`)
+			cRes, cErr := drv.ExecuteRaw(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, escapedTable))
 			if cErr == nil && cRes != nil && len(cRes.Rows) > 0 && len(cRes.Rows[0]) > 0 {
 				rowCount, _ = parseRowInt64(cRes.Rows[0][0])
 			}

@@ -17,6 +17,7 @@ interface PartitionHierarchyTreeProps {
   selectedNode?: PartitionNode | null
   onSelectNode: (node: PartitionNode) => void
   onDetachPartition: (nodeName: string, concurrently: boolean) => Promise<boolean>
+  readOnly?: boolean
 }
 
 export const PartitionHierarchyTree: React.FC<PartitionHierarchyTreeProps> = ({
@@ -27,6 +28,7 @@ export const PartitionHierarchyTree: React.FC<PartitionHierarchyTreeProps> = ({
   selectedNode,
   onSelectNode,
   onDetachPartition,
+  readOnly = false,
 }) => {
   const [filter, setFilter] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -39,6 +41,7 @@ export const PartitionHierarchyTree: React.FC<PartitionHierarchyTreeProps> = ({
   }
 
   const handleDetach = async (node: PartitionNode) => {
+    if (readOnly) return
     const isPostgres = dialect.toLowerCase().includes('postgres')
     const msg = isPostgres
       ? `Detach partition "${node.name}" from parent table "${parentTable}"?\nThis converts the partition into an independent standalone table.`
@@ -197,13 +200,14 @@ export const PartitionHierarchyTree: React.FC<PartitionHierarchyTreeProps> = ({
 
                         <button
                           type="button"
-                          title="Detach Partition"
-                          disabled={detachingNode === p.name}
+                          title={readOnly ? 'Disabled in read-only mode' : 'Detach Partition'}
+                          disabled={readOnly || detachingNode === p.name}
                           onClick={(e) => {
                             e.stopPropagation()
+                            if (readOnly) return
                             handleDetach(p)
                           }}
-                          className="rounded p-1 text-zinc-400 hover:bg-rose-900/40 hover:text-rose-400 transition-colors disabled:opacity-40"
+                          className="rounded p-1 text-zinc-400 hover:bg-rose-900/40 hover:text-rose-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>

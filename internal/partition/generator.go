@@ -6,10 +6,44 @@ import (
 	"time"
 )
 
+func validateIdent(ident string) error {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return fmt.Errorf("identifier cannot be empty")
+	}
+	for _, r := range ident {
+		if r == ';' || r == 0 || r == '\r' || r == '\n' || r < 32 {
+			return fmt.Errorf("identifier contains illegal or control characters")
+		}
+	}
+	return nil
+}
+
+func quoteIdent(name, dialect string) string {
+	d := strings.ToLower(strings.TrimSpace(dialect))
+	switch d {
+	case "mysql", "mariadb":
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+	default: // postgres, sqlite, sqlite3
+		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	}
+}
+
 // GenerateUpcomingDDL generates DDL to create upcoming partition slices.
 func GenerateUpcomingDDL(req GeneratePartitionDDLRequest) (*MaintenancePlan, error) {
-	if strings.TrimSpace(req.ParentTable) == "" {
+	parentName := strings.TrimSpace(req.ParentTable)
+	if parentName == "" {
 		return nil, fmt.Errorf("parent table is required")
+	}
+	if err := validateIdent(parentName); err != nil {
+		return nil, fmt.Errorf("invalid parent table: %w", err)
+	}
+
+	schema := strings.TrimSpace(req.Schema)
+	if schema != "" {
+		if err := validateIdent(schema); err != nil {
+			return nil, fmt.Errorf("invalid schema: %w", err)
+		}
 	}
 
 	count := req.Count
@@ -53,13 +87,6 @@ func GenerateUpcomingDDL(req GeneratePartitionDDLRequest) (*MaintenancePlan, err
 	}
 
 	var ddlList []string
-	parentName := strings.TrimSpace(req.ParentTable)
-	schema := strings.TrimSpace(req.Schema)
-
-	schemaPrefix := ""
-	if schema != "" && dialect == "postgres" {
-		schemaPrefix = fmt.Sprintf(`"%s".`, schema)
-	}
 
 	for i := 0; i < count; i++ {
 		var nextDate time.Time
@@ -89,16 +116,32 @@ func GenerateUpcomingDDL(req GeneratePartitionDDLRequest) (*MaintenancePlan, err
 		switch dialect {
 		case "mysql", "mariadb":
 			mysqlPartName := fmt.Sprintf("p%s", strings.ReplaceAll(suffix, "_", ""))
-			stmt := fmt.Sprintf("ALTER TABLE `%s` ADD PARTITION (PARTITION `%s` VALUES LESS THAN ('%s'));",
-				parentName, mysqlPartName, endStr)
+			parentRef := quoteIdent(parentName, dialect)
+			if schema != "" {
+				parentRef = fmt.Sprintf("%s.%s", quoteIdent(schema, dialect), quoteIdent(parentName, dialect))
+			}
+			stmt := fmt.Sprintf("ALTER TABLE %s ADD PARTITION (PARTITION %s VALUES LESS THAN ('%s'));",
+				parentRef, quoteIdent(mysqlPartName, dialect), endStr)
 			ddlList = append(ddlList, stmt)
 		case "sqlite", "sqlite3":
-			stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s%s AS SELECT * FROM %s%s WHERE 0;",
-				schemaPrefix, partName, schemaPrefix, parentName)
+			parentRef := quoteIdent(parentName, dialect)
+			partRef := quoteIdent(partName, dialect)
+			if schema != "" {
+				parentRef = fmt.Sprintf("%s.%s", quoteIdent(schema, dialect), quoteIdent(parentName, dialect))
+				partRef = fmt.Sprintf("%s.%s", quoteIdent(schema, dialect), quoteIdent(partName, dialect))
+			}
+			stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s AS SELECT * FROM %s WHERE 0;",
+				partRef, parentRef)
 			ddlList = append(ddlList, stmt)
 		default: // postgres
-			stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s%s PARTITION OF %s%s FOR VALUES FROM ('%s') TO ('%s');",
-				schemaPrefix, partName, schemaPrefix, parentName, startStr, endStr)
+			parentRef := quoteIdent(parentName, dialect)
+			partRef := quoteIdent(partName, dialect)
+			if schema != "" {
+				parentRef = fmt.Sprintf("%s.%s", quoteIdent(schema, dialect), quoteIdent(parentName, dialect))
+				partRef = fmt.Sprintf("%s.%s", quoteIdent(schema, dialect), quoteIdent(partName, dialect))
+			}
+			stmt := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s');",
+				partRef, parentRef, startStr, endStr)
 			ddlList = append(ddlList, stmt)
 		}
 
@@ -122,21 +165,41 @@ func GenerateDetachDDL(req DetachPartitionRequest, dialect string) (string, erro
 	if parent == "" || part == "" {
 		return "", fmt.Errorf("parentTable and partitionName are required")
 	}
+	if err := validateIdent(parent); err != nil {
+		return "", fmt.Errorf("invalid parent table: %w", err)
+	}
+	if err := validateIdent(part); err != nil {
+		return "", fmt.Errorf("invalid partition name: %w", err)
+	}
 
 	schema := strings.TrimSpace(req.Schema)
+	if schema != "" {
+		if err := validateIdent(schema); err != nil {
+			return "", fmt.Errorf("invalid schema: %w", err)
+		}
+	}
+
 	d := strings.ToLower(strings.TrimSpace(dialect))
 
 	switch d {
 	case "mysql", "mariadb":
-		return fmt.Sprintf("ALTER TABLE `%s` DROP PARTITION `%s`;", parent, part), nil
-	case "sqlite", "sqlite3":
-		return fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", part), nil
-	default: // postgres
-		parentRef := parent
-		partRef := part
+		parentRef := quoteIdent(parent, d)
 		if schema != "" {
-			parentRef = fmt.Sprintf(`"%s"."%s"`, schema, parent)
-			partRef = fmt.Sprintf(`"%s"."%s"`, schema, part)
+			parentRef = fmt.Sprintf("%s.%s", quoteIdent(schema, d), quoteIdent(parent, d))
+		}
+		return fmt.Sprintf("ALTER TABLE %s DROP PARTITION %s;", parentRef, quoteIdent(part, d)), nil
+	case "sqlite", "sqlite3":
+		partRef := quoteIdent(part, d)
+		if schema != "" {
+			partRef = fmt.Sprintf("%s.%s", quoteIdent(schema, d), quoteIdent(part, d))
+		}
+		return fmt.Sprintf("DROP TABLE IF EXISTS %s;", partRef), nil
+	default: // postgres
+		parentRef := quoteIdent(parent, d)
+		partRef := quoteIdent(part, d)
+		if schema != "" {
+			parentRef = fmt.Sprintf("%s.%s", quoteIdent(schema, d), quoteIdent(parent, d))
+			partRef = fmt.Sprintf("%s.%s", quoteIdent(schema, d), quoteIdent(part, d))
 		}
 		if req.Concurrently {
 			return fmt.Sprintf("ALTER TABLE %s DETACH PARTITION %s CONCURRENTLY;", parentRef, partRef), nil

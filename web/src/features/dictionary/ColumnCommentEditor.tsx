@@ -9,6 +9,7 @@ interface ColumnCommentEditorProps {
   initialComment: string
   onSave: (req: CommentUpdateRequest) => Promise<boolean>
   disabled?: boolean
+  readOnly?: boolean
   placeholder?: string
 }
 
@@ -19,11 +20,12 @@ export const ColumnCommentEditor: React.FC<ColumnCommentEditorProps> = ({
   initialComment,
   onSave,
   disabled = false,
+  readOnly = false,
   placeholder = '+ Add description...',
 }) => {
   const [isEditing, setIsEditing] = useState(false)
   const [commentText, setCommentText] = useState(initialComment || '')
-  const [syncToDB, setSyncToDB] = useState(true)
+  const [syncToDB, setSyncToDB] = useState(!readOnly)
   const [saving, setSaving] = useState(false)
 
   const handleStartEdit = (e: React.MouseEvent) => {
@@ -46,7 +48,7 @@ export const ColumnCommentEditor: React.FC<ColumnCommentEditorProps> = ({
       table,
       column,
       comment: commentText.trim(),
-      syncToDB,
+      syncToDB: readOnly ? false : syncToDB,
     })
     setSaving(false)
     if (success) {
@@ -77,15 +79,21 @@ export const ColumnCommentEditor: React.FC<ColumnCommentEditorProps> = ({
         />
 
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-[11px] text-[var(--muted)] cursor-pointer select-none">
+          <label
+            className={`flex items-center gap-1.5 text-[11px] select-none ${
+              readOnly ? 'text-zinc-500 cursor-not-allowed opacity-60' : 'text-[var(--muted)] cursor-pointer'
+            }`}
+            title={readOnly ? 'Database sync disabled in read-only mode' : undefined}
+          >
             <input
               type="checkbox"
-              checked={syncToDB}
-              onChange={(e) => setSyncToDB(e.target.checked)}
-              className="rounded border-[var(--border)] text-blue-600 focus:ring-0"
+              checked={!readOnly && syncToDB}
+              disabled={readOnly}
+              onChange={(e) => !readOnly && setSyncToDB(e.target.checked)}
+              className="rounded border-[var(--border)] text-blue-600 focus:ring-0 disabled:opacity-50"
             />
             <Database className="w-3 h-3" />
-            <span>Sync comment to database DDL</span>
+            <span>Sync comment to database DDL {readOnly ? '(Disabled in read-only mode)' : ''}</span>
           </label>
 
           <div className="flex items-center gap-1">

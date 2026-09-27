@@ -274,7 +274,7 @@ export function generateClientMarkdown(dict: DataDictionary): string {
         if (c.isForeignKey) pk = pk ? `${pk} / FK` : 'FK'
         const def = c.default ? `\`${c.default}\`` : '-'
         const pii = c.piiType ? `🛡️ \`${c.piiType}\`` : '-'
-        const desc = (c.comment || '-').replace(/\n/g, ' ')
+        const desc = (c.comment || '-').replace(/\r/g, '').replace(/\n/g, ' ').replace(/\|/g, '\\|')
         lines.push(`| \`${c.name}\` | \`${c.type}\` | ${nullable} | ${pk || '-'} | ${def} | ${pii} | ${desc} |`)
       }
       lines.push('')

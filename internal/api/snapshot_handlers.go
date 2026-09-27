@@ -200,6 +200,11 @@ func (h *Handler) GenerateRollbackPlan(w http.ResponseWriter, r *http.Request) {
 // DeleteSnapshot deletes an archived snapshot from the vault.
 // DELETE /api/connections/{connId}/snapshots/{id}
 func (h *Handler) DeleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) || isTruthy(r.URL.Query().Get("readonly")) {
+		sendError(w, http.StatusForbidden, "connection is read-only; snapshot deletion blocked by Safe Mode")
+		return
+	}
+
 	connID := chi.URLParam(r, "connId")
 	id := chi.URLParam(r, "id")
 

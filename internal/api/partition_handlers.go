@@ -67,6 +67,11 @@ func (h *Handler) GeneratePartitionDDL(w http.ResponseWriter, r *http.Request) {
 // DetachPartition detaches or drops a partition from the parent table.
 // POST /api/connections/{connId}/partitions/detach
 func (h *Handler) DetachPartition(w http.ResponseWriter, r *http.Request) {
+	if isTruthy(r.Header.Get("X-DBLENS-READONLY")) || isTruthy(r.URL.Query().Get("readonly")) {
+		sendError(w, http.StatusForbidden, "connection is read-only; partition mutations blocked by Safe Mode")
+		return
+	}
+
 	entry, err := h.resolveDriver(r)
 	if err != nil {
 		sendError(w, http.StatusBadRequest, err.Error())

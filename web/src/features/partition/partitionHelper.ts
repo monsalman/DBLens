@@ -432,15 +432,18 @@ export function buildDetachDDL(req: DetachPartitionRequest, dialect: string): st
   const schema = (req.schema || '').trim()
   const d = (dialect || 'postgres').toLowerCase()
 
+  const escapePg = (s: string) => `"${s.replace(/"/g, '""')}"`
+  const escapeMy = (s: string) => `\`${s.replace(/`/g, '``')}\``
+
   if (d === 'mysql' || d === 'mariadb') {
-    return `ALTER TABLE \`${parent}\` DROP PARTITION \`${part}\`;`
+    return `ALTER TABLE ${escapeMy(parent)} DROP PARTITION ${escapeMy(part)};`
   }
   if (d === 'sqlite' || d === 'sqlite3') {
-    return `DROP TABLE IF EXISTS \`${part}\`;`
+    return `DROP TABLE IF EXISTS ${escapeMy(part)};`
   }
 
-  const parentRef = schema ? `"${schema}"."${parent}"` : parent
-  const partRef = schema ? `"${schema}"."${part}"` : part
+  const parentRef = schema ? `${escapePg(schema)}.${escapePg(parent)}` : escapePg(parent)
+  const partRef = schema ? `${escapePg(schema)}.${escapePg(part)}` : escapePg(part)
   if (req.concurrently) {
     return `ALTER TABLE ${parentRef} DETACH PARTITION ${partRef} CONCURRENTLY;`
   }

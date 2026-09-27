@@ -28,6 +28,28 @@ func RenderHTML(dict *DataDictionary) (string, error) {
 	return buf.String(), nil
 }
 
+func sanitizeMarkdownAnchor(s string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			sb.WriteRune(r)
+		} else if r == '_' || r == ' ' || r == '.' {
+			sb.WriteRune('-')
+		}
+	}
+	res := strings.Trim(sb.String(), "-")
+	if res == "" {
+		return "section"
+	}
+	return res
+}
+
+func escapeMarkdownTableCell(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.ReplaceAll(s, "|", `\|`)
+}
+
 // RenderMarkdown creates a standardized Markdown catalog report suitable for
 // git repositories, wikis, and compliance runbooks.
 func RenderMarkdown(dict *DataDictionary) (string, error) {
@@ -57,8 +79,7 @@ func RenderMarkdown(dict *DataDictionary) (string, error) {
 	for _, s := range dict.Schemas {
 		sb.WriteString(fmt.Sprintf("### %s\n", s.Name))
 		for _, t := range s.Tables {
-			anchor := fmt.Sprintf("%s-%s", strings.ToLower(s.Name), strings.ToLower(t.Name))
-			anchor = strings.ReplaceAll(anchor, "_", "-")
+			anchor := sanitizeMarkdownAnchor(fmt.Sprintf("%s-%s", s.Name, t.Name))
 			sb.WriteString(fmt.Sprintf("- [%s](#%s) *(%d cols, %s)*\n", t.Name, anchor, len(t.Columns), t.Type))
 		}
 		sb.WriteString("\n")
@@ -70,8 +91,7 @@ func RenderMarkdown(dict *DataDictionary) (string, error) {
 		sb.WriteString(fmt.Sprintf("## Schema: `%s`\n\n", s.Name))
 
 		for _, t := range s.Tables {
-			anchor := fmt.Sprintf("%s-%s", strings.ToLower(s.Name), strings.ToLower(t.Name))
-			anchor = strings.ReplaceAll(anchor, "_", "-")
+			anchor := sanitizeMarkdownAnchor(fmt.Sprintf("%s-%s", s.Name, t.Name))
 			sb.WriteString(fmt.Sprintf("<a name=\"%s\"></a>\n", anchor))
 			sb.WriteString(fmt.Sprintf("### Table: `%s`\n\n", t.Name))
 
@@ -116,7 +136,7 @@ func RenderMarkdown(dict *DataDictionary) (string, error) {
 				}
 				desc := "-"
 				if c.Comment != "" {
-					desc = strings.ReplaceAll(c.Comment, "\n", " ")
+					desc = escapeMarkdownTableCell(c.Comment)
 				}
 
 				sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s | %s | %s | %s |\n",

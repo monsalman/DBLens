@@ -22,6 +22,7 @@ interface Props {
   onDelete: (id: string) => void
   onCompareWithLive: (baseId: string) => void
   isDiffing: boolean
+  readOnly?: boolean
 }
 
 export const SnapshotTimelineSlider: React.FC<Props> = ({
@@ -33,6 +34,7 @@ export const SnapshotTimelineSlider: React.FC<Props> = ({
   onDelete,
   onCompareWithLive,
   isDiffing,
+  readOnly = false,
 }) => {
   if (snapshots.length === 0) {
     return (
@@ -167,13 +169,15 @@ export const SnapshotTimelineSlider: React.FC<Props> = ({
 
                   <button
                     type="button"
+                    disabled={readOnly}
                     onClick={() => {
+                      if (readOnly) return
                       if (confirm(`Delete snapshot "${snap.label}"?`)) {
                         onDelete(snap.id)
                       }
                     }}
-                    className="p-1 rounded text-[var(--muted)] hover:text-rose-500 hover:bg-[var(--hover)] transition-colors cursor-pointer"
-                    title="Delete snapshot from vault"
+                    className="p-1 rounded text-[var(--muted)] hover:text-rose-500 hover:bg-[var(--hover)] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={readOnly ? 'Disabled in read-only mode' : 'Delete snapshot from vault'}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

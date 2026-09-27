@@ -337,6 +337,15 @@ func buildAlterColumnSQL(schema, table string, oldCol, newCol ColumnNode, dialec
 	return stmts
 }
 
+func isValidFKAction(action string) bool {
+	switch strings.ToUpper(strings.TrimSpace(action)) {
+	case "CASCADE", "RESTRICT", "SET NULL", "SET DEFAULT", "NO ACTION":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildAddForeignKeySQL(schema, table string, fk ForeignKeyNode, dialect string) string {
 	tblRef := quoteTableRef(schema, table, dialect)
 	refTblRef := quoteTableRef(schema, fk.RefTable, dialect)
@@ -347,11 +356,11 @@ func buildAddForeignKeySQL(schema, table string, fk ForeignKeyNode, dialect stri
 	}
 
 	actions := ""
-	if fk.OnDelete != "" {
-		actions += " ON DELETE " + fk.OnDelete
+	if fk.OnDelete != "" && isValidFKAction(fk.OnDelete) {
+		actions += " ON DELETE " + strings.ToUpper(strings.TrimSpace(fk.OnDelete))
 	}
-	if fk.OnUpdate != "" {
-		actions += " ON UPDATE " + fk.OnUpdate
+	if fk.OnUpdate != "" && isValidFKAction(fk.OnUpdate) {
+		actions += " ON UPDATE " + strings.ToUpper(strings.TrimSpace(fk.OnUpdate))
 	}
 
 	return fmt.Sprintf("ALTER TABLE %s ADD %sFOREIGN KEY (%s) REFERENCES %s (%s)%s;",

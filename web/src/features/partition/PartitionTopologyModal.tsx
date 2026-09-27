@@ -33,6 +33,9 @@ export const PartitionTopologyModal: React.FC = () => {
   const selectedPartitionTable = useAppStore((s) => s.selectedPartitionTable)
   const selectedTable = useAppStore((s) => s.selectedTable)
   const selectedSchema = useAppStore((s) => s.selectedSchema)
+  const activeConn = useAppStore((s) => s.connections.find((c) => c.id === s.activeConnectionId))
+  const isSafeMode = useAppStore((s) => s.isSafeModeActive(s.activeConnectionId))
+  const isReadOnly = Boolean(activeConn?.readOnly || isSafeMode)
 
   // Use selected table from store or active table from grid
   const schema = selectedPartitionTable?.schema || selectedSchema || 'public'
@@ -316,6 +319,7 @@ export const PartitionTopologyModal: React.FC = () => {
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
               onDetachPartition={detachPartition}
+              readOnly={isReadOnly}
             />
           )}
 

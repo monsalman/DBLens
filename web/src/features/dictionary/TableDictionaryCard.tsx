@@ -18,6 +18,7 @@ interface TableDictionaryCardProps {
   onUpdateComment: (req: CommentUpdateRequest) => Promise<boolean>
   searchQuery?: string
   defaultExpanded?: boolean
+  readOnly?: boolean
 }
 
 export const TableDictionaryCard: React.FC<TableDictionaryCardProps> = ({
@@ -25,6 +26,7 @@ export const TableDictionaryCard: React.FC<TableDictionaryCardProps> = ({
   onUpdateComment,
   searchQuery = '',
   defaultExpanded = true,
+  readOnly = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded)
   const [showIndexes, setShowIndexes] = useState(false)
@@ -110,6 +112,7 @@ export const TableDictionaryCard: React.FC<TableDictionaryCardProps> = ({
               initialComment={table.comment}
               onSave={onUpdateComment}
               placeholder="+ Add table documentation / purpose / SLA rules..."
+              readOnly={readOnly}
             />
           </div>
 
@@ -198,6 +201,7 @@ export const TableDictionaryCard: React.FC<TableDictionaryCardProps> = ({
                           initialComment={col.comment}
                           onSave={onUpdateComment}
                           placeholder="+ Add column note..."
+                          readOnly={readOnly}
                         />
                       </td>
                     </tr>
