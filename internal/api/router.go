@@ -278,6 +278,27 @@ func SetupRouter(h *Handler, cfg RouterConfig) http.Handler {
 	api.Post("/connections/{connId}/benchmark/compare", h.BenchmarkCompareHandler)
 	api.Post("/connections/{connId}/benchmark/export.md", h.BenchmarkExportMDHandler)
 
+	// ── Feature-49: Living Data Dictionary & Self-Contained Schema Documentation Portal ────
+	api.Get("/connections/{connId}/dictionary", h.GetDictionary)
+	api.Put("/connections/{connId}/dictionary/comments", h.UpdateDictionaryComments)
+	api.Get("/connections/{connId}/dictionary/export/html", h.ExportDictionaryHTML)
+	api.Get("/connections/{connId}/dictionary/export/md", h.ExportDictionaryMD)
+	api.Get("/connections/{connId}/dictionary/export/openapi", h.ExportDictionaryOpenAPI)
+
+	// ── Feature-50: Time-Travel Schema Snapshot Vault & Drift Timeline ────
+	api.Get("/connections/{connId}/snapshots", h.ListSnapshots)
+	api.Post("/connections/{connId}/snapshots/capture", h.CaptureSnapshot)
+	api.Post("/connections/{connId}/snapshots/diff", h.DiffSnapshots)
+	api.Post("/connections/{connId}/snapshots/rollback-plan", h.GenerateRollbackPlan)
+	api.Delete("/connections/{connId}/snapshots/{id}", h.DeleteSnapshot)
+
+	// ── Feature-51: Partition & Shard Topology Inspector ────
+	api.Get("/connections/{connId}/partitions", h.GetPartitions)
+	api.Post("/connections/{connId}/partitions/generate-ddl", h.GeneratePartitionDDL)
+	api.Post("/connections/{connId}/partitions/detach", h.DetachPartition)
+	api.Get("/connections/{connId}/partitions/health", h.GetPartitionHealth)
+	api.Get("/connections/{connId}/partitions/export.md", h.ExportPartitionMD)
+
 	r.Mount("/api", api)
 
 	// ── SPA fallback (skip /api/ entirely) ──

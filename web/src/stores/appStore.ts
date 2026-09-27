@@ -120,6 +120,19 @@ interface AppState {
   setIsLockManagerOpen: (open: boolean) => void
   openLockManager: () => void
   closeLockManager: () => void
+  isDataDictionaryOpen: boolean
+  setIsDataDictionaryOpen: (open: boolean) => void
+  openDataDictionary: () => void
+  closeDataDictionary: () => void
+  isSnapshotVaultOpen: boolean
+  setIsSnapshotVaultOpen: (open: boolean) => void
+  openSnapshotVault: () => void
+  closeSnapshotVault: () => void
+  isPartitionTopologyOpen: boolean
+  selectedPartitionTable?: { schema: string; table: string } | null
+  setIsPartitionTopologyOpen: (open: boolean) => void
+  openPartitionTopology: (table?: { schema: string; table: string }) => void
+  closePartitionTopology: () => void
   peekDrawer: {
     isOpen: boolean
     targetTable?: string
@@ -407,6 +420,27 @@ export const useAppStore = create<AppState>()(
       setIsLockManagerOpen: (isLockManagerOpen) => set({ isLockManagerOpen }),
       openLockManager: () => set({ isLockManagerOpen: true }),
       closeLockManager: () => set({ isLockManagerOpen: false }),
+      isDataDictionaryOpen: false,
+      setIsDataDictionaryOpen: (isDataDictionaryOpen) => set({ isDataDictionaryOpen }),
+      openDataDictionary: () => set({ isDataDictionaryOpen: true }),
+      closeDataDictionary: () => set({ isDataDictionaryOpen: false }),
+      isSnapshotVaultOpen: false,
+      setIsSnapshotVaultOpen: (isSnapshotVaultOpen) => set({ isSnapshotVaultOpen }),
+      openSnapshotVault: () => set({ isSnapshotVaultOpen: true }),
+      closeSnapshotVault: () => set({ isSnapshotVaultOpen: false }),
+      isPartitionTopologyOpen: false,
+      selectedPartitionTable: null,
+      setIsPartitionTopologyOpen: (isPartitionTopologyOpen) => set({ isPartitionTopologyOpen }),
+      openPartitionTopology: (table) =>
+        set({
+          isPartitionTopologyOpen: true,
+          selectedPartitionTable: table || null,
+        }),
+      closePartitionTopology: () =>
+        set({
+          isPartitionTopologyOpen: false,
+          selectedPartitionTable: null,
+        }),
 
       peekDrawer: {
         isOpen: false,

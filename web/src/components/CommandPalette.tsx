@@ -28,6 +28,8 @@ import {
   Zap,
   KeyRound,
   Lock,
+  BookOpen,
+  Camera,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ConnectionConfig, TableMeta } from '../lib/api'
@@ -283,6 +285,48 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       keywords: ['lock', 'locks', 'deadlock', 'blocking', 'tree', 'blocker', 'kill', 'terminate', 'wait'],
       onSelect: () => {
         useAppStore.getState().openLockManager()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:dictionary',
+      title: 'Living Data Dictionary & Schema Documentation',
+      subtitle: 'Browse schema catalog, document table/column comments, and export SOC 2/HIPAA docs (Alt+Shift+D)',
+      category: 'Actions',
+      icon: BookOpen,
+      badge: 'DICTIONARY',
+      keywords: ['dictionary', 'data dictionary', 'documentation', 'docs', 'catalog', 'pii', 'soc2', 'hipaa', 'openapi', 'schema'],
+      onSelect: () => {
+        useAppStore.getState().openDataDictionary()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:snapshot-vault',
+      title: 'Time-Travel Schema Snapshot Vault & Drift Timeline',
+      subtitle: 'Capture point-in-time schema baselines, inspect historical drift, and generate rollback DDL (Alt+Shift+S)',
+      category: 'Actions',
+      icon: Camera,
+      badge: 'SNAPSHOT',
+      keywords: ['snapshot', 'vault', 'timeline', 'drift', 'time-travel', 'rollback', 'migration', 'history', 'schema diff'],
+      onSelect: () => {
+        useAppStore.getState().openSnapshotVault()
+        closePalette()
+      },
+    })
+
+    items.push({
+      id: 'action:partition-topology',
+      title: 'Partition & Shard Topology Inspector',
+      subtitle: 'Inspect physical partition storage treemap, skew index, and plan upcoming partition DDL (Alt+Shift+P)',
+      category: 'Actions',
+      icon: Layers,
+      badge: 'PARTITIONS',
+      keywords: ['partition', 'partitions', 'shard', 'sharding', 'topology', 'skew', 'storage', 'treemap', 'physical'],
+      onSelect: () => {
+        useAppStore.getState().openPartitionTopology()
         closePalette()
       },
     })

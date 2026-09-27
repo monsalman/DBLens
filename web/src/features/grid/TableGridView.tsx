@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity, Network, Database } from 'lucide-react'
+import { Search, ArrowUpDown, Trash2, RefreshCw, Key, Link2, Plus, Sparkles, Upload, Download, ChevronDown, Loader2, X, Code2, Shield, Globe, StickyNote, Activity, Network, Database, Layers } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { ColumnMeta } from '../../lib/api'
 import { detectPIIType, maskValue, type MaskStrategy } from '../../lib/masker'
@@ -50,7 +50,7 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
   const [impactColumn, setImpactColumn] = useState<string | undefined>(undefined)
   const [viewMode, setViewMode] = useState<'data' | 'schema'>('data')
   const qc = useQueryClient()
-  const { openPeekDrawer, connections, openRestModal, openSeeder } = useAppStore()
+  const { openPeekDrawer, connections, openRestModal, openSeeder, openPartitionTopology } = useAppStore()
   const activeConn = connections.find((c) => c.id === connId)
   const isProd = activeConn?.environment === 'production'
 
@@ -762,6 +762,18 @@ export const TableGridView: React.FC<Props> = ({ connId, schema, table }) => {
                 >
                   <Network className="w-3.5 h-3.5 text-amber-400" />
                   <span className="hidden sm:inline">Impact</span>
+                </button>
+              )}
+
+              {/* Partition & Shard Visualizer */}
+              {table && (
+                <button
+                  onClick={() => openPartitionTopology({ schema, table })}
+                  title="Partition & Shard Topology Visualizer (Alt+Shift+P)"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-[var(--border)] text-[11px] font-mono text-[var(--muted)] hover:text-emerald-400 hover:border-emerald-500/40 hover:bg-emerald-500/10 transition-colors"
+                >
+                  <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Partitions</span>
                 </button>
               )}
               

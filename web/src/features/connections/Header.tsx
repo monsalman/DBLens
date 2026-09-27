@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network, KeyRound, Lock } from 'lucide-react'
+import { Plus, Moon, Sun, Pencil, Trash2, Search, ShieldCheck, Archive, Shield, Webhook, Network, KeyRound, Lock, BookOpen, Camera } from 'lucide-react'
 import { api, type ConnectionConfig } from '../../lib/api'
 import { useAppStore, type ActiveTab } from '../../stores/appStore'
 import { EnvironmentBadge } from '../../components/EnvironmentBadge'
@@ -197,6 +197,30 @@ export const Header: React.FC<Props> = ({
         >
           <Lock className="w-3.5 h-3.5 text-amber-500" />
           <span className="hidden md:inline">Lock Tree</span>
+        </button>
+
+        {/* Living Data Dictionary & Schema Documentation Portal */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().openDataDictionary()}
+          disabled={!activeConnId}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          title="Living Data Dictionary & Schema Documentation Portal (Alt+Shift+D)"
+        >
+          <BookOpen className="w-3.5 h-3.5 text-blue-500" />
+          <span className="hidden md:inline">Dictionary</span>
+        </button>
+
+        {/* Time-Travel Schema Snapshot Vault & Drift Timeline */}
+        <button
+          type="button"
+          onClick={() => useAppStore.getState().openSnapshotVault()}
+          disabled={!activeConnId}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] rounded transition-colors text-[var(--muted)] hover:text-[var(--fg)] hover:bg-[var(--hover)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          title="Time-Travel Schema Snapshot Vault & Drift Timeline (Alt+Shift+S)"
+        >
+          <Camera className="w-3.5 h-3.5 text-emerald-500" />
+          <span className="hidden md:inline">Snapshots</span>
         </button>
 
         {/* Dark/Light Toggle */}

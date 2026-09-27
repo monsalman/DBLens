@@ -33,6 +33,7 @@ import (
 	"github.com/dblens/dblens/internal/privilege"
 	"github.com/dblens/dblens/internal/querybuilder"
 	"github.com/dblens/dblens/internal/rest"
+	"github.com/dblens/dblens/internal/snapshot"
 	"github.com/dblens/dblens/internal/tunnel"
 	"github.com/dblens/dblens/internal/vault"
 	"github.com/dblens/dblens/internal/webhook"
@@ -294,6 +295,7 @@ type Handler struct {
 	queryBuilderStore *querybuilder.Store
 	vaultMgr          *vault.Manager
 	benchmarkMgr      *benchmark.BenchmarkManager
+	snapshotStore     *snapshot.Store
 	healthMon        *healthmon.Monitor
 	healthCancel     context.CancelFunc
 	shutdownCh       chan struct{}
@@ -404,11 +406,19 @@ func NewHandler(mgr *connection.Manager) (*Handler, error) {
 		}(),
 		vaultMgr: vault.NewManager(),
 		benchmarkMgr: benchmark.NewBenchmarkManager(),
+		snapshotStore: snapshot.NewStore(auditDir + "/snapshots"),
 	}
 	if h.scratchStore == nil {
 		h.scratchStore = materialize.NewInMemoryScratchStore()
 	}
 	return h, nil
+}
+
+func (h *Handler) getSnapshotStore() *snapshot.Store {
+	if h.snapshotStore != nil {
+		return h.snapshotStore
+	}
+	return snapshot.NewStore("")
 }
 
 // healthInterval is the prober cadence: DBLENS_HEALTH_INTERVAL (seconds) when

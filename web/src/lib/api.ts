@@ -68,6 +68,25 @@ import type {
   BenchmarkResult,
   BenchmarkComparison,
 } from '../features/benchmark/benchmarkHelper'
+import type {
+  DataDictionary,
+  CommentUpdateRequest,
+} from '../features/dictionary/dictionaryHelper'
+import type {
+  SchemaSnapshot,
+  SnapshotDiff,
+  RollbackPlan,
+  CaptureSnapshotRequest,
+  DiffSnapshotsRequest,
+  RollbackPlanRequest,
+} from '../features/snapshot/snapshotHelper'
+import type {
+  PartitionTopology,
+  PartitionHealthReport,
+  GeneratePartitionDDLRequest,
+  MaintenancePlan,
+  DetachPartitionRequest,
+} from '../features/partition/partitionHelper'
 
 // LocalStorage key for user's private profiles
 const PROFILES_KEY = 'dblens-private-profiles'
@@ -3357,6 +3376,301 @@ export const api = {
     const query = sp.toString()
     return `/api/connections/${connId}/benchmark/${id}/stream${query ? `?${query}` : ''}`
   },
+
+  async getDictionary(
+    connId: string,
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<DataDictionary> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/dictionary${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to fetch data dictionary')
+    }
+    return json.data ?? json
+  },
+
+  async updateDictionaryComments(
+    connId: string,
+    req: CommentUpdateRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/dictionary/comments`, {
+      method: 'PUT',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to update documentation comment')
+    }
+    return json.data ?? json
+  },
+
+  getDictionaryExportUrl(
+    connId: string,
+    format: 'html' | 'md' | 'openapi',
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): string {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (dsn) sp.set('dsn', dsn)
+    if (schema) sp.set('schema', schema)
+    const query = sp.toString()
+    return `/api/connections/${connId}/dictionary/export/${format}${query ? `?${query}` : ''}`
+  },
+
+  async fetchDictionaryExportText(
+    connId: string,
+    format: 'html' | 'md' | 'openapi',
+    schema?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/dictionary/export/${format}${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to export data dictionary in ${format} format`)
+    }
+    return await res.text()
+  },
+
+  // ── Feature-50: Time-Travel Schema Snapshot Vault & Drift Timeline ────
+  async listSnapshots(
+    connId: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaSnapshot[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to list snapshots')
+    }
+    return json.data ?? json
+  },
+
+  async captureSnapshot(
+    connId: string,
+    req: CaptureSnapshotRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SchemaSnapshot> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/capture`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to capture schema snapshot')
+    }
+    return json.data ?? json
+  },
+
+  async diffSnapshots(
+    connId: string,
+    req: DiffSnapshotsRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<SnapshotDiff> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/diff`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to compare schema snapshots')
+    }
+    return json.data ?? json
+  },
+
+  async generateRollbackPlan(
+    connId: string,
+    req: RollbackPlanRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<RollbackPlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/rollback-plan`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to generate rollback plan')
+    }
+    return json.data ?? json
+  },
+
+  async deleteSnapshot(
+    connId: string,
+    id: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/snapshots/${id}`, {
+      method: 'DELETE',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to delete snapshot')
+    }
+    return json.data ?? json
+  },
+
+  // ── Feature-51: Partition & Shard Topology Inspector ────
+  async getPartitions(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PartitionTopology> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to inspect partitions')
+    }
+    return json.data ?? json
+  },
+
+  async generatePartitionDDL(
+    connId: string,
+    req: GeneratePartitionDDLRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<MaintenancePlan> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/partitions/generate-ddl`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to generate partition DDL')
+    }
+    return json.data ?? json
+  },
+
+  async detachPartition(
+    connId: string,
+    req: DetachPartitionRequest,
+    profiles?: ConnectionConfig[]
+  ): Promise<{ success: boolean; ddl: string; message: string }> {
+    const dsn = this._getDSN(connId, profiles)
+    const res = await fetch(`/api/connections/${connId}/partitions/detach`, {
+      method: 'POST',
+      headers: {
+        ...(this._headers(dsn, connId, profiles) as Record<string, string>),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to detach partition')
+    }
+    return json.data ?? json
+  },
+
+  async getPartitionHealth(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<PartitionHealthReport | PartitionHealthReport[]> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions/health${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to get partition health')
+    }
+    return json.data ?? json
+  },
+
+  getPartitionExportMDUrl(
+    connId: string,
+    schema?: string,
+    table?: string,
+    download = true
+  ): string {
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    if (!download) sp.set('download', 'false')
+    const query = sp.toString()
+    return `/api/connections/${connId}/partitions/export.md${query ? `?${query}` : ''}`
+  },
+
+  async exportPartitionMD(
+    connId: string,
+    schema?: string,
+    table?: string,
+    profiles?: ConnectionConfig[]
+  ): Promise<string> {
+    const dsn = this._getDSN(connId, profiles)
+    const sp = new URLSearchParams()
+    if (schema) sp.set('schema', schema)
+    if (table) sp.set('table', table)
+    sp.set('download', 'false')
+    const query = sp.toString()
+    const res = await fetch(`/api/connections/${connId}/partitions/export.md${query ? `?${query}` : ''}`, {
+      method: 'GET',
+      headers: this._headers(dsn, connId, profiles),
+    })
+    if (!res.ok) {
+      throw new Error('Failed to export partition markdown report')
+    }
+    return await res.text()
+  },
 }
 
 export type MigrationFormat = 'goose' | 'golang-migrate' | 'flyway' | 'dbmate' | 'prisma'
@@ -4118,6 +4432,47 @@ export interface BenchmarkExportRequest {
   result?: import('../features/benchmark/benchmarkHelper').BenchmarkResult
   comparison?: import('../features/benchmark/benchmarkHelper').BenchmarkComparison
 }
+
+export type {
+  DataDictionary,
+  DictionarySchema,
+  DictionaryTable,
+  DictionaryColumn,
+  DictionaryIndex,
+  DictionaryForeignKey,
+  DictionarySummary,
+  CommentUpdateRequest,
+} from '../features/dictionary/dictionaryHelper'
+
+export type {
+  SchemaSnapshot,
+  SnapshotMetadata,
+  SchemaNode,
+  TableNode,
+  ColumnNode,
+  IndexNode,
+  ForeignKeyNode,
+  TriggerNode,
+  RoutineNode,
+  DiffSummary,
+  SnapshotDiff,
+  TableDrift,
+  ColumnDrift,
+  RollbackPlan,
+  CaptureSnapshotRequest,
+  DiffSnapshotsRequest,
+  RollbackPlanRequest,
+} from '../features/snapshot/snapshotHelper'
+
+export type {
+  PartitionTopology,
+  PartitionNode,
+  PartitionHealthReport,
+  GeneratePartitionDDLRequest,
+  MaintenancePlan,
+  DetachPartitionRequest,
+} from '../features/partition/partitionHelper'
+
 
 
 

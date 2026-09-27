@@ -595,3 +595,295 @@ func TestBenchmarkCommand(t *testing.T) {
 		t.Fatalf("expected assertion failure exit code 1, got %d", failCode)
 	}
 }
+
+func TestCliDoc(t *testing.T) {
+	// 1. Help flag
+	if code := Execute([]string{"doc", "--help"}); code != 0 {
+		t.Fatalf("expected exit code 0 for doc --help, got %d", code)
+	}
+
+	// 2. Missing conn
+	if code := Execute([]string{"doc"}); code != 1 {
+		t.Fatalf("expected exit code 1 for missing conn, got %d", code)
+	}
+
+	// 3. Create test SQLite DB
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "cli_doc_test.db")
+	dsn := "sqlite://" + dbPath
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	ctx := context.Background()
+	_, _ = drv.ExecuteQuery(ctx, `
+		CREATE TABLE products (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			sku TEXT NOT NULL,
+			price REAL NOT NULL,
+			vendor_email TEXT
+		);
+	`)
+	cleanup()
+
+	// 4. Test HTML export
+	outHTML := filepath.Join(tmpDir, "doc.html")
+	code := Execute([]string{
+		"doc",
+		"--conn-id", dsn,
+		"--format", "html",
+		"--output", outHTML,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc html, got %d", code)
+	}
+	htmlData, err := os.ReadFile(outHTML)
+	if err != nil {
+		t.Fatalf("failed to read exported HTML file: %v", err)
+	}
+	if !strings.Contains(string(htmlData), "products") {
+		t.Errorf("expected table products in exported HTML")
+	}
+
+	// 5. Test Markdown export
+	outMD := filepath.Join(tmpDir, "doc.md")
+	code = Execute([]string{
+		"doc",
+		"--conn", dsn,
+		"--format", "md",
+		"--output", outMD,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc md, got %d", code)
+	}
+	mdData, err := os.ReadFile(outMD)
+	if err != nil {
+		t.Fatalf("failed to read exported MD file: %v", err)
+	}
+	if !strings.Contains(string(mdData), "# Data Dictionary") {
+		t.Errorf("expected header in exported MD")
+	}
+
+	// 6. Test OpenAPI export
+	outOA := filepath.Join(tmpDir, "doc_openapi.json")
+	code = Execute([]string{
+		"doc",
+		"--conn-id", dsn,
+		"--format", "openapi",
+		"--out", outOA,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit code 0 for doc openapi, got %d", code)
+	}
+	oaData, err := os.ReadFile(outOA)
+	if err != nil {
+		t.Fatalf("failed to read exported OpenAPI file: %v", err)
+	}
+	if !strings.Contains(string(oaData), `"openapi": "3.0.3"`) {
+		t.Errorf("expected openapi 3.0.3 in exported JSON")
+	}
+}
+
+func TestSnapshotCliCommands(t *testing.T) {
+	// 1. Help flags
+	if code := Execute([]string{"snapshot", "--help"}); code != 0 {
+		t.Fatalf("expected 0 for snapshot --help, got %d", code)
+	}
+	if code := Execute([]string{"diff", "snapshot", "--help"}); code != 0 {
+		t.Fatalf("expected 0 for diff snapshot --help, got %d", code)
+	}
+
+	// 2. Setup SQLite DB
+	tmpDir := t.TempDir()
+	dbFile := filepath.Join(tmpDir, "cli_snap_test.db")
+	dsn := "sqlite://" + dbFile
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	ctx := context.Background()
+	_, err = drv.ExecuteQuery(ctx, `CREATE TABLE members (
+		id INTEGER PRIMARY KEY,
+		email TEXT NOT NULL
+	);`)
+	if err != nil {
+		t.Fatalf("failed to seed table: %v", err)
+	}
+	cleanup()
+
+	// 3. Capture Snapshot 1
+	code := Execute([]string{
+		"snapshot", "capture",
+		"--conn-id", dsn,
+		"--label", "Members Baseline",
+		"--tag", "manual",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot capture, got %d", code)
+	}
+
+	// 4. List Snapshots
+	store := getSnapshotStore(tmpDir)
+	list, err := store.List(dsn)
+	if err != nil {
+		t.Fatalf("failed to list snapshots: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 snapshot in store, got %d", len(list))
+	}
+	snap1ID := list[0].ID
+
+	code = Execute([]string{
+		"snapshot", "list",
+		"--conn-id", dsn,
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot list, got %d", code)
+	}
+
+	// 5. Mutate DB (add table)
+	drv2, cleanup2, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to resolve driver: %v", err)
+	}
+	_, err = drv2.ExecuteQuery(ctx, `CREATE TABLE projects (id INTEGER PRIMARY KEY, title TEXT);`)
+	if err != nil {
+		t.Fatalf("failed to create projects table: %v", err)
+	}
+	cleanup2()
+
+	// 6. Diff Snapshot against Live DB (fail-on-drift=false to return 0)
+	code = Execute([]string{
+		"diff", "snapshot",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--live",
+		"--fail-on-drift=false",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for diff snapshot --fail-on-drift=false, got %d", code)
+	}
+
+	// Diff Snapshot with fail-on-drift=true should return 1 (drift detected)
+	code = Execute([]string{
+		"diff", "snapshot",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--live",
+		"--fail-on-drift=true",
+		"--data", tmpDir,
+	})
+	if code != 1 {
+		t.Fatalf("expected 1 for diff snapshot drift, got %d", code)
+	}
+
+	// 7. Capture Snapshot 2
+	code = Execute([]string{
+		"snapshot", "capture",
+		"--conn-id", dsn,
+		"--label", "Projects Added",
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for second snapshot capture, got %d", code)
+	}
+
+	list2, err := store.List(dsn)
+	if err != nil || len(list2) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(list2))
+	}
+	snap2ID := list2[0].ID
+	if snap2ID == snap1ID {
+		snap2ID = list2[1].ID
+	}
+
+	// 8. Rollback plan CLI
+	code = Execute([]string{
+		"snapshot", "rollback",
+		"--conn-id", dsn,
+		"--base", snap1ID,
+		"--target", snap2ID,
+		"--data", tmpDir,
+	})
+	if code != 0 {
+		t.Fatalf("expected 0 for snapshot rollback, got %d", code)
+	}
+}
+
+func TestPartitionCLI(t *testing.T) {
+	// Help output
+	if code := Execute([]string{"partition"}); code != 0 {
+		t.Errorf("expected 0 for partition help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition --help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "inspect", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect --help, got %d", code)
+	}
+	if code := Execute([]string{"partition", "health", "--help"}); code != 0 {
+		t.Errorf("expected 0 for partition health --help, got %d", code)
+	}
+
+	// Unknown subcommand
+	if code := Execute([]string{"partition", "unknown"}); code != 1 {
+		t.Errorf("expected 1 for unknown partition subcommand, got %d", code)
+	}
+
+	// Missing conn-id
+	if code := Execute([]string{"partition", "inspect", "--table", "logs"}); code != 1 {
+		t.Errorf("expected 1 for missing conn-id, got %d", code)
+	}
+
+	// Create test SQLite database
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_part_cli.db")
+	dsn := "sqlite://" + dbPath
+
+	drv, cleanup, err := resolveDriver(dsn, "")
+	if err != nil {
+		t.Fatalf("failed to init test db: %v", err)
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs_2026_01 (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `CREATE TABLE logs_2026_02 (id INTEGER PRIMARY KEY, msg TEXT);`)
+	_, _ = drv.ExecuteRaw(ctx, `INSERT INTO logs_2026_01 (msg) VALUES ('alpha'), ('beta');`)
+
+	// Inspect table format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect table format, got %d", code)
+	}
+
+	// Inspect JSON format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs", "--format", "json"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect json format, got %d", code)
+	}
+
+	// Inspect Markdown format
+	if code := Execute([]string{"partition", "inspect", "--conn-id", dsn, "--table", "logs", "--format", "md"}); code != 0 {
+		t.Errorf("expected 0 for partition inspect md format, got %d", code)
+	}
+
+	// Health check single table
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn, "--table", "logs"}); code != 0 {
+		t.Errorf("expected 0 for partition health single table, got %d", code)
+	}
+
+	// Health check all tables
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn}); code != 0 {
+		t.Errorf("expected 0 for partition health all tables, got %d", code)
+	}
+
+	// Health check JSON format
+	if code := Execute([]string{"partition", "health", "--conn-id", dsn, "--format", "json"}); code != 0 {
+		t.Errorf("expected 0 for partition health json format, got %d", code)
+	}
+}
